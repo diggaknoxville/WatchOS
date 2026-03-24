@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <FS.h>
+#include <FFat.h>
 #include <WebServer.h>         
 #include <DNSServer.h>         
 #include <Preferences.h>       
@@ -18,9 +19,12 @@
 #include "WebManager.h"
 #include "Logic.h"
 #include "UpdateOTA.h" 
-#include "RechnerApp.h" 
-#include "JigglerApp.h" 
-#include "EvilPortalApp.h" 
+#include "GoodApps.h" 
+#include "BadApps.h" 
+
+// WICHTIG: Arduino Loop Task Stack von 8KB auf 16KB erhöhen!
+// Ohne das gibt es Stack Overflow bei slideToPage -> renderPage
+SET_LOOP_TASK_STACK_SIZE(16384);
 
 XPowersAXP2101 pmu; TouchDrvFT6X36 touch; SensorDRV2605 drv; TFT_eSPI tft = TFT_eSPI(); TFT_eSprite cdSprite = TFT_eSprite(&tft); 
 DNSServer dnsServer; WebServer server(80); Preferences prefs; USBHIDMouse Mouse;
@@ -56,20 +60,103 @@ bool isSwiping = false, wasCharging = false, bleInitDone = false; int powerState
 bool evilActive = false;
 String evilLog = "";
 
+// Probe Request Monitor
+bool probeMonActive = false;
+int probeCount = 0;
+String probeMacs[MAX_PROBES];
+String probeSSIDs[MAX_PROBES];
+int probeRSSI[MAX_PROBES];
+int probeScrollOffset = 0;
+
+// BLE Scanner
+bool bleScanActive = false;
+int bleScanCount = 0;
+String bleScanNames[MAX_BLE_RESULTS];
+String bleScanMacs[MAX_BLE_RESULTS];
+int bleScanRssi[MAX_BLE_RESULTS];
+int bleScanScrollOffset = 0;
+
+// Multi-Port Nmap
+String nmapPorts = "80,443,22,8080";
+int nmapCurrentPort = 0;
+
+// Web Auth
+String webUser = "admin";
+String webPass = "";
+bool webAuthEnabled = false;
+
+// Haptic Config
+int hapticWaveform = 1;
+
+// FFat (FAT-Dateisystem auf ffat-Partition)
+bool littleFsReady = false;
+
 void setup() {
-    Serial.begin(115200); setCpuFrequencyMhz(240); 
+    Serial.begin(115200); delay(200);
+    Serial.println("\n\n=== WatchOS " WATCHOS_VERSION " Start ===");
+    Serial.printf("Heap: %d  PSRAM: %d  MaxAlloc: %d\n", ESP.getFreeHeap(), ESP.getFreePsram(), ESP.getMaxAllocHeap());
+    setCpuFrequencyMhz(240); 
+    
+    // NVS Gesundheitscheck: Prüfe ob Namespace funktioniert
+    {
+        Preferences testPrefs;
+        if (testPrefs.begin("clock", false)) {
+            size_t freeE = testPrefs.freeEntries();
+            Serial.printf("[NVS] Namespace 'clock' OK, freeEntries=%d\n", freeE);
+            if (freeE < 20) {
+                Serial.println("[NVS] WARNUNG: NVS fast voll! Weniger als 20 freie Eintraege!");
+            }
+            // Schreib-/Lese-Test
+            testPrefs.putInt("_test", 42);
+            int v = testPrefs.getInt("_test", 0);
+            testPrefs.remove("_test");
+            if (v != 42) {
+                Serial.println("[NVS] KRITISCH: NVS Schreib/Lese-Test FEHLGESCHLAGEN!");
+                Serial.println("[NVS] Versuche NVS-Namespace zu loeschen und neu zu starten...");
+                testPrefs.clear(); // Alle Keys im Namespace löschen
+            } else {
+                Serial.println("[NVS] Schreib/Lese-Test OK");
+            }
+            testPrefs.end();
+        } else {
+            Serial.println("[NVS] FEHLER: Namespace 'clock' nicht oeffenbar!");
+        }
+    }
+    
+    // FFat: Erst ohne Format versuchen, bei Fehler formatieren
+    littleFsReady = FFat.begin(false);
+    if (!littleFsReady) {
+        Serial.println("FFat: Partition nicht lesbar, versuche Format...");
+        delay(10); // WDT feed via yield
+        littleFsReady = FFat.begin(true); // formatOnFail
+        Serial.println(littleFsReady ? "FFat: OK nach Format" : "FFat: FAIL - FS deaktiviert");
+    } else {
+        Serial.printf("FFat: OK (total=%d, used=%d)\n", FFat.totalBytes(), FFat.usedBytes());
+    }
     loadPreferences();
+    Serial.printf("Nach loadPreferences: heap=%d cBG=%s cHBG=%s bootM=%d\n", ESP.getFreeHeap(), hexBG.c_str(), hexHeadBG.c_str(), bootMode);
     initHardware();
     
     setupServerRoutes(); // NEU: Routen-Weiche exakt EINMAL laden!
     
     showBootSequence();
+    Serial.printf("Nach Boot: heap=%d psram=%d cdSprite=%s\n", ESP.getFreeHeap(), ESP.getFreePsram(), cdSprite.getPointer() ? "OK" : "NULL!");
     applyTheme(); updateZielZeit();
     lastTouchTime = millis(); tft.fillScreen(cBG);
+    Serial.println("=== Setup fertig ===");
 }
 
 void loop() {
     unsigned long currentMillis = millis();
+    
+    // Stack-Monitor (alle 10 Sekunden)
+    static unsigned long lastStackCheck = 0;
+    if (currentMillis - lastStackCheck > 10000) {
+        lastStackCheck = currentMillis;
+        Serial.printf("[STACK] frei=%d von %d bytes  Heap=%d PSRAM=%d\n", 
+            uxTaskGetStackHighWaterMark(NULL), 16384, ESP.getFreeHeap(), ESP.getFreePsram());
+    }
+    
     if (wlanActive || evilActive) { dnsServer.processNextRequest(); server.handleClient(); }
     checkBackgroundTasks(currentMillis);
     handlePowerManagement(currentMillis);
@@ -80,4 +167,5 @@ void loop() {
     } else {
         delay(2); 
     }
+    yield(); // WDT Feed sicherstellen
 }

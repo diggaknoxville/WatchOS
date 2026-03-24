@@ -3,6 +3,7 @@
 #include "WebManager.h"
 #include "Globals.h"
 #include "Display.h"
+#include "Logic.h"
 #include <Update.h>
 
 unsigned long otaTotalSize = 0;
@@ -25,10 +26,10 @@ void setupOTARoutes() {
                 otaTotalSize = 1500000; // Fallback (ca. 1.5MB)
             }
             
-            // Alles abbrechen, was stören könnte
+            // Alle Apps sauber stoppen — RAM & CPU freigeben für OTA
+            killAllApps();
+            if (evilActive) { evilActive = false; }
             matrixMode = false;
-            jigglerActive = false;
-            evilActive = false;
             
             // Uhr-Display übernehmen und Update-Screen vorbereiten
             setBrightness(255);

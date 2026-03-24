@@ -24,3 +24,4 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell);
 void slideToPage(int newPage, int dx, int dy);
 void renderUI(unsigned long currentMillis);
 void renderAOD();
+void drawAodBattery(int aodX, int aodY, bool isCharging, int batPct, uint8_t animPhase);

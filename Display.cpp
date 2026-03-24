@@ -1,9 +1,8 @@
 // --- Display.cpp ---
 #include "Display.h"
 #include "Globals.h" 
-#include "RechnerApp.h" 
-#include "JigglerApp.h" 
-#include "EvilPortalApp.h"
+#include "GoodApps.h" 
+#include "BadApps.h"
 #include "HardwareConfig.h" 
 #include <WiFi.h>
 
@@ -61,26 +60,101 @@ void drawXButton(TFT_eSprite &spr) {
 }
 
 void drawBattery(int x, int y, int pct, bool charging) {
-    tft.drawRect(x, y, 22, 11, cFG); tft.fillRect(x+22, y+3, 2, 5, cFG); tft.fillRect(x+1, y+1, 20, 9, cBG); uint16_t color = charging ? TFT_BLUE : ((pct >= 80) ? TFT_GREEN : ((pct >= 60) ? tft.color565(173, 255, 47) : ((pct >= 40) ? TFT_YELLOW : ((pct >= 20) ? TFT_ORANGE : TFT_RED)))); int w = (20 * pct) / 100; if (w > 0) tft.fillRect(x+1, y+1, w, 9, color);
+    // Größeres Akku-Symbol: 40x16 mit Prozentanzeige INNEN
+    int bW = 40, bH = 15, nubW = 3, nubH = 7;
+    tft.drawRect(x, y, bW, bH, cFG);                         // Rahmen
+    tft.fillRect(x + bW, y + (bH - nubH) / 2, nubW, nubH, cFG); // Nub rechts
+    tft.fillRect(x + 1, y + 1, bW - 2, bH - 2, cBG);        // Innen löschen
+    
+    // Farbe nach Ladestand
+    uint16_t color = charging ? TFT_BLUE : 
+        ((pct >= 80) ? TFT_GREEN : 
+        ((pct >= 60) ? tft.color565(173, 255, 47) : 
+        ((pct >= 40) ? TFT_YELLOW : 
+        ((pct >= 20) ? TFT_ORANGE : TFT_RED))));
+    
+    // Füllbalken
+    int fillW = ((bW - 2) * pct) / 100;
+    if (fillW > 0) tft.fillRect(x + 1, y + 1, fillW, bH - 2, color);
+    
+    // Prozenttext INNEN (schwarz auf Farbe, bzw. cFG auf leerem Bereich)
+    char pBuf[6]; snprintf(pBuf, sizeof(pBuf), "%d%%", pct);
+    tft.setTextDatum(MC_DATUM);
+    // Text-Farbe: Schwarz wenn genug Füllung, sonst cFG
+    uint16_t txtCol = (pct >= 40) ? TFT_BLACK : cFG;
+    tft.setTextColor(txtCol); 
+    tft.drawString(pBuf, x + bW / 2, y + bH / 2 + 1, 1);
 }
 
 void drawHeader(struct tm *aktuell, int akku, bool charging) {
-    tft.fillRect(0, 0, 240, HEAD_H, cBG); tft.setTextDatum(TL_DATUM); int commonY = 8; drawBattery(6, commonY + 3, akku, charging);
-    tft.setTextColor(cFG, cBG); tft.drawString(String(akku) + "%", 34, commonY, 2); tft.setTextDatum(TC_DATUM); tft.setTextColor(cAcc1, cBG);
-    char timeBuf[10]; snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", aktuell->tm_hour, aktuell->tm_min); tft.drawString(timeBuf, 120, commonY, 2);
+    tft.fillRect(0, 0, 240, HEAD_H, cBG);
+    int cy = 9; // Vertikale Mitte für Elemente
+    int curX = 4;
     
-    // BT Icon Watch Header
-    uint16_t btCol = btActive ? TFT_BLUE : tft.color565(80, 80, 80);
-    tft.setTextDatum(TR_DATUM); tft.setTextColor(btCol, cBG); tft.drawString("BT", 160, commonY, 2);
+    // 1. AKKU (links) — Symbol mit Prozent innen
+    drawBattery(curX, cy, akku, charging);
+    curX += 47; // 40 (Batterie) + 3 (Nub) + 4 (Abstand)
     
-    // WLAN Fächer Watch Header
-    bool wifiConn = (WiFi.status() == WL_CONNECTED) || wlanActive || evilActive || wifiSpamActive || deauthActive || nmapActive;
-    uint16_t wifiCol = wifiConn ? TFT_WHITE : tft.color565(80, 80, 80);
-    if (wlanActive && wlanClientMode) wifiCol = TFT_BLUE; 
+    // 2. BT ICON — nur anzeigen wenn Bluetooth aktiv
+    if (btActive) {
+        bool btConnected = bleInitDone; // BLE initialisiert = verbunden
+        uint16_t btCol = btConnected ? TFT_WHITE : tft.color565(100, 100, 100);
+        // Bluetooth-Symbol zeichnen (Rune)
+        int bx = curX + 4, by = cy + 1, bh = 12;
+        tft.drawLine(bx + 3, by, bx + 3, by + bh, btCol);         // Vertikale Linie
+        tft.drawLine(bx + 3, by, bx + 7, by + 3, btCol);          // Oben rechts
+        tft.drawLine(bx + 7, by + 3, bx, by + bh / 2 + 1, btCol); // Mitte links
+        tft.drawLine(bx, by + bh / 2 - 1, bx + 7, by + bh - 3, btCol); // Mitte rechts  
+        tft.drawLine(bx + 7, by + bh - 3, bx + 3, by + bh, btCol); // Unten rechts
+        curX += 14;
+    }
     
-    tft.setTextColor(wifiCol, cBG); tft.drawString("WIFI", 195, commonY, 2);
+    // 3. WIFI ICON — nur anzeigen wenn irgendein WiFi-Feature aktiv
+    bool wifiOn = wlanActive || evilActive || wifiSpamActive || deauthActive || nmapActive;
+    if (wifiOn) {
+        bool wifiConnected = (WiFi.status() == WL_CONNECTED) || wlanActive || evilActive;
+        uint16_t wCol = wifiConnected ? TFT_WHITE : tft.color565(100, 100, 100);
+        // WiFi-Fächer zeichnen (3 Bögen + Punkt)
+        int wx = curX + 7, wy = cy + 12;
+        tft.fillCircle(wx, wy, 1, wCol);                           // Punkt unten
+        for (int r = 4; r <= 10; r += 3) {
+            for (int a = -45; a <= 45; a += 2) {
+                float rad = a * 3.14159 / 180.0;
+                int px = wx + (int)(r * sin(rad));
+                int py = wy - (int)(r * cos(rad));
+                tft.drawPixel(px, py, wCol);
+            }
+        }
+        curX += 18;
+    }
     
-    tft.setTextColor(cAcc2, cBG); char dateBuf[20]; snprintf(dateBuf, sizeof(dateBuf), "%s %02d.%02d.", wochentage[aktuell->tm_wday], aktuell->tm_mday, aktuell->tm_mon + 1); tft.drawString(dateBuf, 234, commonY, 2); 
+    // 3b. BACKGROUND APP INDICATOR — kleines Zahnrad-Symbol wenn Hintergrund-App läuft
+    bool anyAppRunning = jigglerActive || badUsbActive || wifiSpamActive || bleSpamActive || deauthActive || nmapActive || evilActive || probeMonActive || bleScanActive || swRunning || timerRunning;
+    if (anyAppRunning) {
+        int gx = curX + 6, gy = cy + 6;
+        tft.fillCircle(gx, gy, 4, TFT_ORANGE);
+        tft.fillCircle(gx, gy, 2, cBG);
+        // Vier Zähne
+        tft.fillRect(gx - 1, gy - 6, 2, 3, TFT_ORANGE); // oben
+        tft.fillRect(gx - 1, gy + 3, 2, 3, TFT_ORANGE); // unten
+        tft.fillRect(gx - 6, gy - 1, 3, 2, TFT_ORANGE); // links
+        tft.fillRect(gx + 3, gy - 1, 3, 2, TFT_ORANGE); // rechts
+        curX += 14;
+    }
+    
+    // 4. UHRZEIT (Mittig, Akzentfarbe)
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextColor(cAcc1, cBG);
+    char timeBuf[10]; 
+    snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", aktuell->tm_hour, aktuell->tm_min);
+    tft.drawString(timeBuf, 140, cy + 7, 2);
+    
+    // 5. DATUM (Rechts, Kurzformat: So 23.03.)
+    tft.setTextDatum(TR_DATUM);
+    tft.setTextColor(cAcc2, cBG);
+    char dateBuf[16]; 
+    snprintf(dateBuf, sizeof(dateBuf), "%s %02d.%02d.", wochentage[aktuell->tm_wday], aktuell->tm_mday, aktuell->tm_mon + 1);
+    tft.drawString(dateBuf, 237, cy, 2);
 }
 
 void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
@@ -105,7 +179,7 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
         int activeKids = 0; String kNames[3]; String kDates[3]; String kTimes[3];
         if(child1Name.length() > 0 && child1Date.length() == 10) { kNames[activeKids] = child1Name; kDates[activeKids] = child1Date; kTimes[activeKids] = child1Time; activeKids++; }
         if(child2Name.length() > 0 && child2Date.length() == 10) { kNames[activeKids] = child2Name; kDates[activeKids] = child2Date; kTimes[activeKids] = child2Time; activeKids++; }
-        if(child3Name.length() > 0 && child3Date.length() == 10) { kNames[activeKids] = child3Name; kDates[activeKids] = child3Name; kTimes[activeKids] = child3Time; activeKids++; }
+        if(child3Name.length() > 0 && child3Date.length() == 10) { kNames[activeKids] = child3Name; kDates[activeKids] = child3Date; kTimes[activeKids] = child3Time; activeKids++; }
         if (activeKids > 0) {
             int yName = 18, yJahre = 60, yMonate = 100, yWochen = 140, yTage = 180; spr->setTextDatum(MC_DATUM); spr->setTextColor(cBatBG);
             if (activeKids <= 2) { spr->drawString("Jahre", 120, yJahre, 2); spr->drawString("Monate", 120, yMonate, 2); spr->drawString("Wochen", 120, yWochen, 2); spr->drawString("Tage", 120, yTage, 2); }
@@ -154,43 +228,55 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
             else { wCol = TFT_RED; wTxt = "HOTSPOT"; }
         }
         
-        spr->fillRoundRect(15, 30, 100, 50, 10, wCol); spr->setTextColor(wlanActive ? TFT_WHITE : cFG); spr->drawString(wTxt, 65, 55, 2); 
+        spr->fillRoundRect(15, 25, 100, 40, 10, wCol); spr->setTextColor(wlanActive ? TFT_WHITE : cFG); spr->drawString(wTxt, 65, 45, 2); 
         
-        spr->fillRoundRect(125, 30, 100, 50, 10, btActive ? TFT_BLUE : cBatBG); spr->setTextColor(btActive ? TFT_WHITE : cFG); spr->drawString("BT", 175, 55, 2);
-        spr->fillRoundRect(15, 90, 100, 50, 10, vibActive ? TFT_ORANGE : cBatBG); spr->setTextColor(vibActive ? TFT_WHITE : cFG); spr->drawString("Vibra", 65, 115, 2);
-        spr->fillRoundRect(125, 90, 100, 50, 10, aodActive ? TFT_GREEN : cBatBG); spr->setTextColor(aodActive ? TFT_BLACK : cFG); spr->drawString("AOD", 175, 115, 2);
-        spr->fillRoundRect(15, 150, 100, 50, 10, cBatBG); spr->setTextColor(cFG); spr->drawString("Akku", 65, 175, 2);
-        spr->fillRoundRect(125, 150, 100, 50, 10, cBatBG); spr->setTextColor(cFG); spr->drawString("Licht", 175, 175, 2);
+        spr->fillRoundRect(125, 25, 100, 40, 10, btActive ? TFT_BLUE : cBatBG); spr->setTextColor(btActive ? TFT_WHITE : cFG); spr->drawString("BT", 175, 45, 2);
+        spr->fillRoundRect(15, 70, 100, 40, 10, vibActive ? TFT_ORANGE : cBatBG); spr->setTextColor(vibActive ? TFT_WHITE : cFG); spr->drawString("Vibra", 65, 90, 2);
+        spr->fillRoundRect(125, 70, 100, 40, 10, aodActive ? TFT_GREEN : cBatBG); spr->setTextColor(aodActive ? TFT_BLACK : cFG); spr->drawString("AOD", 175, 90, 2);
+        spr->fillRoundRect(15, 115, 100, 40, 10, cBatBG); spr->setTextColor(cFG); spr->drawString("Akku", 65, 135, 2);
+        spr->fillRoundRect(125, 115, 100, 40, 10, cBatBG); spr->setTextColor(cFG); spr->drawString("Licht", 175, 135, 2);
+        // Kill All Button
+        bool anyRun = jigglerActive || badUsbActive || wifiSpamActive || bleSpamActive || deauthActive || nmapActive || evilActive || probeMonActive || bleScanActive || swRunning || timerRunning;
+        spr->fillRoundRect(15, 162, 210, 35, 8, anyRun ? TFT_RED : cBatBG); 
+        spr->setTextColor(anyRun ? TFT_WHITE : cFG); spr->drawString("Kill All", 120, 180, 2);
     }
     else if (page == 6) { 
         spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Apps", 120, 2, 2); spr->setTextDatum(MC_DATUM); 
-        spr->fillRoundRect(15, 25, 45, 50, 8, cBatBG); spr->setTextColor(cFG); spr->drawString("Stop", 37, 50, 2);
-        spr->fillRoundRect(70, 25, 45, 50, 8, cBatBG); spr->drawString("Time", 92, 50, 2);
-        spr->fillRoundRect(125, 25, 45, 50, 8, cBatBG); spr->drawString("dB", 147, 50, 2);
-        spr->fillRoundRect(180, 25, 45, 50, 8, cBatBG); spr->drawString("Calc", 202, 50, 2);
         
-        spr->fillRoundRect(15, 85, 45, 50, 8, cBatBG); spr->drawString("Mous", 37, 110, 2); 
-        spr->fillRoundRect(70, 85, 45, 50, 8, cBatBG); spr->drawString("Phis", 92, 110, 2);
-        spr->fillRoundRect(125, 85, 45, 50, 8, cBatBG); spr->setTextColor(TFT_RED); spr->drawString("Dcky", 147, 110, 2);
-        spr->fillRoundRect(180, 85, 45, 50, 8, cBatBG); spr->setTextColor(TFT_RED); spr->drawString("Spam", 202, 110, 2); 
-
-        spr->fillRoundRect(15, 145, 45, 50, 8, cBatBG); spr->setTextColor(TFT_MAGENTA); spr->drawString("BLE", 37, 170, 2); 
-        spr->fillRoundRect(70, 145, 45, 50, 8, cBatBG); spr->setTextColor(TFT_GREEN); spr->drawString("Nmap", 92, 170, 2); 
-        spr->fillRoundRect(125, 145, 45, 50, 8, cBatBG); spr->setTextColor(TFT_RED); spr->drawString("Deau", 147, 170, 2); 
+        // Zwei große Buttons: GOOD (links) und BAD (rechts)
+        // GOOD Button — grüner Rahmen, linke Hälfte
+        spr->fillRoundRect(15, 30, 100, 165, 12, cAppBG);
+        spr->drawRoundRect(15, 30, 100, 165, 12, TFT_GREEN);
+        spr->drawRoundRect(16, 31, 98, 163, 11, TFT_GREEN);
+        spr->setTextColor(TFT_GREEN);
+        spr->drawString("Good", 65, 95, 4);
+        spr->setTextColor(cBatBG);
+        spr->drawString("Tools &", 65, 130, 2);
+        spr->drawString("Utilities", 65, 150, 2);
+        
+        // BAD Button — roter Rahmen, rechte Hälfte
+        spr->fillRoundRect(125, 30, 100, 165, 12, cAppBG);
+        spr->drawRoundRect(125, 30, 100, 165, 12, TFT_RED);
+        spr->drawRoundRect(126, 31, 98, 163, 11, TFT_RED);
+        spr->setTextColor(TFT_RED);
+        spr->drawString("Bad", 175, 95, 4);
+        spr->setTextColor(cBatBG);
+        spr->drawString("Hacking &", 175, 130, 2);
+        spr->drawString("Exploits", 175, 150, 2);
     }
     else if (page == 7) { 
         spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Stoppuhr", 120, 0, 2); long ms = swRunning ? (swElapsed + (millis() - swStartTime)) : swElapsed;
         char swBuf[20]; snprintf(swBuf, sizeof(swBuf), "%02d:%02d.%02d", (int)(ms/60000), (int)((ms/1000)%60), (int)((ms%1000)/10));
         int bW = get7SegWidth(String(swBuf), 28, 16, 5); draw7SegString(*spr, String(swBuf), 120 - (bW/2), 70, 28, 16, cAcc1, 5);
         spr->setTextDatum(MC_DATUM); spr->fillRoundRect(20, 150, 90, 40, 6, swRunning ? TFT_ORANGE : TFT_GREEN); spr->setTextColor(TFT_BLACK); spr->drawString(swRunning ? "Stop" : "Start", 65, 170, 2);
-        spr->fillRoundRect(130, 150, 90, 40, 6, cBatBG); spr->setTextColor(cFG); spr->drawString("Reset", 175, 170, 2); drawXButton(*spr);
+        spr->fillRoundRect(130, 150, 90, 40, 6, cBatBG); spr->setTextColor(cFG); spr->drawString("Reset", 175, 170, 2);
     }
     else if (page == 8) { 
         spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Timer", 120, 0, 2); spr->setTextDatum(MC_DATUM); 
-        if (!timerRunning && timerRemaining == 0) { spr->setTextColor(cAcc2); spr->drawString("Waehlen:", 120, 50, 4); spr->fillRoundRect(20, 80, 60, 50, 6, cBatBG); spr->setTextColor(cFG); spr->drawString(String(t1)+"m", 50, 105, 2); spr->fillRoundRect(90, 80, 60, 50, 6, cBatBG); spr->drawString(String(t2)+"m", 120, 105, 2); spr->fillRoundRect(160, 80, 60, 50, 6, cBatBG); spr->drawString(String(t3)+"m", 190, 105, 2); } else { char tBuf[16]; snprintf(tBuf, sizeof(tBuf), "%02d:%02d", (int)(timerRemaining/60), (int)(timerRemaining%60)); int bW = get7SegWidth(String(tBuf), 40, 24, 6); draw7SegString(*spr, String(tBuf), 120 - (bW/2), 70, 40, 24, TFT_RED, 6); spr->fillRoundRect(75, 150, 90, 40, 6, TFT_RED); spr->setTextColor(TFT_WHITE); spr->drawString("Abbruch", 120, 170, 2); } drawXButton(*spr);
+        if (!timerRunning && timerRemaining == 0) { spr->setTextColor(cAcc2); spr->drawString("Waehlen:", 120, 50, 4); spr->fillRoundRect(20, 80, 60, 50, 6, cBatBG); spr->setTextColor(cFG); spr->drawString(String(t1)+"m", 50, 105, 2); spr->fillRoundRect(90, 80, 60, 50, 6, cBatBG); spr->drawString(String(t2)+"m", 120, 105, 2); spr->fillRoundRect(160, 80, 60, 50, 6, cBatBG); spr->drawString(String(t3)+"m", 190, 105, 2); } else { char tBuf[16]; snprintf(tBuf, sizeof(tBuf), "%02d:%02d", (int)(timerRemaining/60), (int)(timerRemaining%60)); int bW = get7SegWidth(String(tBuf), 40, 24, 6); draw7SegString(*spr, String(tBuf), 120 - (bW/2), 70, 40, 24, TFT_RED, 6); spr->fillRoundRect(75, 150, 90, 40, 6, TFT_RED); spr->setTextColor(TFT_WHITE); spr->drawString("Abbruch", 120, 170, 2); }
     }
     else if (page == 9) { 
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Dezibel-Meter", 120, 0, 2); int db = getDecibels(); spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_WHITE); spr->drawString(String(db) + " dB", 120, 50, 6); spr->setTextColor(cBatBG); spr->drawString("RMS: " + String(debug_rms, 1), 120, 85, 2); int barH = db; if(barH > 120) barH = 120; uint16_t bCol = (db >= 90) ? TFT_RED : ((db >= 65) ? TFT_YELLOW : TFT_GREEN); spr->fillRect(60, 195 - barH, 120, barH, bCol); spr->drawRect(59, 74, 122, 122, TFT_WHITE); drawXButton(*spr);
+        spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Dezibel-Meter", 120, 0, 2); int db = getDecibels(); spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_WHITE); spr->drawString(String(db) + " dB", 120, 50, 6); spr->setTextColor(cBatBG); spr->drawString("RMS: " + String(debug_rms, 1), 120, 85, 2); int barH = db; if(barH > 120) barH = 120; uint16_t bCol = (db >= 90) ? TFT_RED : ((db >= 65) ? TFT_YELLOW : TFT_GREEN); spr->fillRect(60, 195 - barH, 120, barH, bCol); spr->drawRect(59, 74, 122, 122, TFT_WHITE);
     }
     else if (page == 10) {
         spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Akku Details", 120, 0, 2); spr->drawString(String(getBattery()) + "%    " + String(pmu.getBattVoltage() / 1000.0, 2) + " V", 120, 20, 4); String estStr = "Laufzeit: Berechne..."; bool isCharging = pmu.isVbusIn() || pmu.isCharging();
@@ -208,34 +294,30 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
                 spr->fillTriangle(px1, gY+gH-1, px2, gY+gH-1, px1, py1, col); spr->fillTriangle(px1, py1, px2, py2, px2, gY+gH-1, col); spr->drawLine(px1, py1, px2, py2, TFT_WHITE); 
             } 
         } 
-        drawXButton(*spr);
     }
-    else if (page == 11) { spr->fillSprite(TFT_WHITE); drawXButton(*spr); }
-    else if (page == 12) { showEvilPortal(spr); drawXButton(*spr); } 
-    else if (page == 13) { showRechner(spr); drawXButton(*spr); }
-    else if (page == 14) { showJiggler(spr); drawXButton(*spr); }
+    else if (page == 11) { spr->fillSprite(TFT_WHITE); }
+    else if (page == 12) { showEvilPortal(spr); } 
+    else if (page == 13) { showRechner(spr); }
+    else if (page == 14) { showJiggler(spr); }
     else if (page == 15) { 
         spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Rubber Ducky", 120, 10, 2);
         spr->fillRoundRect(15, 35, 30, 30, 5, cBatBG); spr->setTextColor(TFT_WHITE); spr->drawString("<", 30, 42, 2);
         spr->fillRoundRect(195, 35, 30, 30, 5, cBatBG); spr->setTextColor(TFT_WHITE); spr->drawString(">", 210, 42, 2);
         spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_YELLOW); spr->drawString(badUsbNames[currentBadUsbScript], 120, 50, 2);
-        spr->fillRoundRect(40, 85, 160, 60, 10, badUsbActive ? TFT_RED : cBatBG);
-        spr->setTextColor(TFT_WHITE); spr->drawString(badUsbActive ? "SCRIPT LÄUFT" : "START SCRIPT", 120, 115, 2);
-        drawXButton(*spr);
+        spr->fillRoundRect(55, 85, 130, 45, 10, badUsbActive ? TFT_RED : cBatBG);
+        spr->setTextColor(TFT_WHITE); spr->drawString(badUsbActive ? "SCRIPT LÄUFT" : "START SCRIPT", 120, 108, 2);
     }
     else if (page == 16) { 
         spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("WiFi Spammer", 120, 10, 2);
         spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_YELLOW); spr->drawString("Gefakte Netzwerke:", 120, 40, 2);
-        spr->fillRoundRect(40, 80, 160, 60, 10, wifiSpamActive ? TFT_RED : cBatBG);
-        spr->setTextColor(TFT_WHITE); spr->drawString(wifiSpamActive ? "SPAMMING... (Stop)" : "START SPAM", 120, 110, 2);
-        drawXButton(*spr);
+        spr->fillRoundRect(55, 80, 130, 45, 10, wifiSpamActive ? TFT_RED : cBatBG);
+        spr->setTextColor(TFT_WHITE); spr->drawString(wifiSpamActive ? "SPAMMING (Stop)" : "START SPAM", 120, 103, 2);
     }
     else if (page == 17) { 
         spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("BLE Spammer", 120, 10, 2);
         spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_YELLOW); spr->drawString("Apple Popups", 120, 40, 2);
-        spr->fillRoundRect(40, 80, 160, 60, 10, bleSpamActive ? TFT_RED : cBatBG);
-        spr->setTextColor(TFT_WHITE); spr->drawString(bleSpamActive ? "SPAMMING... (Stop)" : "START SPAM", 120, 110, 2);
-        drawXButton(*spr);
+        spr->fillRoundRect(55, 80, 130, 45, 10, bleSpamActive ? TFT_RED : cBatBG);
+        spr->setTextColor(TFT_WHITE); spr->drawString(bleSpamActive ? "SPAMMING (Stop)" : "START SPAM", 120, 103, 2);
     }
     else if (page == 18) {
         spr->setTextDatum(TC_DATUM); spr->setTextColor(TFT_GREEN); spr->drawString("Nmap Port 80", 120, 5, 2);
@@ -246,11 +328,11 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
         spr->drawString(targetSSIDs[currentTargetNmap].length() > 0 ? targetSSIDs[currentTargetNmap] : "Leer", 120, 50, 2);
 
         if (nmapState == 0 || nmapState == 3 || nmapState == 4) {
-            spr->fillRoundRect(40, 85, 160, 40, 10, nmapActive ? TFT_RED : cBatBG);
-            spr->setTextColor(TFT_WHITE); spr->drawString(nmapActive ? "STOPPING..." : "CONNECT & SCAN", 120, 105, 2);
+            spr->fillRoundRect(55, 85, 130, 35, 10, nmapActive ? TFT_RED : cBatBG);
+            spr->setTextColor(TFT_WHITE); spr->drawString(nmapActive ? "STOPPING..." : "CONNECT & SCAN", 120, 103, 2);
         } else {
-            spr->fillRoundRect(40, 85, 160, 40, 10, TFT_RED);
-            spr->setTextColor(TFT_WHITE); spr->drawString("SCANNING... (Stop)", 120, 105, 2);
+            spr->fillRoundRect(55, 85, 130, 35, 10, TFT_RED);
+            spr->setTextColor(TFT_WHITE); spr->drawString("SCANNING (Stop)", 120, 103, 2);
             spr->setTextColor(TFT_YELLOW); spr->drawString("IP: " + String(nmapIP), 120, 140, 2);
         }
         
@@ -260,7 +342,6 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
         else if (nmapState == 4) spr->drawString("Fehler!", 120, 170, 2);
         else if (nmapLog != "") spr->drawString("Ergebnis im Webportal", 120, 170, 2);
         
-        drawXButton(*spr);
     }
     else if (page == 19) {
         spr->setTextDatum(TC_DATUM); spr->setTextColor(TFT_RED); spr->drawString("WiFi Deauther", 120, 5, 2);
@@ -271,44 +352,236 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
         if (numScannedNetworks > 0) spr->drawString(scannedSSIDs[currentDeauthTarget], 120, 50, 2);
         else spr->drawString("Nichts gescannt", 120, 50, 2);
 
-        spr->fillRoundRect(40, 75, 160, 40, 10, deauthActive ? TFT_RED : cBatBG);
-        spr->setTextColor(TFT_WHITE); spr->drawString(deauthActive ? "ATTACKING..." : "START DEAUTH", 120, 95, 2);
+        spr->fillRoundRect(55, 75, 130, 35, 10, deauthActive ? TFT_RED : cBatBG);
+        spr->setTextColor(TFT_WHITE); spr->drawString(deauthActive ? "ATTACKING..." : "START DEAUTH", 120, 93, 2);
 
-        spr->fillRoundRect(60, 130, 120, 30, 6, isScanningAir ? TFT_ORANGE : cBatBG);
-        spr->setTextColor(TFT_WHITE); spr->drawString(isScanningAir ? "Scanne..." : "Scan Umgebung", 120, 145, 2);
+        spr->fillRoundRect(65, 125, 110, 28, 6, isScanningAir ? TFT_ORANGE : cBatBG);
+        spr->setTextColor(TFT_WHITE); spr->drawString(isScanningAir ? "Scanne..." : "Scan Umgebung", 120, 139, 2);
 
         spr->setTextColor(cBatBG);
         if (deauthState == 2) spr->drawString(scannedMACs[currentDeauthTarget], 120, 185, 2);
 
-        drawXButton(*spr);
     }
+    else if (page == 20) {
+        // Probe Request Monitor
+        spr->setTextDatum(TC_DATUM); spr->setTextColor(TFT_CYAN); spr->drawString("Probe Monitor", 120, 0, 2);
+        spr->setTextDatum(TL_DATUM); spr->setTextColor(cBatBG); spr->drawString("Gefunden: " + String(probeCount), 10, 18, 2);
+        int yStart = 35; int lineH = 28;
+        for (int i = probeScrollOffset; i < probeCount && i < probeScrollOffset + 4; i++) {
+            int yPos = yStart + (i - probeScrollOffset) * lineH;
+            spr->setTextColor(TFT_WHITE); spr->drawString(probeMacs[i].substring(0, 11), 5, yPos, 1);
+            spr->setTextColor(TFT_YELLOW); spr->drawString(probeSSIDs[i].substring(0, 14), 75, yPos, 1);
+            spr->setTextColor(TFT_GREEN); spr->drawString(String(probeRSSI[i]) + "dB", 195, yPos, 1);
+        }
+        if (probeScrollOffset > 0) { spr->setTextDatum(TC_DATUM); spr->setTextColor(cBatBG); spr->drawString("^ Hoch", 120, 25, 1); }
+        if (probeScrollOffset < probeCount - 4) { spr->setTextDatum(BC_DATUM); spr->setTextColor(cBatBG); spr->drawString("v Runter", 120, 138, 1); }
+        spr->setTextDatum(MC_DATUM);
+        spr->fillRoundRect(45, 150, 150, 35, 10, probeMonActive ? TFT_RED : TFT_CYAN);
+        spr->setTextColor(probeMonActive ? TFT_WHITE : TFT_BLACK);
+        spr->drawString(probeMonActive ? "STOP MONITOR" : "START MONITOR", 120, 168, 2);
+    }
+    else if (page == 21) {
+        // BLE Scanner
+        spr->setTextDatum(TC_DATUM); spr->setTextColor(TFT_MAGENTA); spr->drawString("BLE Scanner", 120, 0, 2);
+        spr->setTextDatum(TL_DATUM); spr->setTextColor(cBatBG); spr->drawString("Gefunden: " + String(bleScanCount), 10, 18, 2);
+        int yStart = 35; int lineH = 28;
+        for (int i = bleScanScrollOffset; i < bleScanCount && i < bleScanScrollOffset + 4; i++) {
+            int yPos = yStart + (i - bleScanScrollOffset) * lineH;
+            spr->setTextColor(TFT_WHITE); spr->drawString(bleScanNames[i].substring(0, 14), 5, yPos, 1);
+            spr->setTextColor(TFT_GREEN); spr->drawString(String(bleScanRssi[i]) + "dB", 195, yPos, 1);
+        }
+        if (bleScanScrollOffset > 0) { spr->setTextDatum(TC_DATUM); spr->setTextColor(cBatBG); spr->drawString("^ Hoch", 120, 25, 1); }
+        if (bleScanScrollOffset < bleScanCount - 4) { spr->setTextDatum(BC_DATUM); spr->setTextColor(cBatBG); spr->drawString("v Runter", 120, 138, 1); }
+        spr->setTextDatum(MC_DATUM);
+        spr->fillRoundRect(45, 150, 150, 35, 10, bleScanActive ? TFT_RED : TFT_MAGENTA);
+        spr->setTextColor(TFT_WHITE);
+        spr->drawString(bleScanActive ? "STOP SCAN" : "START SCAN", 120, 168, 2);
+    }
+    else if (page == 22) { renderGoodMenu(spr); }
+    else if (page == 23) { renderBadMenu(spr); }
     
+    // Page indicator dots for watchfaces (pages 0-3)
+    if (page >= 0 && page <= 3) {
+        int dotY = spr->height() - 8;
+        int enabledPages[4]; int numEnabled = 0;
+        if (enP0) enabledPages[numEnabled++] = 0;
+        if (enP1) enabledPages[numEnabled++] = 1;
+        if (enP2) enabledPages[numEnabled++] = 2;
+        if (enP3) enabledPages[numEnabled++] = 3;
+        if (numEnabled > 1) {
+            int totalW = numEnabled * 6 + (numEnabled - 1) * 6;
+            int startX = 120 - totalW / 2;
+            for (int i = 0; i < numEnabled; i++) {
+                int dx = startX + i * 12;
+                if (enabledPages[i] == page) spr->fillCircle(dx + 3, dotY, 3, cAcc1);
+                else spr->fillCircle(dx + 3, dotY, 2, cBatBG);
+            }
+        }
+    }
+
     if (millis() < toastEndTime) { int tW = spr->textWidth(toastMsg, 2) + 40; int tX = (240 - tW) / 2; spr->fillRoundRect(tX, 165, tW, 30, 15, TFT_DARKGREY); spr->setTextColor(TFT_WHITE, TFT_DARKGREY); spr->drawCentreString(toastMsg, 120, 173, 2); }
 }
 
 void slideToPage(int newPage, int dx, int dy) {
-    TFT_eSprite nextSpr = TFT_eSprite(&tft); void* ptr = nextSpr.createSprite(240, 240 - HEAD_H); time_t jetzt; time(&jetzt); struct tm *aktuell = localtime(&jetzt);
-    if (ptr == nullptr) { currentPage = newPage; lastSecond = -1; return; } renderPage(newPage, &nextSpr, aktuell); int steps = 6; 
-    for(int i=1; i<=steps; i++) { int p = (240 * i) / steps; if(dx == -1) { cdSprite.pushSprite(-p, HEAD_H); nextSpr.pushSprite(240-p, HEAD_H); } else if (dx == 1) { cdSprite.pushSprite(p, HEAD_H); nextSpr.pushSprite(p-240, HEAD_H); } else if (dy == -1) { cdSprite.pushSprite(0, HEAD_H - p); nextSpr.pushSprite(0, HEAD_H + 206 - p); } else if (dy == 1) { cdSprite.pushSprite(0, HEAD_H + p); nextSpr.pushSprite(0, HEAD_H - 206 + p); } }
+    Serial.printf("[SLIDE] %d -> %d  heap=%d psram=%d\n", currentPage, newPage, ESP.getFreeHeap(), ESP.getFreePsram());
+    
+    // Safety: Check if cdSprite is valid (has allocated buffer)
+    if (cdSprite.getPointer() == nullptr) {
+        Serial.println("[SLIDE] cdSprite ist NULL! Direkt umschalten.");
+        currentPage = newPage; lastSecond = -1; return;
+    }
+    
+    TFT_eSprite nextSpr = TFT_eSprite(&tft); 
+    void* ptr = nextSpr.createSprite(240, 240 - HEAD_H);
+    if (ptr == nullptr) { 
+        Serial.println("[SLIDE] nextSpr Sprite-Alloc FEHLGESCHLAGEN!");
+        currentPage = newPage; lastSecond = -1; return; 
+    } 
+    
+    // WICHTIG: Sprite muss mit Hintergrundfarbe gefüllt werden bevor renderPage zeichnet!
+    nextSpr.fillSprite(newPage == 11 ? TFT_WHITE : cBG);
+    
+    time_t jetzt; time(&jetzt); struct tm *aktuell = localtime(&jetzt);
+    renderPage(newPage, &nextSpr, aktuell); 
+    
+    int steps = 6; 
+    for(int i=1; i<=steps; i++) { 
+        int p = (240 * i) / steps; 
+        if(dx == -1) { cdSprite.pushSprite(-p, HEAD_H); nextSpr.pushSprite(240-p, HEAD_H); } 
+        else if (dx == 1) { cdSprite.pushSprite(p, HEAD_H); nextSpr.pushSprite(p-240, HEAD_H); } 
+        else if (dy == -1) { cdSprite.pushSprite(0, HEAD_H - p); nextSpr.pushSprite(0, HEAD_H + 206 - p); } 
+        else if (dy == 1) { cdSprite.pushSprite(0, HEAD_H + p); nextSpr.pushSprite(0, HEAD_H - 206 + p); } 
+    }
     currentPage = newPage; lastSecond = -1; nextSpr.deleteSprite();
+    Serial.printf("[SLIDE] OK -> page %d\n", currentPage);
 }
 
 void renderUI(unsigned long currentMillis) {
     time_t jetzt; time(&jetzt); struct tm *aktuell = localtime(&jetzt); bool isCharging = pmu.isVbusIn() || pmu.isCharging(); static unsigned long lastFrame = 0;
-    bool fastRefresh = (currentPage == 1 || currentPage == 7 || currentPage == 9); bool forceRender = (aktuell->tm_sec != lastSecond) || (fastRefresh && (currentMillis - lastFrame > 50)) || (currentMillis < toastEndTime) || (currentPage >= 13 && currentPage <= 19);
-    if (forceRender) { lastSecond = aktuell->tm_sec; lastFrame = currentMillis; if(currentPage != 11) drawHeader(aktuell, getBattery(), isCharging); cdSprite.fillSprite(currentPage == 11 ? TFT_WHITE : cBG); renderPage(currentPage, &cdSprite, aktuell); if(currentPage != 11) cdSprite.pushSprite(0, HEAD_H); else cdSprite.pushSprite(0, 0); }
+    bool fastRefresh = (currentPage == 1 || currentPage == 7 || currentPage == 9); bool forceRender = (aktuell->tm_sec != lastSecond) || (fastRefresh && (currentMillis - lastFrame > 50)) || (currentMillis < toastEndTime) || (currentPage >= 13 && currentPage <= 23);
+    if (forceRender) { 
+        if (cdSprite.getPointer() == nullptr) {
+            Serial.println("[RENDER] cdSprite ist NULL - recreate!");
+            void* p = cdSprite.createSprite(240, 240 - HEAD_H);
+            if (!p) { Serial.println("[RENDER] KRITISCH: cdSprite alloc FAIL!"); return; }
+        }
+        lastSecond = aktuell->tm_sec; lastFrame = currentMillis; if(currentPage != 11) drawHeader(aktuell, getBattery(), isCharging); cdSprite.fillSprite(currentPage == 11 ? TFT_WHITE : cBG); renderPage(currentPage, &cdSprite, aktuell); if(currentPage != 11) cdSprite.pushSprite(0, HEAD_H); else cdSprite.pushSprite(0, 0); }
 }
 
 void renderAOD() {
-    time_t jetzt; time(&jetzt); struct tm *aktuell = localtime(&jetzt); bool isCharging = pmu.isVbusIn() || pmu.isCharging(); static int lastAodMin = -1; static bool lastAodChargeState = false; static int lastAodBatPct = -1;
-    bool forceAodUpdate = (aktuell->tm_min != lastAodMin) || (isCharging != lastAodChargeState) || (isCharging && getBattery() != lastAodBatPct) || (lastSecond == -1);
-    if (forceAodUpdate) {
-        lastAodMin = aktuell->tm_min; lastAodChargeState = isCharging; lastAodBatPct = getBattery(); lastSecond = 0; tft.fillScreen(TFT_BLACK); int aodX = 120 + (random(0, 10) - 5); int aodY = 110 + (random(0, 10) - 5);
-        
-        if (aodMode == 0) { tft.setTextDatum(MC_DATUM); tft.setTextColor(cFG, TFT_BLACK); char aodBuf[10]; snprintf(aodBuf, sizeof(aodBuf), "%02d:%02d", aktuell->tm_hour, aktuell->tm_min); tft.drawString(aodBuf, aodX, aodY - 35, 7); tft.setTextColor(cBatBG, TFT_BLACK); char dateBuf[20]; snprintf(dateBuf, sizeof(dateBuf), "%s, %02d.%02d.", wochentage[aktuell->tm_wday], aktuell->tm_mday, aktuell->tm_mon + 1); tft.drawString(dateBuf, aodX, aodY + 20, 4); } 
-        else if (aodMode == 1) { tft.setTextDatum(MC_DATUM); tft.setTextColor(cAcc2, TFT_BLACK); String hStr = "", mStr = ""; int numH = aktuell->tm_hour, numM = aktuell->tm_min; for(int i=0; i<6; i++) { hStr = String(numH % 2) + hStr; numH /= 2; } for(int i=0; i<6; i++) { mStr = String(numM % 2) + mStr; numM /= 2; } tft.drawString(hStr, aodX, aodY - 20, 4); tft.drawString(mStr, aodX, aodY + 15, 4); } 
-        else if (aodMode == 2) { tft.setTextDatum(TL_DATUM); tft.setTextColor(cBatBG, TFT_BLACK); const char* grid[10] = {"ESKISTAFUNF", "ZEHNZWANZIG", "DREIVIERTEL", "TGNACHVORJM", "HALBXZWOLFP", "ZWEINSIEBEN", "KDREIRHFUNF", "ELFNEUNVIER", "WACHTZEHNRS", "BSECHSFUHRX"}; bool active[10][11] = {false}; int h = aktuell->tm_hour; int m = aktuell->tm_min; auto setW = [&](int r, int c, int l) { for(int i=0; i<l; i++) active[r][c+i] = true; }; setW(0,0,2); setW(0,3,3); int m5 = m / 5; switch(m5) { case 0: setW(9,7,3); break; case 1: setW(0,7,4); setW(3,2,4); break; case 2: setW(1,0,4); setW(3,2,4); break; case 3: setW(2,4,7); setW(3,2,4); break; case 4: setW(1,4,7); setW(3,2,4); break; case 5: setW(0,7,4); setW(3,6,3); setW(4,0,4); break; case 6: setW(4,0,4); break; case 7: setW(0,7,4); setW(3,2,4); setW(4,0,4); break; case 8: setW(1,4,7); setW(3,6,3); break; case 9: setW(2,4,7); setW(3,6,3); break; case 10: setW(1,0,4); setW(3,6,3); break; case 11: setW(0,7,4); setW(3,6,3); break; } int sH = h; if (m >= 25) sH++; sH = sH % 12; if (sH == 0) sH = 12; switch(sH) { case 1: if (m5==0) setW(5,2,3); else setW(5,2,4); break; case 2: setW(5,0,4); break; case 3: setW(6,1,4); break; case 4: setW(7,7,4); break; case 5: setW(6,7,4); break; case 6: setW(9,1,5); break; case 7: setW(5,5,6); break; case 8: setW(8,1,4); break; case 9: setW(7,3,4); break; case 10: setW(8,5,4); break; case 11: setW(7,0,3); break; case 12: setW(4,5,5); break; } int stX = aodX - 95; int stY = aodY - 100; int sX = 18; int sY = 18; for(int r=0; r<10; r++) { for(int c=0; c<11; c++) { if(active[r][c]) { tft.setTextColor(cAcc1, TFT_BLACK); tft.drawChar(grid[r][c], stX + c*sX, stY + r*sY, 2); } else { tft.setTextColor(cBatBG, TFT_BLACK); tft.drawChar(grid[r][c], stX + c*sX, stY + r*sY, 2); } } } } 
-        
-        tft.setTextDatum(MC_DATUM); if (isCharging) { tft.setTextColor(TFT_YELLOW, TFT_BLACK); tft.drawString("⚡ " + String(lastAodBatPct) + "%", aodX, aodY + 90, 2); } else { tft.setTextColor(cBatBG, TFT_BLACK); tft.drawString(String(lastAodBatPct) + "%", aodX, aodY + 90, 2); }
+    time_t jetzt; time(&jetzt); struct tm *aktuell = localtime(&jetzt);
+    bool isCharging = pmu.isVbusIn() || pmu.isCharging();
+    int batPct = getBattery();
+
+    // --- Static state for burn-in offset (changes every 10 minutes) ---
+    static int aodX = 120, aodY = 110;
+    static int lastOffsetMin = -1; // tracks which 10-min slot we last shifted in
+
+    int curSlot = aktuell->tm_min / 10; // 0..5  (changes every 10 min)
+    if (curSlot != lastOffsetMin) {
+        lastOffsetMin = curSlot;
+        aodX = 120 + (random(0, 10) - 5);
+        aodY = 110 + (random(0, 10) - 5);
+    }
+
+    // --- Detect content changes (time, charge, battery %) ---
+    static int lastAodMin = -1;
+    static bool lastAodChargeState = false;
+    static int lastAodBatPct = -1;
+    bool contentChanged = (aktuell->tm_min != lastAodMin)
+                       || (isCharging != lastAodChargeState)
+                       || (batPct != lastAodBatPct)
+                       || (lastSecond == -1);
+
+    // --- Charging animation: pulsing bolt (separate timer, no full redraw) ---
+    static unsigned long lastAnimTime = 0;
+    static uint8_t animPhase = 0;
+    bool animTick = false;
+    if (isCharging && (millis() - lastAnimTime > 800)) {
+        lastAnimTime = millis();
+        animPhase = (animPhase + 1) % 4;
+        animTick = true;
+    }
+
+    // --- Full redraw only when content actually changed ---
+    if (contentChanged) {
+        lastAodMin = aktuell->tm_min;
+        lastAodChargeState = isCharging;
+        lastAodBatPct = batPct;
+        lastSecond = 0;
+
+        tft.fillScreen(TFT_BLACK);
+
+        if (aodMode == 0) {
+            tft.setTextDatum(MC_DATUM);
+            tft.setTextColor(cFG, TFT_BLACK);
+            char aodBuf[10]; snprintf(aodBuf, sizeof(aodBuf), "%02d:%02d", aktuell->tm_hour, aktuell->tm_min);
+            tft.drawString(aodBuf, aodX, aodY - 35, 7);
+            tft.setTextColor(cBatBG, TFT_BLACK);
+            char dateBuf[20]; snprintf(dateBuf, sizeof(dateBuf), "%s, %02d.%02d.", wochentage[aktuell->tm_wday], aktuell->tm_mday, aktuell->tm_mon + 1);
+            tft.drawString(dateBuf, aodX, aodY + 20, 4);
+        }
+        else if (aodMode == 1) {
+            tft.setTextDatum(MC_DATUM);
+            tft.setTextColor(cAcc2, TFT_BLACK);
+            String hStr = "", mStr = "";
+            int numH = aktuell->tm_hour, numM = aktuell->tm_min;
+            for(int i=0; i<6; i++) { hStr = String(numH % 2) + hStr; numH /= 2; }
+            for(int i=0; i<6; i++) { mStr = String(numM % 2) + mStr; numM /= 2; }
+            tft.drawString(hStr, aodX, aodY - 20, 4);
+            tft.drawString(mStr, aodX, aodY + 15, 4);
+        }
+        else if (aodMode == 2) {
+            tft.setTextDatum(TL_DATUM);
+            const char* grid[10] = {"ESKISTAFUNF", "ZEHNZWANZIG", "DREIVIERTEL", "TGNACHVORJM", "HALBXZWOLFP", "ZWEINSIEBEN", "KDREIRHFUNF", "ELFNEUNVIER", "WACHTZEHNRS", "BSECHSFUHRX"};
+            bool active[10][11] = {false};
+            int h = aktuell->tm_hour; int m = aktuell->tm_min;
+            auto setW = [&](int r, int c, int l) { for(int i=0; i<l; i++) active[r][c+i] = true; };
+            setW(0,0,2); setW(0,3,3);
+            int m5 = m / 5;
+            switch(m5) { case 0: setW(9,7,3); break; case 1: setW(0,7,4); setW(3,2,4); break; case 2: setW(1,0,4); setW(3,2,4); break; case 3: setW(2,4,7); setW(3,2,4); break; case 4: setW(1,4,7); setW(3,2,4); break; case 5: setW(0,7,4); setW(3,6,3); setW(4,0,4); break; case 6: setW(4,0,4); break; case 7: setW(0,7,4); setW(3,2,4); setW(4,0,4); break; case 8: setW(1,4,7); setW(3,6,3); break; case 9: setW(2,4,7); setW(3,6,3); break; case 10: setW(1,0,4); setW(3,6,3); break; case 11: setW(0,7,4); setW(3,6,3); break; }
+            int sH = h; if (m >= 25) sH++; sH = sH % 12; if (sH == 0) sH = 12;
+            switch(sH) { case 1: if (m5==0) setW(5,2,3); else setW(5,2,4); break; case 2: setW(5,0,4); break; case 3: setW(6,1,4); break; case 4: setW(7,7,4); break; case 5: setW(6,7,4); break; case 6: setW(9,1,5); break; case 7: setW(5,5,6); break; case 8: setW(8,1,4); break; case 9: setW(7,3,4); break; case 10: setW(8,5,4); break; case 11: setW(7,0,3); break; case 12: setW(4,5,5); break; }
+            int stX = aodX - 95; int stY = aodY - 100; int sXs = 18; int sYs = 18;
+            for(int r=0; r<10; r++) { for(int c=0; c<11; c++) { tft.setTextColor(active[r][c] ? cAcc1 : cBatBG, TFT_BLACK); tft.drawChar(grid[r][c], stX + c*sXs, stY + r*sYs, 2); } }
+        }
+
+        // Draw battery info (full redraw)
+        drawAodBattery(aodX, aodY, isCharging, batPct, animPhase);
+    }
+    else if (isCharging && animTick) {
+        // Only update the charging bolt area — no full screen redraw
+        drawAodBattery(aodX, aodY, true, batPct, animPhase);
+    }
+}
+
+// Helper: draw charging bolt or battery % in AOD area
+void drawAodBattery(int aodX, int aodY, bool isCharging, int batPct, uint8_t animPhase) {
+    tft.setTextDatum(MC_DATUM);
+    if (isCharging) {
+        uint8_t bri = 100 + animPhase * 50; // 100..250
+        uint16_t boltCol = tft.color565(bri, bri, 0);
+        int bx = aodX, by = aodY + 72;
+        // Clear bolt area
+        tft.fillRect(bx - 12, by - 16, 24, 34, TFT_BLACK);
+        // Lightning bolt shape: zig-zag polygon drawn with two triangles
+        //    top spike going upper-left to center-right
+        //    bottom spike from center-left to lower-right
+        //       *  (bx-2, by-14)
+        //      / \
+        //     /   * (bx+6, by-2)
+        //    * ---/  (bx-4, by-2)
+        //     \
+        //      * (bx+2, by+14)
+        tft.fillTriangle(bx - 2, by - 14, bx + 6, by - 2, bx - 4, by - 2, boltCol);  // top half
+        tft.fillTriangle(bx + 4, by + 2,  bx - 6, by + 2, bx + 2, by + 14, boltCol);  // bottom half
+        // Battery percentage text
+        tft.fillRect(aodX - 30, aodY + 86, 60, 18, TFT_BLACK);
+        tft.setTextColor(boltCol, TFT_BLACK);
+        tft.drawString(String(batPct) + "%", aodX, aodY + 96, 2);
+    } else {
+        tft.fillRect(aodX - 30, aodY + 80, 60, 18, TFT_BLACK);
+        tft.setTextColor(cBatBG, TFT_BLACK);
+        tft.drawString(String(batPct) + "%", aodX, aodY + 90, 2);
     }
 }

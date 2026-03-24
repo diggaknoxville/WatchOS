@@ -12,7 +12,8 @@
 #include "Logic.h"
 #include "HardwareConfig.h" 
 #include "UpdateOTA.h" 
-#include "EvilPortalApp.h"
+#include "BadApps.h"
+#include <FFat.h>
 
 const byte DNS_PORT = 53;
 
@@ -46,7 +47,7 @@ void handleApiStatus() {
     else if (rssi >= -50) rssi_pct = 100;
     else rssi_pct = 2 * (rssi + 100);
     
-    char json[700];
+    char json[900];
     snprintf(json, sizeof(json), "{\"akku\":%d,\"volt\":\"%.2f\",\"cpu\":\"%.1f\",\"ram_free\":%d,\"ram_tot\":%d,\"geld\":\"%.4f\",\"wifi\":%s,\"charging\":%s,\"bt\":%s,\"ssid\":\"%s\",\"ip\":\"%s\",\"cpufreq\":%d,\"uptime\":%lu,\"rssi\":%d,\"rssi_pct\":%d}", 
              getBattery(), pmu.getBattVoltage()/1000.0, temperatureRead(), 
              (int)(ESP.getFreeHeap() / 1024), (int)(ESP.getHeapSize() / 1024), earnedToday, 
@@ -246,7 +247,7 @@ function setC(bg,fg,a1,a2,bat, hbg, hfg, abg, wrn) {
     document.getElementsByName('cBG')[0].value=bg; document.getElementsByName('cFG')[0].value=fg; document.getElementsByName('cAcc1')[0].value=a1; document.getElementsByName('cAcc2')[0].value=a2; document.getElementsByName('cBat')[0].value=bat;
     document.getElementsByName('cHBG')[0].value=hbg; document.getElementsByName('cHFG')[0].value=hfg; document.getElementsByName('cABG')[0].value=abg; document.getElementsByName('cWrn')[0].value=wrn; 
 } 
-function saveForm(formId){ var data = new URLSearchParams(new FormData(document.getElementById(formId))); fetch('/save', {method:'POST', body:data}).then(()=>{ var t = document.getElementById('toast'); t.className = 'toast show'; setTimeout(function(){ t.className = t.className.replace('show', ''); }, 3000); }); return false; }
+function saveForm(formId){ var data = new URLSearchParams(new FormData(document.getElementById(formId))); data.append('_form', formId); fetch('/save', {method:'POST', body:data}).then(()=>{ var t = document.getElementById('toast'); t.className = 'toast show'; setTimeout(function(){ t.className = t.className.replace('show', ''); }, 3000); }); return false; }
 function saveTime(){ var data = new URLSearchParams(new FormData(document.getElementById('fTime'))); fetch('/settime', {method:'POST', body:data}).then(()=>{ var t = document.getElementById('toast'); t.className = 'toast show'; setTimeout(function(){ t.className = t.className.replace('show', ''); }, 3000); }); return false; }
 function previewHTML() { var w = window.open('', '_blank'); w.document.write(document.getElementsByName('evHtml')[0].value); w.document.close(); }
 function uploadOTA() { var file = document.getElementById('otafile').files[0]; if(!file) { alert('Bitte Firmware-Datei waehlen!'); return; } var fd = new FormData(); fd.append('update', file); var xhr = new XMLHttpRequest(); document.getElementById('otaprog-container').style.display = 'block'; xhr.upload.addEventListener('progress', function(e) { if(e.lengthComputable) { var pct = Math.round((e.loaded / e.total) * 100); document.getElementById('otaprog').style.width = pct + '%'; document.getElementById('otaprog').innerHTML = pct + '%'; } }, false); xhr.addEventListener('load', function() { if(xhr.status == 200) { document.getElementById('otaprog').innerHTML = 'Erfolgreich! Neustart...'; setTimeout(function(){ location.reload(); }, 6000); } else { document.getElementById('otaprog').innerHTML = 'Fehler!'; document.getElementById('otaprog').style.background = 'red'; } }, false); xhr.open('POST', '/update?size=' + file.size, true); xhr.send(fd); }
@@ -400,6 +401,14 @@ function updateVal(id, val) { document.getElementById(id).innerText = val + '%';
     s += F("<div><b>Sleep (s)</b><br><input name='tslp' type='number' min='20' max='600' value='"); s += (time_sleep_start/1000); s += F("'></div></div><br>");
     
     s += F("<b>Timer Alarm Typ:</b><br><select name='tAlarm'><option value='0'"); if(timerAlarmMode==0) s += F(" selected"); s += F(">Nur Haptisch</option><option value='1'"); if(timerAlarmMode==1) s += F(" selected"); s += F(">Nur Akustisch</option><option value='2'"); if(timerAlarmMode==2) s += F(" selected"); s += F(">Beides</option></select><br><br>");
+    
+    s += F("<b>Haptic Waveform (1-123): </b><span id='hap_v' style='color:#4CAF50;'>"); s += hapticWaveform; s += F("</span><br><input name='hapW' type='range' min='1' max='123' value='"); s += hapticWaveform; s += F("' oninput='updateVal(\"hap_v\", this.value)'><hr>");
+    
+    s += F("<h3>Web Dashboard Schutz</h3>");
+    s += F("<label class='cb-lbl'><input type='checkbox' name='webAuth' value='1' "); if(webAuthEnabled) s += F("checked"); s += F("> Passwort-Schutz aktivieren</label>");
+    s += F("<b>Benutzername:</b><input name='webUsr' type='text' value='"); s += htmlEscape(webUser); s += F("'>");
+    s += F("<b>Passwort:</b><input name='webPwd' type='password' value='"); s += htmlEscape(webPass); s += F("'><hr>");
+    
     s += F("<input type='submit' class='btn' value='System speichern'></form><hr>");
 
     s += F("<form id='fTime' onsubmit='return saveTime()'><h3>Uhrzeit & Zeitzone</h3>");
@@ -435,6 +444,7 @@ function updateVal(id, val) { document.getElementById(id).innerText = val + '%';
         s += F("</div>");
     }
     s += F("<b>Basis-IP:</b><input name='nmapIP' type='text' value='"); s += htmlEscape(nmapBaseIP); s += F("'>");
+    s += F("<b>Ports (kommagetrennt):</b><input name='nmapPorts' type='text' value='"); s += htmlEscape(nmapPorts); s += F("'>");
     s += F("<input type='submit' class='btn btn-red' style='margin-bottom:20px;' value='Nmap Ziele Speichern'></form>");
     
     s += F("<b>Nmap Scan Ergebnisse:</b>");
@@ -482,7 +492,7 @@ function updateVal(id, val) { document.getElementById(id).innerText = val + '%';
 
     // 6. UPDATE
     s += F("<div id='p6' class='panel'><h3>Firmware Update</h3>");
-    s += F("<p>Installierte Build-Version:<br><b style='color:#4CAF50;'>");
+    s += F("<p>WatchOS Version: <b style='color:#4CAF50;'>"); s += WATCHOS_VERSION; s += F("</b><br>Build: <b style='color:#4CAF50;'>");
     s += String(__DATE__) + " - " + String(__TIME__);
     s += F("</b></p><hr><p>Waehle die kompilierte .bin Datei aus.</p>");
     s += F("<input type='file' id='otafile' accept='.bin' style='background:#333;color:#fff;padding:10px;margin:8px 0;border-radius:6px;width:100%;box-sizing:border-box;'><br><br>");
@@ -493,9 +503,17 @@ function updateVal(id, val) { document.getElementById(id).innerText = val + '%';
     return s;
 }
 
-void handleRoot() { server.send(200, "text/html", getHtmlContent()); }
+void handleRoot() { 
+    if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+    server.send(200, "text/html", getHtmlContent()); 
+}
 
 void handleSave() {
+    if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+    // Formulare identifizieren: Jedes Formular sendet ein hidden "_form" Feld
+    String formId = server.hasArg("_form") ? server.arg("_form") : "";
+    
+    // Variablen nur setzen wenn im POST enthalten
     if (server.hasArg("ssid")) userSSID = server.arg("ssid"); if (server.hasArg("pwd")) userPWD = server.arg("pwd"); if (server.hasArg("ntpz")) ntpZone = server.arg("ntpz");
     if (server.hasArg("apSsid")) apSSID = server.arg("apSsid"); if (server.hasArg("apPwd")) apPWD = server.arg("apPwd");
     if (server.hasArg("bm")) bootMode = server.arg("bm").toInt(); if (server.hasArg("aodM")) aodMode = server.arg("aodM").toInt();
@@ -534,33 +552,91 @@ void handleSave() {
     if (server.hasArg("spamSsid")) spamSSIDs = server.arg("spamSsid"); 
     if (server.hasArg("buLay")) badUsbLayout = server.arg("buLay").toInt(); 
     if (server.hasArg("nmapIP")) nmapBaseIP = server.arg("nmapIP"); 
+    if (server.hasArg("nmapPorts")) nmapPorts = server.arg("nmapPorts");
+    if (server.hasArg("hapW")) hapticWaveform = server.arg("hapW").toInt();
+    if (server.hasArg("webUsr")) webUser = server.arg("webUsr");
+    if (server.hasArg("webPwd")) webPass = server.arg("webPwd");
     
-    enP0 = server.hasArg("enP0"); enP1 = server.hasArg("enP1"); enP2 = server.hasArg("enP2"); enP3 = server.hasArg("enP3");
+    // Checkboxen NUR aktualisieren wenn das Views-Formular gesendet wurde
+    if (formId == "fViews") {
+        enP0 = server.hasArg("enP0"); enP1 = server.hasArg("enP1"); enP2 = server.hasArg("enP2"); enP3 = server.hasArg("enP3");
+    }
+    if (formId == "fSys") {
+        webAuthEnabled = server.hasArg("webAuth");
+    }
     if (server.hasArg("tAlarm")) timerAlarmMode = server.arg("tAlarm").toInt();
 
+    // NUR die Preferences speichern die zum jeweiligen Formular gehören
+    Serial.printf("[SAVE] formId='%s' - NVS oeffnen...\n", formId.c_str());
     prefs.begin("clock", false);
-    prefs.putString("ssid", userSSID); prefs.putString("pwd", userPWD); prefs.putString("ntpZ", ntpZone); prefs.putString("apS", apSSID); prefs.putString("apP", apPWD);
-    prefs.putInt("tag", gTag); prefs.putInt("monat", gMonat); prefs.putInt("jahr", gJahr); prefs.putInt("std", gStunde); prefs.putInt("min", gMinute); prefs.putInt("alter", zielAlter);
-    prefs.putInt("bootM", bootMode); prefs.putInt("aodM", aodMode);
-    prefs.putULong("tDim", time_dim_start); prefs.putULong("tAod", time_aod_start); prefs.putULong("tSlp", time_sleep_start);
-    prefs.putInt("maxB", maxBright); prefs.putInt("minB", minBright);
+    Serial.printf("[SAVE] NVS freeEntries=%d\n", prefs.freeEntries());
     
-    prefs.putString("cBG", hexBG); prefs.putString("cFG", hexFG); prefs.putString("cAcc1", hexAcc1); prefs.putString("cAcc2", hexAcc2); prefs.putString("cBat", hexBat);
-    prefs.putString("cHBG", hexHeadBG); prefs.putString("cHFG", hexHeadFG); prefs.putString("cABG", hexAppBG); prefs.putString("cWrn", hexWarn);
-    prefs.putInt("lang", sysLang);
+    if (formId == "fDesign") {
+        Serial.printf("[SAVE] Design: cBG=%s cHBG=%s cHFG=%s bootM=%d aodM=%d\n", hexBG.c_str(), hexHeadBG.c_str(), hexHeadFG.c_str(), bootMode, aodMode);
+        prefs.putInt("bootM", bootMode); prefs.putInt("aodM", aodMode);
+        prefs.putString("cBG", hexBG); prefs.putString("cFG", hexFG); prefs.putString("cAcc1", hexAcc1); prefs.putString("cAcc2", hexAcc2); prefs.putString("cBat", hexBat);
+        prefs.putString("cHBG", hexHeadBG); prefs.putString("cHFG", hexHeadFG); prefs.putString("cABG", hexAppBG); prefs.putString("cWrn", hexWarn);
+    }
+    else if (formId == "fViews") {
+        prefs.putBool("enP0", enP0); prefs.putBool("enP1", enP1); prefs.putBool("enP2", enP2); prefs.putBool("enP3", enP3);
+    }
+    else if (formId == "fSys") {
+        prefs.putString("ssid", userSSID); prefs.putString("pwd", userPWD); prefs.putString("ntpZ", ntpZone); prefs.putString("apS", apSSID); prefs.putString("apP", apPWD);
+        prefs.putULong("tDim", time_dim_start); prefs.putULong("tAod", time_aod_start); prefs.putULong("tSlp", time_sleep_start);
+        prefs.putInt("maxB", maxBright); prefs.putInt("minB", minBright);
+        prefs.putInt("lang", sysLang);
+        prefs.putInt("tAlarm", timerAlarmMode);
+        prefs.putInt("hapW", hapticWaveform);
+        prefs.putString("webUsr", webUser); prefs.putString("webPwd", webPass); prefs.putBool("webAuth", webAuthEnabled);
+    }
+    else if (formId == "fPers") {
+        prefs.putInt("tag", gTag); prefs.putInt("monat", gMonat); prefs.putInt("jahr", gJahr); prefs.putInt("std", gStunde); prefs.putInt("min", gMinute); prefs.putInt("alter", zielAlter);
+        prefs.putString("pN", parentName); prefs.putString("pD", parentDate); prefs.putString("pT", parentTime);
+        prefs.putFloat("netS", netSalary); prefs.putInt("pt", partTimePct); prefs.putInt("vac", vacationDays); prefs.putInt("sick", sickDays); prefs.putFloat("wh", workHoursPerDay); prefs.putInt("wd", workDaysYear);
+        prefs.putString("c1n", child1Name); prefs.putString("c1d", child1Date); prefs.putString("c1t", child1Time); prefs.putString("c2n", child2Name); prefs.putString("c2d", child2Date); prefs.putString("c2t", child2Time); prefs.putString("c3n", child3Name); prefs.putString("c3d", child3Date); prefs.putString("c3t", child3Time);
+    }
+    else if (formId == "fHacker1") {
+        prefs.putString("spamSsid", spamSSIDs); prefs.putInt("buLay", badUsbLayout); prefs.putString("nmapIP", nmapBaseIP);
+        prefs.putString("nmapPorts", nmapPorts);
+        prefs.putString("tgS0", targetSSIDs[0]); prefs.putString("tgP0", targetPWDs[0]); prefs.putString("tgS1", targetSSIDs[1]); prefs.putString("tgP1", targetPWDs[1]); prefs.putString("tgS2", targetSSIDs[2]); prefs.putString("tgP2", targetPWDs[2]);
+    }
+    else if (formId == "fHacker2") {
+        prefs.putString("buN0", badUsbNames[0]); prefs.putString("buS0", badUsbScripts[0]); prefs.putString("buN1", badUsbNames[1]); prefs.putString("buS1", badUsbScripts[1]); prefs.putString("buN2", badUsbNames[2]); prefs.putString("buS2", badUsbScripts[2]);
+        // Also save large scripts to FFat
+        if (littleFsReady) { for(int i=0; i<3; i++) writeFileToFS("/badusb" + String(i) + ".txt", badUsbScripts[i]); }
+    }
+    else if (formId == "fEvil") {
+        prefs.putString("evSsid", evilSSID); prefs.putString("evHtml", evilHTML);
+        // Also save large HTML to FFat
+        if (littleFsReady) writeFileToFS("/evil.html", evilHTML);
+    }
+    else {
+        // Fallback: Alles speichern (kompatibilität mit alten Aufrufen ohne _form)
+        prefs.putString("ssid", userSSID); prefs.putString("pwd", userPWD); prefs.putString("ntpZ", ntpZone); prefs.putString("apS", apSSID); prefs.putString("apP", apPWD);
+        prefs.putInt("tag", gTag); prefs.putInt("monat", gMonat); prefs.putInt("jahr", gJahr); prefs.putInt("std", gStunde); prefs.putInt("min", gMinute); prefs.putInt("alter", zielAlter);
+        prefs.putInt("bootM", bootMode); prefs.putInt("aodM", aodMode);
+        prefs.putULong("tDim", time_dim_start); prefs.putULong("tAod", time_aod_start); prefs.putULong("tSlp", time_sleep_start);
+        prefs.putInt("maxB", maxBright); prefs.putInt("minB", minBright);
+        prefs.putString("cBG", hexBG); prefs.putString("cFG", hexFG); prefs.putString("cAcc1", hexAcc1); prefs.putString("cAcc2", hexAcc2); prefs.putString("cBat", hexBat);
+        prefs.putString("cHBG", hexHeadBG); prefs.putString("cHFG", hexHeadFG); prefs.putString("cABG", hexAppBG); prefs.putString("cWrn", hexWarn);
+        prefs.putInt("lang", sysLang);
+        prefs.putString("pN", parentName); prefs.putString("pD", parentDate); prefs.putString("pT", parentTime);
+        prefs.putFloat("netS", netSalary); prefs.putInt("pt", partTimePct); prefs.putInt("vac", vacationDays); prefs.putInt("sick", sickDays); prefs.putFloat("wh", workHoursPerDay); prefs.putInt("wd", workDaysYear);
+        prefs.putString("c1n", child1Name); prefs.putString("c1d", child1Date); prefs.putString("c1t", child1Time); prefs.putString("c2n", child2Name); prefs.putString("c2d", child2Date); prefs.putString("c2t", child2Time); prefs.putString("c3n", child3Name); prefs.putString("c3d", child3Date); prefs.putString("c3t", child3Time);
+        prefs.putString("evSsid", evilSSID); prefs.putString("evHtml", evilHTML);
+        prefs.putString("buN0", badUsbNames[0]); prefs.putString("buS0", badUsbScripts[0]); prefs.putString("buN1", badUsbNames[1]); prefs.putString("buS1", badUsbScripts[1]); prefs.putString("buN2", badUsbNames[2]); prefs.putString("buS2", badUsbScripts[2]);
+        prefs.putString("tgS0", targetSSIDs[0]); prefs.putString("tgP0", targetPWDs[0]); prefs.putString("tgS1", targetSSIDs[1]); prefs.putString("tgP1", targetPWDs[1]); prefs.putString("tgS2", targetSSIDs[2]); prefs.putString("tgP2", targetPWDs[2]);
+        prefs.putString("spamSsid", spamSSIDs); prefs.putInt("buLay", badUsbLayout); prefs.putString("nmapIP", nmapBaseIP);
+        prefs.putBool("enP0", enP0); prefs.putBool("enP1", enP1); prefs.putBool("enP2", enP2); prefs.putBool("enP3", enP3);
+        prefs.putInt("tAlarm", timerAlarmMode);
+    }
     
-    prefs.putString("pN", parentName); prefs.putString("pD", parentDate); prefs.putString("pT", parentTime);
-    prefs.putFloat("netS", netSalary); prefs.putInt("pt", partTimePct); prefs.putInt("vac", vacationDays); prefs.putInt("sick", sickDays); prefs.putFloat("wh", workHoursPerDay); prefs.putInt("wd", workDaysYear);
-    prefs.putString("c1n", child1Name); prefs.putString("c1d", child1Date); prefs.putString("c1t", child1Time); prefs.putString("c2n", child2Name); prefs.putString("c2d", child2Date); prefs.putString("c2t", child2Time); prefs.putString("c3n", child3Name); prefs.putString("c3d", child3Date); prefs.putString("c3t", child3Time);
-    prefs.putString("evSsid", evilSSID); prefs.putString("evHtml", evilHTML);
-    prefs.putString("buN0", badUsbNames[0]); prefs.putString("buS0", badUsbScripts[0]); prefs.putString("buN1", badUsbNames[1]); prefs.putString("buS1", badUsbScripts[1]); prefs.putString("buN2", badUsbNames[2]); prefs.putString("buS2", badUsbScripts[2]);
-    prefs.putString("tgS0", targetSSIDs[0]); prefs.putString("tgP0", targetPWDs[0]); prefs.putString("tgS1", targetSSIDs[1]); prefs.putString("tgP1", targetPWDs[1]); prefs.putString("tgS2", targetSSIDs[2]); prefs.putString("tgP2", targetPWDs[2]);
-    prefs.putString("spamSsid", spamSSIDs); prefs.putInt("buLay", badUsbLayout); prefs.putString("nmapIP", nmapBaseIP); 
-    prefs.putBool("enP0", enP0); prefs.putBool("enP1", enP1); prefs.putBool("enP2", enP2); prefs.putBool("enP3", enP3);
-    prefs.putInt("tAlarm", timerAlarmMode);
+    Serial.printf("[SAVE] NVS freeEntries nach Speichern=%d\n", prefs.freeEntries());
     prefs.end();
     
-    updateZielZeit(); applyTheme(); lastSecond = -1; tft.fillScreen(cBG); setBrightness(maxBright); server.send(200, "text/plain", "OK");
+    updateZielZeit(); applyTheme(); lastSecond = -1; tft.fillScreen(cBG); setBrightness(maxBright); 
+    Serial.println("[SAVE] Fertig - OK gesendet.");
+    server.send(200, "text/plain", "OK");
 }
 
 void handleSetTime() {

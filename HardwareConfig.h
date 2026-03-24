@@ -7,4 +7,6 @@ void loadPreferences();
 void initHardware();
 void showBootSequence();
 void playBootSound(int type);
-int getBattery(); // NEU: Die smarte Akku-Abfrage
+int getBattery();
+String readFileFromFS(String path, String fallback);
+void writeFileToFS(String path, String content);

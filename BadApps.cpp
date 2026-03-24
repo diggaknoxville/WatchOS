@@ -1,16 +1,80 @@
-// --- EvilPortalApp.cpp ---
+// --- BadApps.cpp ---
 #include <FS.h>         
 #include <WebServer.h>  
 #include <WiFi.h>
 #include <DNSServer.h>
 
+#include "BadApps.h"
 #include "WebManager.h"
-#include "EvilPortalApp.h"
 #include "Globals.h"
+#include "Display.h"
 #include "Logic.h"
 
+// =====================================================================
+// Bad Apps Menu (Page 23) — Liste aller "bösen" Apps
+// =====================================================================
+void renderBadMenu(TFT_eSprite *spr) {
+    spr->setTextDatum(TC_DATUM); spr->setTextColor(TFT_RED); spr->drawString("Bad Apps", 120, 2, 2);
+    spr->setTextDatum(MC_DATUM);
+
+    struct AppEntry { const char* label; uint16_t color; };
+    AppEntry apps[] = {
+        {"Phishing",  TFT_RED},       // -> Page 12
+        {"Ducky",     TFT_YELLOW},    // -> Page 15
+        {"WiFi Spam", TFT_RED},       // -> Page 16
+        {"BLE Spam",  TFT_MAGENTA},   // -> Page 17
+        {"Nmap",      TFT_GREEN},     // -> Page 18
+        {"Deauth",    TFT_RED},       // -> Page 19
+        {"Probe Mon", TFT_CYAN},      // -> Page 20
+        {"BLE Scan",  TFT_MAGENTA},   // -> Page 21
+    };
+    int count = 8;
+
+    int bW = 100, bH = 42, gapY = 6;
+    int startY = 24;
+    for (int i = 0; i < count; i++) {
+        int col = i % 2;
+        int row = i / 2;
+        int bx = (col == 0) ? 15 : 125;
+        int by = startY + row * (bH + gapY);
+        spr->fillRoundRect(bx, by, bW, bH, 8, cAppBG);
+        spr->setTextColor(apps[i].color);
+        spr->drawString(apps[i].label, bx + bW / 2, by + bH / 2, 2);
+    }
+    // Status-Dots für laufende Bad-Apps
+    // Reihenfolge: Phishing(L), Ducky(R), WiFi Spam(L), BLE Spam(R), Nmap(L), Deauth(R), Probe Mon(L), BLE Scan(R)
+    if (evilActive)      spr->fillCircle(15 + bW - 6, startY + 6, 4, TFT_GREEN);
+    if (badUsbActive)    spr->fillCircle(125 + bW - 6, startY + 6, 4, TFT_GREEN);
+    if (wifiSpamActive)  spr->fillCircle(15 + bW - 6, startY + (bH+gapY) + 6, 4, TFT_GREEN);
+    if (bleSpamActive)   spr->fillCircle(125 + bW - 6, startY + (bH+gapY) + 6, 4, TFT_GREEN);
+    if (nmapActive)      spr->fillCircle(15 + bW - 6, startY + 2*(bH+gapY) + 6, 4, TFT_GREEN);
+    if (deauthActive)    spr->fillCircle(125 + bW - 6, startY + 2*(bH+gapY) + 6, 4, TFT_GREEN);
+    if (probeMonActive)  spr->fillCircle(15 + bW - 6, startY + 3*(bH+gapY) + 6, 4, TFT_GREEN);
+    if (bleScanActive)   spr->fillCircle(125 + bW - 6, startY + 3*(bH+gapY) + 6, 4, TFT_GREEN);
+}
+
+void handleBadMenuTouch(int x, int touchY) {
+    int bH = 42, gapY = 6, startY = 24;
+    int row = (touchY - startY) / (bH + gapY);
+    int col = (x < 120) ? 0 : 1;
+    int idx = row * 2 + col;
+
+    if (row < 0 || row > 3 || touchY < startY) return;
+    if (idx > 7) return;
+
+    // Mapping: idx -> page
+    int pages[] = {12, 15, 16, 17, 18, 19, 20, 21};
+    int targetPage = pages[idx];
+
+    triggerVibration();
+    killBadApps(); // Auto-kill laufende Bad-App bevor neue gestartet wird
+    slideToPage(targetPage, 0, -1);
+}
+
+// =====================================================================
+// Evil Portal App (Page 12) — aus EvilPortalApp.cpp übernommen
+// =====================================================================
 void handleEvilRoot() {
-    // Hier wird nun der dynamische HTML-Code aus dem Good Portal gesendet!
     server.send(200, "text/html", evilHTML);
 }
 
@@ -41,7 +105,6 @@ void handleEvilTOS() {
         <p>Der Betreiber behält sich vor, Verbindungsdaten (IP-Adressen, MAC-Adressen, Zeitstempel) zur Sicherstellung des Netzbetriebs temporär zu protokollieren. Eine Verschlüsselung der übertragenen Daten wird nicht garantiert.</p>
         <h3>4. Haftungsausschluss</h3>
         <p>Die IT-Verwaltung übernimmt keine Haftung für Datenverluste, beschädigte Endgeräte oder missbräuchliche Nutzung durch Dritte.</p>
-        
         <a href="/" class="btn-back">&larr; Zurück zum Login</a>
     </div>
 </body>
@@ -74,17 +137,13 @@ void handleEvilImprint() {
         Abteilung für digitale Bildungsinfrastruktur<br>
         Schlossplatz 4<br>
         70173 Stuttgart</p>
-        
         <p><strong>Vertreten durch:</strong><br>
         Direktorium für Netzwerktechnik</p>
-        
         <p><strong>Kontakt:</strong><br>
         Telefon: +49 (0) 711 123-4567<br>
         E-Mail: support@it-bw.de</p>
-        
         <p><strong>Verantwortlich für den Inhalt nach § 55 Abs. 2 RStV:</strong><br>
         Leitung der IT-Koordination Baden-Württemberg</p>
-
         <a href="/" class="btn-back">&larr; Zurück zum Login</a>
     </div>
 </body>
@@ -130,16 +189,15 @@ void handleEvilSubmit() {
 }
 
 void toggleEvilPortal() {
-    if (wlanActive) toggleWLAN(); // Beendet sofort das Good Portal!
+    if (wlanActive) toggleWLAN();
     
     evilActive = !evilActive;
     if(evilActive) {
         if (ESP.getCpuFreqMHz() != 240) setCpuFrequencyMhz(240);
         WiFi.mode(WIFI_AP);
-        WiFi.softAP(evilSSID.c_str()); // Startet die konfigurierte SSID!
+        WiFi.softAP(evilSSID.c_str());
         dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
         dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
-
         server.begin(); 
         showToast("Evil Portal AKTIV", 3000);
     } else {

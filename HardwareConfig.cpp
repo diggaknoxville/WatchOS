@@ -6,6 +6,7 @@
 #include <WiFi.h>
 #include <driver/i2s.h>
 #include <time.h>
+#include <FFat.h>
 
 #define IIC_SDA_PMU 10
 #define IIC_SCL_PMU 11
@@ -77,10 +78,32 @@ int getBattery() {
     return p;
 }
 
+String readFileFromFS(String path, String fallback) {
+    if (!littleFsReady) return fallback;
+    fs::File f = FFat.open(path, "r");
+    if (!f) return fallback;
+    String content = f.readString();
+    f.close();
+    return content.length() > 0 ? content : fallback;
+}
+
+void writeFileToFS(String path, String content) {
+    if (!littleFsReady) return;
+    fs::File f = FFat.open(path, "w");
+    if (!f) return;
+    f.print(content);
+    f.close();
+}
+
 void updateZielZeit() { memset(&zielZeit, 0, sizeof(struct tm)); zielZeit.tm_mday = gTag; zielZeit.tm_mon = gMonat - 1; zielZeit.tm_year = (gJahr + zielAlter) - 1900; }
 
 void loadPreferences() {
-    prefs.begin("clock", false);
+    Serial.println("[NVS] loadPreferences gestartet...");
+    if (!prefs.begin("clock", true)) {
+        Serial.println("[NVS] FEHLER: Namespace 'clock' konnte nicht geoeffnet werden!");
+        prefs.begin("clock", false); // Schreibmodus als Fallback
+    }
+    Serial.printf("[NVS] freeEntries=%d\n", prefs.freeEntries());
     userSSID = prefs.getString("ssid", userSSID); userPWD = prefs.getString("pwd", userPWD); ntpZone = prefs.getString("ntpZ", ntpZone);
     apSSID = prefs.getString("apS", apSSID); apPWD = prefs.getString("apP", apPWD);
     gTag = prefs.getInt("tag", gTag); gMonat = prefs.getInt("monat", gMonat); gJahr = prefs.getInt("jahr", gJahr); gStunde = prefs.getInt("std", gStunde); gMinute = prefs.getInt("min", gMinute); zielAlter = prefs.getInt("alter", zielAlter);
@@ -93,6 +116,7 @@ void loadPreferences() {
     hexBG = prefs.getString("cBG", hexBG); hexFG = prefs.getString("cFG", hexFG); hexAcc1 = prefs.getString("cAcc1", hexAcc1); hexAcc2 = prefs.getString("cAcc2", hexAcc2); hexBat = prefs.getString("cBat", hexBat);
     // FIX: Neue Farben & Sprache aus Speicher laden
     hexHeadBG = prefs.getString("cHBG", hexHeadBG); hexHeadFG = prefs.getString("cHFG", hexHeadFG); hexAppBG = prefs.getString("cABG", hexAppBG); hexWarn = prefs.getString("cWrn", hexWarn);
+    Serial.printf("[NVS] Farben geladen: BG=%s FG=%s Acc1=%s HBG=%s HFG=%s\n", hexBG.c_str(), hexFG.c_str(), hexAcc1.c_str(), hexHeadBG.c_str(), hexHeadFG.c_str());
     sysLang = prefs.getInt("lang", sysLang);
     
     enP0 = prefs.getBool("enP0", true); enP1 = prefs.getBool("enP1", true); enP2 = prefs.getBool("enP2", true); enP3 = prefs.getBool("enP3", true);
@@ -113,11 +137,31 @@ void loadPreferences() {
     spamSSIDs = prefs.getString("spamSsid", spamSSIDs);
     badUsbLayout = prefs.getInt("buLay", badUsbLayout);
     nmapBaseIP = prefs.getString("nmapIP", nmapBaseIP);
+    nmapPorts = prefs.getString("nmapPorts", nmapPorts);
+    
+    // Web Auth
+    webUser = prefs.getString("webUsr", webUser);
+    webPass = prefs.getString("webPwd", webPass);
+    webAuthEnabled = prefs.getBool("webAuth", webAuthEnabled);
+    
+    // Haptic
+    hapticWaveform = prefs.getInt("hapW", hapticWaveform);
     
     netSalary = prefs.getFloat("netS", netSalary); partTimePct = prefs.getInt("pt", partTimePct); vacationDays = prefs.getInt("vac", vacationDays); sickDays = prefs.getInt("sick", sickDays); workHoursPerDay = prefs.getFloat("wh", workHoursPerDay); workDaysYear = prefs.getInt("wd", workDaysYear);
     child1Name = prefs.getString("c1n", child1Name); child1Date = prefs.getString("c1d", child1Date); child1Time = prefs.getString("c1t", child1Time); child2Name = prefs.getString("c2n", child2Name); child2Date = prefs.getString("c2d", child2Date); child2Time = prefs.getString("c2t", child2Time); child3Name = prefs.getString("c3n", child3Name); child3Date = prefs.getString("c3d", child3Date); child3Time = prefs.getString("c3t", child3Time);
     parentName = prefs.getString("pN", parentName); parentDate = prefs.getString("pD", parentDate); parentTime = prefs.getString("pT", parentTime);
+    Serial.printf("[NVS] loadPreferences fertig. freeEntries=%d\n", prefs.freeEntries());
     prefs.end();
+    
+    // FFat: Große Strings laden (Evil HTML, BadUSB Skripte)
+    if (littleFsReady) {
+        String fsHtml = readFileFromFS("/evil.html", "");
+        if (fsHtml.length() > 100) evilHTML = fsHtml;
+        for (int i = 0; i < 3; i++) {
+            String fsScript = readFileFromFS("/badusb" + String(i) + ".txt", "");
+            if (fsScript.length() > 0) badUsbScripts[i] = fsScript;
+        }
+    }
     
     if(currentPage == 0 && !enP0) currentPage = 1; if(currentPage == 1 && !enP1) currentPage = 2; if(currentPage == 2 && !enP2) currentPage = 3; if(currentPage == 3 && !enP3) currentPage = 0; mainPage = currentPage;
 }
@@ -135,17 +179,93 @@ void playSynthSound(int type, int duration) {
     if (!vibActive) { delay(duration); return; }
     int sampleRate = 16000; size_t bytesWritten; int16_t sample[256]; int frames = (sampleRate / 256) * (duration / 1000.0);
     for(int f = 0; f < frames; f++) { for(int i = 0; i < 256; i++) {
-            if (type == 1) { sample[i] = (f < 1 && i < 40) ? ((rand() % 32000) - 16000) : 0; } 
-            else if (type == 2) { sample[i] = (rand() % 10 > 6) ? ((rand() % 16000) - 8000) : 0; } 
-            else if (type == 3) { int freq = 300 + (f % 5) * 20; sample[i] = (((f * 256 + i) * freq / sampleRate) % 2 == 0) ? 6000 : -6000; } 
-            else if (type == 4) { sample[i] = (((f * 256 + i) * 1000 / sampleRate) % 2 == 0) ? 12000 : -12000; } 
-            else if (type == 5) { sample[i] = (((f * 256 + i) * 300 / sampleRate) % 2 == 0) ? 15000 : -15000; } 
-            else if (type == 6) { sample[i] = (f % 4 < 2) ? ((((f * 256 + i) * 1500 / sampleRate) % 2 == 0) ? 12000 : -12000) : 0; }
+            int t = f * 256 + i;
+            if (type == 1) { 
+                // Tastatur-Klick: Kurzer scharfer Impuls + metallisches Ausklingen
+                if (t < 80) sample[i] = (rand() % 24000) - 12000;
+                else if (t < 200) sample[i] = ((t * 4500 / sampleRate) % 2 == 0 ? 3000 : -3000) * (200 - t) / 200;
+                else sample[i] = 0;
+            } 
+            else if (type == 2) { 
+                // HDD Seek: Mechanisches Rattern mit Stepper-Motor-Charakter
+                int stepFreq = 80 + (f % 3) * 40; // Stepper-Frequenz variiert
+                int16_t stepper = ((t * stepFreq / sampleRate) % 2 == 0) ? 5000 : -5000;
+                int16_t noise = (rand() % 6000) - 3000;
+                sample[i] = (stepper + noise) * (frames - f) / frames; // Fade out
+            } 
+            else if (type == 3) { 
+                // Floppy Seek: Charakteristisches Stepper-Rattern mit Track-Wechsel
+                int seekFreq = 200 + ((f / 2) % 8) * 25; // Track-Sprünge
+                int16_t seek = ((t * seekFreq / sampleRate) % 2 == 0) ? 8000 : -8000;
+                int16_t mech = (f % 3 == 0) ? ((rand() % 8000) - 4000) : 0; // Mechanisches Klicken
+                sample[i] = (seek * 2 / 3) + (mech / 3);
+            } 
+            else if (type == 4) { 
+                // POST Beep: Klassischer BIOS-Piep (ca. 1000Hz)
+                sample[i] = (((t * 1000 / sampleRate) % 2 == 0) ? 12000 : -12000);
+            } 
+            else if (type == 5) { 
+                // BSOD Error: Tiefer Warnton
+                sample[i] = (((t * 300 / sampleRate) % 2 == 0) ? 15000 : -15000);
+            } 
+            else if (type == 6) { 
+                // Floppy Motor Spin-Up: Ansteigender Motor + Rauschen
+                int motorFreq = 100 + (f * 300 / frames); // Motor beschleunigt
+                int16_t motor = ((t * motorFreq / sampleRate) % 2 == 0) ? 4000 : -4000;
+                int16_t spinNoise = (rand() % 2000) - 1000;
+                sample[i] = motor + spinNoise;
+            }
+            else if (type == 7) {
+                // HDD Spin-Up: Langsam ansteigendes Summen + Windgeräusch
+                int spinFreq = 50 + (f * 200 / frames); 
+                int16_t spin = ((t * spinFreq / sampleRate) % 2 == 0) ? 3000 : -3000;
+                int16_t wind = (rand() % (1000 + f * 20)) - (500 + f * 10);
+                int vol = (f * 12000 / frames); if (vol > 12000) vol = 12000;
+                sample[i] = (int16_t)(((long)(spin + wind) * vol) / 12000);
+            }
+            else if (type == 8) {
+                // Datasette/C64 Tape: Phasenwechsel-Piepen
+                int tapeFreq = (f % 6 < 3) ? 2400 : 1200; // Phasenwechsel wie echte Datasette
+                int16_t tape = ((t * tapeFreq / sampleRate) % 2 == 0) ? 6000 : -6000;
+                int16_t wow = (int16_t)(sin(f * 0.3) * 1500); // Wow/Flutter
+                sample[i] = tape + wow;
+            }
         } i2s_write(I2S_NUM_0, sample, sizeof(sample), &bytesWritten, portMAX_DELAY);
     }
 }
 
-void playBootSound(int type) { if (!vibActive) return; drv.selectLibrary(1); drv.setMode(0); if (type == 1) { playSynthSound(1, 15); } else if (type == 2) { drv.setWaveform(0, 58); drv.setWaveform(1, 0); drv.run(); playSynthSound(2, 60); } else if (type == 3) { drv.setWaveform(0, 64); drv.setWaveform(1, 0); drv.run(); playSynthSound(3, 200); } }
+void playBootSound(int type) { 
+    if (!vibActive) return; 
+    drv.selectLibrary(1); drv.setMode(0); 
+    if (type == 1) { 
+        // Tastatur-Klick
+        playSynthSound(1, 20); 
+    } else if (type == 2) { 
+        // HDD Seek (kurz) + Vibration
+        drv.setWaveform(0, 58); drv.setWaveform(1, 0); drv.run(); 
+        playSynthSound(2, 80); 
+    } else if (type == 3) { 
+        // Floppy Seek + Vibration
+        drv.setWaveform(0, 64); drv.setWaveform(1, 0); drv.run(); 
+        playSynthSound(3, 250); 
+    } else if (type == 4) {
+        // POST Beep
+        playSynthSound(4, 200);
+    } else if (type == 5) {
+        // Floppy Motor Spin-Up  
+        playSynthSound(6, 400);
+    } else if (type == 6) {
+        // HDD Spin-Up
+        playSynthSound(7, 500);
+    } else if (type == 7) {
+        // BSOD Error-Ton
+        playSynthSound(5, 300);
+    } else if (type == 8) {
+        // C64 Datasette Laden
+        drv.setWaveform(0, 64); drv.setWaveform(1, 0); drv.run();
+        playSynthSound(8, 600);
+    }
+}
 
 void bootLog(String left, String right = "", uint16_t rightCol = TFT_WHITE) { if (bootY >= bootH - 16) { cdSprite.scroll(0, -16); bootY -= 16; cdSprite.fillRect(0, bootY, bootW, 16, bBG); } cdSprite.setTextDatum(TL_DATUM); cdSprite.setTextColor(bFG, bBG); cdSprite.drawString(left, 0, bootY, 2); if (right != "") { cdSprite.setTextDatum(TR_DATUM); cdSprite.setTextColor(rightCol, bBG); cdSprite.drawString(right, bootW - 4, bootY, 2); } cdSprite.pushSprite(bootTftX, bootTftY); bootY += 16; delay(80); }
 
@@ -159,21 +279,114 @@ void showBootSequence() {
     if (bootMode == 4) {
         WiFi.mode(WIFI_STA); WiFi.begin(userSSID.c_str(), userPWD.c_str()); int wifiRetry = 0; while (WiFi.status() != WL_CONNECTED && wifiRetry < 10) { delay(200); wifiRetry++; }
         if (WiFi.status() == WL_CONNECTED) { configTzTime(ntpZone.c_str(), ntpServer.c_str()); struct tm timeinfo; getLocalTime(&timeinfo, 2000); } WiFi.disconnect(true); WiFi.mode(WIFI_OFF);
-        i2s_driver_uninstall(I2S_NUM_0); i2s_config_t i2s_rx_config; memset(&i2s_rx_config, 0, sizeof(i2s_rx_config)); i2s_rx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); i2s_rx_config.sample_rate = 16000; i2s_rx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_rx_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT; i2s_rx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_rx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; i2s_rx_config.dma_desc_num = 2; i2s_rx_config.dma_frame_num = 128; i2s_rx_config.use_apll = false; i2s_pin_config_t rx_pin_config; memset(&rx_pin_config, 0, sizeof(rx_pin_config)); rx_pin_config.bck_io_num = -1; rx_pin_config.ws_io_num = I2S_WS_MIC; rx_pin_config.data_out_num = -1; rx_pin_config.data_in_num = I2S_DIN_MIC; rx_pin_config.mck_io_num = -1;
+        i2s_driver_uninstall(I2S_NUM_0); i2s_config_t i2s_rx_config; memset(&i2s_rx_config, 0, sizeof(i2s_rx_config)); i2s_rx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); i2s_rx_config.sample_rate = 16000; i2s_rx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_rx_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT; i2s_rx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_rx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; i2s_rx_config.dma_desc_num = 8; i2s_rx_config.dma_frame_num = 256; i2s_rx_config.use_apll = false; i2s_pin_config_t rx_pin_config; memset(&rx_pin_config, 0, sizeof(rx_pin_config)); rx_pin_config.bck_io_num = -1; rx_pin_config.ws_io_num = I2S_WS_MIC; rx_pin_config.data_out_num = -1; rx_pin_config.data_in_num = I2S_DIN_MIC; rx_pin_config.mck_io_num = -1;
         if(i2s_driver_install(I2S_NUM_0, &i2s_rx_config, 0, NULL) == ESP_OK) { i2s_set_pin(I2S_NUM_0, &rx_pin_config); i2s_stop(I2S_NUM_0); }
-        cdSprite.deleteSprite(); cdSprite.createSprite(240, 240 - 34); return; 
+        cdSprite.deleteSprite(); 
+        void* p = cdSprite.createSprite(240, 240 - 34); 
+        if(!p) Serial.println("[BOOT] FEHLER: cdSprite alloc FAIL (mode4)!");
+        else Serial.println("[BOOT] cdSprite OK (mode4)");
+        return; 
     }
 
     bootTftX = 0; bootTftY = 0; bootW = 240; bootH = 240; cdSprite.createSprite(bootW, bootH);
-    if (bootMode == 0) { bBG = TFT_BLACK; bFG = TFT_WHITE; cdSprite.fillSprite(bBG); bootY = 0; uint16_t epaCol = tft.color565(180, 255, 100); int ex = 115, ey = 5; cdSprite.drawCircle(ex+50, ey+35, 40, epaCol); cdSprite.drawCircle(ex+50, ey+35, 39, epaCol); cdSprite.fillRect(ex, ey+35, 120, 50, bBG); cdSprite.setTextFont(4); cdSprite.setTextColor(epaCol); cdSprite.drawString("energy", ex+5, ey+10); cdSprite.setTextFont(2); cdSprite.drawString("*", ex+85, ey+5); cdSprite.drawLine(ex, ey+35, ex+105, ey+35, epaCol); cdSprite.setTextFont(1); cdSprite.drawString("EPA POLLUTION PREVENTER", ex-10, ey+40); cdSprite.setTextFont(2); playBootSound(4); delay(500); bootLog("ROM PCI/ISA BIOS"); bootLog("(2A59I000)"); bootLog("AWARD SOFTWARE"); delay(600); bootLog(""); bootLog("PENTIUM-S CPU at 66MHz"); delay(300); bootLog("Memory Test :"); playBootSound(2); delay(500); bootLog("8192K OK"); delay(800); bootLog("Starting MS-DOS 6.22..."); playBootSound(2); delay(800); bootLog(""); cdSprite.setTextDatum(TL_DATUM); cdSprite.setTextColor(bFG, bBG); String cmd = "smartwatch.exe"; cdSprite.drawString("C:\\> ", 0, bootY, 2); int curX = cdSprite.textWidth("C:\\> ", 2); for(int i=0; i<cmd.length(); i++) { cdSprite.drawChar(cmd[i], curX, bootY, 2); curX += cdSprite.textWidth(String(cmd[i]), 2); cdSprite.pushSprite(0, 0); playBootSound(1); delay(random(60, 200)); } bootY += 16; delay(500); playBootSound(2); bootLog("Executing WatchOS..."); delay(1000); 
-    } else if (bootMode == 1) { bootTftX = 20; bootTftY = 20; bootW = 200; bootH = 200; uint16_t c64_border = tft.color565(136, 126, 203); bBG = tft.color565(64, 49, 141); bFG = c64_border; tft.fillScreen(c64_border); cdSprite.deleteSprite(); cdSprite.createSprite(bootW, bootH); cdSprite.fillSprite(bBG); bootY = 0; playBootSound(4); bootLog("    *** COMMODORE 64 ***"); bootLog(" 64K RAM SYSTEM  38911 FREE"); bootLog(""); bootLog("READY."); delay(1000); cdSprite.setTextDatum(TL_DATUM); cdSprite.setTextColor(bFG, bBG); String cmd1 = "LOAD\"WATCHOS\",8,1"; int curX = 0; for(int i=0; i<cmd1.length(); i++) { cdSprite.drawChar(cmd1[i], curX, bootY, 2); curX += cdSprite.textWidth(String(cmd1[i]), 2); cdSprite.pushSprite(bootTftX, bootTftY); playBootSound(1); delay(random(60, 200)); } bootY += 16; delay(500); playBootSound(3); bootLog("SEARCHING FOR WATCHOS"); delay(1000); bootLog("LOADING"); playBootSound(3); delay(1000); bootLog("READY."); delay(500); String cmd2 = "RUN"; curX = 0; for(int i=0; i<cmd2.length(); i++) { cdSprite.drawChar(cmd2[i], curX, bootY, 2); curX += cdSprite.textWidth(String(cmd2[i]), 2); cdSprite.pushSprite(bootTftX, bootTftY); playBootSound(1); delay(random(60, 200)); } bootY += 16; delay(800); tft.fillScreen(c64_border); cdSprite.fillSprite(bBG); bootY = 0; 
-    } else if (bootMode == 3) { bBG = TFT_BLUE; bFG = TFT_WHITE; cdSprite.fillSprite(bBG); bootY = 0; playBootSound(5); bootLog(" Windows"); bootLog(""); bootLog(" A fatal exception 0E has occurred"); bootLog(" at 0028:C0011E36 in VXD VMM(01)"); bootLog(" + 00010E36."); bootLog(""); bootLog(" The current application will be"); bootLog(" terminated."); bootLog(""); bootLog(" * Press any key to terminate."); bootLog(" * Press CTRL+ALT+DEL to restart."); delay(2500); cdSprite.fillSprite(bBG); bootY = 0; playBootSound(2); bootLog(" Safe Mode Boot Recovery..."); bootLog(""); }
+    if (bootMode == 0) { 
+        bBG = TFT_BLACK; bFG = TFT_WHITE; cdSprite.fillSprite(bBG); bootY = 0; 
+        // Energy Star Logo — kompakt oben rechts, Text beginnt DANACH
+        uint16_t epaCol = tft.color565(180, 255, 100); 
+        int ex = 155, ey = 2;
+        cdSprite.drawCircle(ex+30, ey+22, 25, epaCol); cdSprite.drawCircle(ex+30, ey+22, 24, epaCol);
+        cdSprite.fillRect(ex, ey+22, 75, 30, bBG); // Unteren Halbkreis löschen
+        cdSprite.setTextFont(2); cdSprite.setTextColor(epaCol);
+        cdSprite.drawString("energy", ex+4, ey+8); 
+        cdSprite.setTextFont(1); cdSprite.drawString("*", ex+56, ey+4);
+        cdSprite.drawLine(ex, ey+22, ex+62, ey+22, epaCol);
+        cdSprite.drawString("EPA ENERGY STAR", ex-5, ey+26);
+        cdSprite.setTextFont(2);
+        // POST Beep + HDD Spin-Up
+        playBootSound(4); delay(200); playBootSound(6);
+        // Text startet bei Y=0 (links, Logo ist rechts oben — kein Overlap)
+        bootLog("ROM PCI/ISA BIOS"); bootLog("(2A59I000)"); bootLog("AWARD SOFTWARE"); 
+        delay(400);
+        bootLog(""); bootLog("PENTIUM-S CPU at 66MHz"); delay(200); 
+        bootLog("Memory Test :"); playBootSound(2); delay(400); // HDD Seek beim RAM-Test
+        bootLog("8192K OK"); delay(600); 
+        playBootSound(2); // HDD Seek
+        bootLog("Starting MS-DOS 6.22..."); 
+        playBootSound(5); delay(600); // Floppy Motor beim DOS laden
+        bootLog(""); 
+        cdSprite.setTextDatum(TL_DATUM); cdSprite.setTextColor(bFG, bBG); 
+        String cmd = "smartwatch.exe"; cdSprite.drawString("C:\\> ", 0, bootY, 2); 
+        int curX = cdSprite.textWidth("C:\\> ", 2); 
+        for(int i=0; i<(int)cmd.length(); i++) { 
+            cdSprite.drawChar(cmd[i], curX, bootY, 2); curX += cdSprite.textWidth(String(cmd[i]), 2); 
+            cdSprite.pushSprite(0, 0); playBootSound(1); delay(random(50, 180)); // Tastatur-Klicks
+        } 
+        bootY += 16; delay(400); 
+        playBootSound(2); // HDD Seek beim Ausführen
+        bootLog("Executing WatchOS..."); delay(800); 
+    } else if (bootMode == 1) { 
+        bootTftX = 20; bootTftY = 20; bootW = 200; bootH = 200; 
+        uint16_t c64_border = tft.color565(136, 126, 203); bBG = tft.color565(64, 49, 141); bFG = c64_border; 
+        tft.fillScreen(c64_border); cdSprite.deleteSprite(); cdSprite.createSprite(bootW, bootH); cdSprite.fillSprite(bBG); bootY = 0; 
+        playBootSound(4); // POST Beep
+        bootLog("    *** COMMODORE 64 ***"); bootLog(" 64K RAM SYSTEM  38911 FREE"); bootLog(""); bootLog("READY."); 
+        delay(800);
+        // LOAD Befehl tippen
+        cdSprite.setTextDatum(TL_DATUM); cdSprite.setTextColor(bFG, bBG); 
+        String cmd1 = "LOAD\"WATCHOS\",8,1"; int curX = 0; 
+        for(int i=0; i<(int)cmd1.length(); i++) { 
+            cdSprite.drawChar(cmd1[i], curX, bootY, 2); curX += cdSprite.textWidth(String(cmd1[i]), 2); 
+            cdSprite.pushSprite(bootTftX, bootTftY); playBootSound(1); delay(random(50, 180)); // Tastatur
+        } 
+        bootY += 16; delay(400); 
+        playBootSound(5); // Floppy Motor Spin-Up (1541 Laufwerk)
+        bootLog("SEARCHING FOR WATCHOS"); delay(600); 
+        playBootSound(3); // Floppy Seek (Track-Suche)
+        bootLog("LOADING"); 
+        playBootSound(8); // Datasette-Laden Sound  
+        bootLog("READY."); delay(400); 
+        // RUN tippen
+        String cmd2 = "RUN"; curX = 0; 
+        for(int i=0; i<(int)cmd2.length(); i++) { 
+            cdSprite.drawChar(cmd2[i], curX, bootY, 2); curX += cdSprite.textWidth(String(cmd2[i]), 2); 
+            cdSprite.pushSprite(bootTftX, bootTftY); playBootSound(1); delay(random(50, 180)); // Tastatur
+        } 
+        bootY += 16; delay(600); 
+        playBootSound(3); // Floppy Seek beim Starten
+        tft.fillScreen(c64_border); cdSprite.fillSprite(bBG); bootY = 0; 
+    } else if (bootMode == 3) { 
+        bBG = TFT_BLUE; bFG = TFT_WHITE; cdSprite.fillSprite(bBG); bootY = 0; 
+        playBootSound(7); // BSOD Error-Ton
+        bootLog(" Windows"); bootLog(""); 
+        bootLog(" A fatal exception 0E has occurred"); 
+        bootLog(" at 0028:C0011E36 in VXD VMM(01)"); 
+        bootLog(" + 00010E36."); bootLog(""); 
+        bootLog(" The current application will be"); 
+        bootLog(" terminated."); bootLog(""); 
+        bootLog(" * Press any key to terminate."); 
+        bootLog(" * Press CTRL+ALT+DEL to restart."); 
+        delay(2500); 
+        cdSprite.fillSprite(bBG); bootY = 0; 
+        playBootSound(6); // HDD Spin-Up beim Recovery
+        bootLog(" Safe Mode Boot Recovery..."); bootLog(""); 
+        playBootSound(2); // HDD Seek
+    }
 
     uint16_t okCol = (bootMode == 0) ? TFT_WHITE : bFG; uint16_t errCol = (bootMode == 0) ? TFT_WHITE : bFG; uint16_t infCol = (bootMode == 0) ? TFT_WHITE : bFG; uint16_t waitCol = (bootMode == 0) ? TFT_WHITE : bFG;
     bootLog("LilyGo BIOS v2.0", "OK", okCol); bootLog("Copyright (C) 2026", "", okCol); bootLog("Michael Strassburger", "", okCol); bootLog("======================="); bootLog("CPU: ESP32-S3", String(ESP.getCpuFreqMHz()) + " MHz", infCol); bootLog("SRAM Base", String(ESP.getHeapSize() / 1024) + " KB", infCol); bootLog("OPI PSRAM", String(ESP.getPsramSize() / 1024) + " KB", infCol); bootLog("Flash ROM", String(ESP.getFlashChipSize() / 1024 / 1024) + " MB", infCol); WiFi.mode(WIFI_STA); bootLog("MAC", WiFi.macAddress(), infCol); bootLog("", ""); bootLog("--- System Init ---"); bootLog("I2C Bus", "OK", okCol); bootLog("PMU AXP2101", "OK", okCol); bootLog(" BATT Volt", String(pmu.getBattVoltage() / 1000.0) + "V", infCol); bootLog("Haptic DRV", "OK", okCol); bootLog("Touch FT6X36", "OK", okCol);
-    i2s_driver_uninstall(I2S_NUM_0); i2s_config_t i2s_rx_config; memset(&i2s_rx_config, 0, sizeof(i2s_rx_config)); i2s_rx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); i2s_rx_config.sample_rate = 16000; i2s_rx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_rx_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT; i2s_rx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_rx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; i2s_rx_config.dma_desc_num = 2; i2s_rx_config.dma_frame_num = 128; i2s_rx_config.use_apll = false; i2s_pin_config_t rx_pin_config; memset(&rx_pin_config, 0, sizeof(rx_pin_config)); rx_pin_config.bck_io_num = -1; rx_pin_config.ws_io_num = I2S_WS_MIC; rx_pin_config.data_out_num = -1; rx_pin_config.data_in_num = I2S_DIN_MIC; rx_pin_config.mck_io_num = -1;
+    i2s_driver_uninstall(I2S_NUM_0); i2s_config_t i2s_rx_config; memset(&i2s_rx_config, 0, sizeof(i2s_rx_config)); i2s_rx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); i2s_rx_config.sample_rate = 16000; i2s_rx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_rx_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT; i2s_rx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_rx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; i2s_rx_config.dma_desc_num = 8; i2s_rx_config.dma_frame_num = 256; i2s_rx_config.use_apll = false; i2s_pin_config_t rx_pin_config; memset(&rx_pin_config, 0, sizeof(rx_pin_config)); rx_pin_config.bck_io_num = -1; rx_pin_config.ws_io_num = I2S_WS_MIC; rx_pin_config.data_out_num = -1; rx_pin_config.data_in_num = I2S_DIN_MIC; rx_pin_config.mck_io_num = -1;
     if(i2s_driver_install(I2S_NUM_0, &i2s_rx_config, 0, NULL) == ESP_OK) { i2s_set_pin(I2S_NUM_0, &rx_pin_config); i2s_stop(I2S_NUM_0); bootLog("Audio Mic", "OK", okCol); } else { bootLog("Audio Mic", "FAIL", errCol); }
     bootLog("EEPROM NVRAM", "OK", okCol); WiFi.begin(userSSID.c_str(), userPWD.c_str()); int wifiRetry = 0; bootLog("WLAN", "Wait", waitCol); while (WiFi.status() != WL_CONNECTED && wifiRetry < 8) { bootUpdateRight(String(wifiRetry+1), waitCol); delay(400); wifiRetry++; }
     if (WiFi.status() == WL_CONNECTED) { bootUpdateRight("OK", okCol); configTzTime(ntpZone.c_str(), ntpServer.c_str()); struct tm timeinfo; int ntpWait = 0; bootLog("NTP Sync", "Wait", waitCol); while (!getLocalTime(&timeinfo, 1000) && ntpWait < 2) { bootUpdateRight(String(ntpWait+1), waitCol); ntpWait++; } bootUpdateRight("OK", okCol); } else { bootUpdateRight("SKIP", errCol); } WiFi.disconnect(true); WiFi.mode(WIFI_OFF);
-    bootLog("", ""); bootLog("Boot Complete."); delay(800); cdSprite.deleteSprite(); cdSprite.createSprite(240, 240 - 34); 
+    bootLog("", ""); bootLog("Boot Complete."); delay(800); 
+    cdSprite.deleteSprite(); 
+    void* sprPtr = cdSprite.createSprite(240, 240 - 34);
+    if(!sprPtr) { 
+        Serial.printf("[BOOT] FEHLER: cdSprite alloc FAIL! heap=%d psram=%d\n", ESP.getFreeHeap(), ESP.getFreePsram());
+        delay(100);
+        sprPtr = cdSprite.createSprite(240, 240 - 34);
+        if(!sprPtr) Serial.println("[BOOT] KRITISCH: cdSprite 2. Versuch auch fehlgeschlagen!");
+    } else {
+        Serial.printf("[BOOT] cdSprite OK: heap=%d psram=%d\n", ESP.getFreeHeap(), ESP.getFreePsram());
+    }
 }

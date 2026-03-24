@@ -11,6 +11,7 @@
 #include <USBHIDKeyboard.h> 
 
 #define MAX_HISTORY 200
+#define WATCHOS_VERSION "1.0.0"
 
 extern XPowersAXP2101 pmu;
 extern TouchDrvFT6X36 touch;
@@ -105,3 +106,36 @@ extern bool isScanningAir;
 extern int numScannedNetworks;
 extern String scannedSSIDs[15];
 extern String scannedMACs[15];
+
+// Probe Request Monitor (Page 20)
+#define MAX_PROBES 20
+extern bool probeMonActive;
+extern int probeCount;
+extern String probeMacs[MAX_PROBES];
+extern String probeSSIDs[MAX_PROBES];
+extern int probeRSSI[MAX_PROBES];
+extern int probeScrollOffset;
+
+// BLE Scanner (Page 21)
+#define MAX_BLE_RESULTS 20
+extern bool bleScanActive;
+extern int bleScanCount;
+extern String bleScanNames[MAX_BLE_RESULTS];
+extern String bleScanMacs[MAX_BLE_RESULTS];
+extern int bleScanRssi[MAX_BLE_RESULTS];
+extern int bleScanScrollOffset;
+
+// Multi-Port Nmap
+extern String nmapPorts;
+extern int nmapCurrentPort;
+
+// Web Auth
+extern String webUser;
+extern String webPass;
+extern bool webAuthEnabled;
+
+// Haptic Config
+extern int hapticWaveform;
+
+// FFat (FAT-Dateisystem)
+extern bool littleFsReady;
