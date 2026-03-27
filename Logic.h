@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 void showToast(String msg, int duration = 3500);
+void showToastColor(String msg, int duration, uint16_t col);
 void triggerVibration();
 void triggerAlarm();
 void startMic();

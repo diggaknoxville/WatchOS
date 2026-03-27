@@ -3,6 +3,8 @@
 #include "Globals.h"
 #include "Display.h"
 #include "Logic.h"
+#include <Wire.h>
+#include <math.h>
 
 // =====================================================================
 // Good Apps Menu (Page 22) — Liste aller "guten" Apps
@@ -11,7 +13,6 @@ void renderGoodMenu(TFT_eSprite *spr) {
     spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Good Apps", 120, 2, 2);
     spr->setTextDatum(MC_DATUM);
 
-    // 7 Apps in 2 Spalten: links (x=60), rechts (x=180)
     struct AppEntry { const char* label; uint16_t color; };
     AppEntry apps[] = {
         {"Stoppuhr",  cAcc1},       // -> Page 7
@@ -19,13 +20,15 @@ void renderGoodMenu(TFT_eSprite *spr) {
         {"Dezibel",   TFT_GREEN},   // -> Page 9
         {"Rechner",   cFG},         // -> Page 13
         {"Jiggler",   TFT_CYAN},    // -> Page 14
+        {"Wuerfel",   TFT_YELLOW},  // -> Page 24
+        {"Waage",     TFT_ORANGE},  // -> Page 25
     };
-    int count = 5;
+    int count = 7;
 
-    int bW = 100, bH = 42, gapX = 10, gapY = 6;
-    int startY = 24;
+    int bW = 100, bH = 38, gapX = 10, gapY = 4;
+    int startY = 22;
     for (int i = 0; i < count; i++) {
-        int col = i % 2;  // 0=links, 1=rechts
+        int col = i % 2;
         int row = i / 2;
         int bx = (col == 0) ? 15 : 125;
         int by = startY + row * (bH + gapY);
@@ -34,25 +37,21 @@ void renderGoodMenu(TFT_eSprite *spr) {
         spr->drawString(apps[i].label, bx + bW / 2, by + bH / 2, 2);
     }
     // Status-Dots für laufende Apps
-    if (swRunning)       spr->fillCircle(15 + bW - 6, startY + 6, 4, TFT_GREEN);  // Stoppuhr
-    if (timerRunning)    spr->fillCircle(125 + bW - 6, startY + 6, 4, TFT_GREEN);  // Timer
-    if (jigglerActive)   spr->fillCircle(125 + bW - 6, startY + 2*(bH+gapY) + 6, 4, TFT_GREEN); // Jiggler
+    if (swRunning)       spr->fillCircle(15 + bW - 6, startY + 6, 4, TFT_GREEN);
+    if (timerRunning)    spr->fillCircle(125 + bW - 6, startY + 6, 4, TFT_GREEN);
+    if (jigglerActive)   spr->fillCircle(125 + bW - 6, startY + 2*(bH+gapY) + 6, 4, TFT_GREEN);
 }
 
 void handleGoodMenuTouch(int x, int touchY) {
-    // Grid: 2 Spalten, 4 Reihen
-    // Cols: links < 120, rechts >= 120
-    // Rows: App0/1 row0, App2/3 row1, App4/5 row2, App6 row3
-    int bH = 42, gapY = 6, startY = 24;
+    int bH = 38, gapY = 4, startY = 22;
     int row = (touchY - startY) / (bH + gapY);
     int col = (x < 120) ? 0 : 1;
     int idx = row * 2 + col;
 
-    if (row < 0 || row > 2 || touchY < startY) return;
-    if (idx > 4) return; // nur 5 Apps
+    if (row < 0 || row > 3 || touchY < startY) return;
+    if (idx > 6) return;
 
-    // Mapping: idx -> page
-    int pages[] = {7, 8, 9, 13, 14};
+    int pages[] = {7, 8, 9, 13, 14, 24, 25};
     int targetPage = pages[idx];
 
     triggerVibration();
@@ -142,11 +141,209 @@ void handleJigglerTouch(int x, int y) {
         triggerVibration(); 
         if(!jigglerActive) {
             jigglerActive = true;
-            USB.begin(); 
-            Mouse.begin();
-            showToast("Jiggler gestartet (USB locked)", 2500); 
+            if (!usbHidActive) {
+                usbHidActive = true;
+                prefs.begin("clock", false); prefs.putBool("usbHid", true); prefs.end();
+                showToast("Jiggler: Neustart fuer USB HID", 2000);
+                delay(800);
+                ESP.restart();
+            }
+            showToast("Jiggler gestartet", 2500); 
         } else {
             ESP.restart(); 
         }
+    }
+}
+
+// =====================================================================
+// Würfel / Zufallsgenerator App (Page 24)
+// =====================================================================
+static unsigned long diceAnimStart = 0;
+static int diceAnimFrame = 0;
+
+const char* diceTypeNames[] = {"d4", "d6", "d8", "d10", "d12", "d20", "d100", "Muenze"};
+const int diceMaxValues[]   = {  4,    6,    8,   10,    12,    20,   100,      2};
+
+void drawDiceFace(TFT_eSprite *spr, int val, int cx, int cy, int size) {
+    // Würfel-Körper
+    spr->fillRoundRect(cx - size/2, cy - size/2, size, size, 8, TFT_WHITE);
+    spr->drawRoundRect(cx - size/2, cy - size/2, size, size, 8, cBatBG);
+    
+    if (diceType == 7) { // Münze
+        spr->fillCircle(cx, cy, size/2 - 4, TFT_YELLOW);
+        spr->drawCircle(cx, cy, size/2 - 4, tft.color565(180, 150, 0));
+        spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_BLACK);
+        spr->drawString(val == 1 ? "Kopf" : "Zahl", cx, cy, 4);
+        return;
+    }
+    
+    // Standard-Würfel: Augen für d6, Zahl für andere
+    if (diceType == 1 && val <= 6) {
+        // Klassische Würfel-Augen
+        int r = size / 10; int off = size / 4;
+        uint16_t dotCol = TFT_BLACK;
+        if (val == 1 || val == 3 || val == 5) spr->fillCircle(cx, cy, r, dotCol);           // Mitte
+        if (val >= 2) { spr->fillCircle(cx - off, cy - off, r, dotCol); spr->fillCircle(cx + off, cy + off, r, dotCol); } // Diagonal
+        if (val >= 4) { spr->fillCircle(cx + off, cy - off, r, dotCol); spr->fillCircle(cx - off, cy + off, r, dotCol); } // Andere Diagonal
+        if (val == 6) { spr->fillCircle(cx - off, cy, r, dotCol); spr->fillCircle(cx + off, cy, r, dotCol); }            // Seiten
+    } else {
+        // Zahl für d4, d8, d10, d12, d20
+        spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_BLACK);
+        spr->drawString(String(val), cx, cy, 6);
+    }
+}
+
+void showDice(TFT_eSprite *spr) {
+    spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Wuerfel", 120, 0, 2);
+    
+    // Typ-Auswahl Pfeile + Name
+    spr->fillRoundRect(15, 18, 30, 25, 5, cBatBG); spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_WHITE); spr->drawString("<", 30, 30, 2);
+    spr->fillRoundRect(195, 18, 30, 25, 5, cBatBG); spr->setTextColor(TFT_WHITE); spr->drawString(">", 210, 30, 2);
+    spr->setTextColor(TFT_YELLOW); spr->drawString(diceTypeNames[diceType], 120, 30, 4);
+    
+    // Würfel anzeigen
+    if (diceRolling) {
+        // Animation: Zufallswerte schnell durchblättern
+        int animVal = random(1, diceMaxValues[diceType] + 1);
+        drawDiceFace(spr, animVal, 120, 110, 100);
+    } else if (diceResult > 0) {
+        drawDiceFace(spr, diceResult, 120, 110, 100);
+    } else {
+        spr->setTextColor(cBatBG); spr->drawString("Tippen zum", 120, 95, 2);
+        spr->drawString("Wuerfeln!", 120, 115, 2);
+    }
+    
+    // Würfeln-Button
+    spr->fillRoundRect(55, 170, 130, 30, 8, diceRolling ? TFT_ORANGE : TFT_GREEN);
+    spr->setTextColor(TFT_BLACK); spr->drawString("Wuerfeln!", 120, 185, 2);
+}
+
+void handleDiceTouch(int x, int y) {
+    // Typ-Wechsel Pfeile
+    if (y >= 18 && y <= 43) {
+        if (x > 10 && x < 60) { diceType--; if(diceType < 0) diceType = 7; triggerVibration(); lastSecond = -1; return; }
+        if (x > 180 && x < 230) { diceType++; if(diceType > 7) diceType = 0; triggerVibration(); lastSecond = -1; return; }
+    }
+    // Würfeln (ganzer mittlerer Bereich oder Button)
+    if (y >= 50 && !diceRolling) {
+        diceRolling = true;
+        diceAnimStart = millis();
+        diceAnimFrame = 0;
+        triggerVibration();
+        lastSecond = -1;
+    }
+}
+
+void updateDiceAnimation() {
+    if (!diceRolling) return;
+    unsigned long elapsed = millis() - diceAnimStart;
+    if (elapsed > 600) {
+        // Animation fertig — Ergebnis würfeln
+        diceRolling = false;
+        diceResult = random(1, diceMaxValues[diceType] + 1);
+        triggerVibration();
+        lastSecond = -1;
+    } else {
+        // Schnelles Umblättern für Animation
+        if (millis() - diceAnimStart > diceAnimFrame * 60) {
+            diceAnimFrame++;
+            lastSecond = -1;
+        }
+    }
+}
+
+// =====================================================================
+// Wasserwaage / Neigungsmesser (Page 25)
+// =====================================================================
+// BMA423 über I2C (Addr 0x19 auf Wire = PMU Bus)
+#define BMA423_ADDR 0x19
+#define BMA4_ACCEL_X_LSB_ADDR 0x12
+
+static bool bmaOK = false;
+
+static void bmaInit() {
+    // Accelerometer aktivieren: Power Control Register
+    Wire.beginTransmission(BMA423_ADDR);
+    Wire.write(0x7D); Wire.write(0x04); // ACC enable
+    Wire.endTransmission();
+    delay(5);
+    // Accelerometer Range: ±2g (0x00), ODR 100Hz (0x08)  
+    Wire.beginTransmission(BMA423_ADDR);
+    Wire.write(0x40); Wire.write(0x28); // acc_conf: odr=100Hz, bwp=norm
+    Wire.endTransmission();
+    Wire.beginTransmission(BMA423_ADDR);
+    Wire.write(0x41); Wire.write(0x00); // acc_range: ±2g
+    Wire.endTransmission();
+    bmaOK = true;
+}
+
+static void bmaReadAccel(float &ax, float &ay, float &az) {
+    if (!bmaOK) bmaInit();
+    uint8_t buf[6];
+    Wire.beginTransmission(BMA423_ADDR);
+    Wire.write(BMA4_ACCEL_X_LSB_ADDR);
+    Wire.endTransmission(false);
+    Wire.requestFrom((uint8_t)BMA423_ADDR, (uint8_t)6);
+    for (int i = 0; i < 6; i++) buf[i] = Wire.available() ? Wire.read() : 0;
+    
+    int16_t rawX = (int16_t)((buf[1] << 8) | buf[0]) >> 4; // 12-bit
+    int16_t rawY = (int16_t)((buf[3] << 8) | buf[2]) >> 4;
+    int16_t rawZ = (int16_t)((buf[5] << 8) | buf[4]) >> 4;
+    
+    // ±2g Range: 1 LSB = 0.98 mg  -> /1024 für g
+    ax = rawX / 1024.0;
+    ay = rawY / 1024.0;
+    az = rawZ / 1024.0;
+}
+
+void showLevel(TFT_eSprite *spr) {
+    spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Wasserwaage", 120, 0, 2);
+    
+    float ax, ay, az;
+    bmaReadAccel(ax, ay, az);
+    
+    // Neigungswinkel berechnen
+    float pitchRad = atan2(ax, sqrt(ay * ay + az * az));
+    float rollRad  = atan2(ay, sqrt(ax * ax + az * az));
+    float pitch = pitchRad * 180.0 / 3.14159;
+    float roll  = rollRad  * 180.0 / 3.14159;
+    
+    // Kreisförmige Wasserwaage (Bullseye)
+    int cx = 120, cy = 100, outerR = 70;
+    spr->drawCircle(cx, cy, outerR, cBatBG);
+    spr->drawCircle(cx, cy, outerR/2, cBatBG);
+    spr->drawCircle(cx, cy, 3, cBatBG);
+    // Fadenkreuz
+    spr->drawLine(cx - outerR, cy, cx + outerR, cy, tft.color565(50, 50, 50));
+    spr->drawLine(cx, cy - outerR, cx, cy + outerR, tft.color565(50, 50, 50));
+    
+    // Bubble-Position (invertiert: wenn Uhr nach rechts kippt, geht Blase nach rechts)
+    float scale = outerR / 30.0; // ±30° = Randanschlag
+    int bx = cx + (int)(roll * scale);
+    int by = cy + (int)(pitch * scale);
+    // Clamp innerhalb des Kreises
+    float dist = sqrt((bx-cx)*(bx-cx) + (by-cy)*(by-cy));
+    if (dist > outerR - 8) {
+        bx = cx + (int)((bx - cx) * (outerR - 8) / dist);
+        by = cy + (int)((by - cy) * (outerR - 8) / dist);
+    }
+    
+    // Bubble (grün wenn fast mittig, gelb wenn leicht, rot wenn stark geneigt)
+    float totalAngle = sqrt(pitch*pitch + roll*roll);
+    uint16_t bubbleCol = (totalAngle < 2.0) ? TFT_GREEN : (totalAngle < 10.0) ? TFT_YELLOW : TFT_RED;
+    spr->fillCircle(bx, by, 8, bubbleCol);
+    spr->drawCircle(bx, by, 8, TFT_WHITE);
+    
+    // Winkelanzeige
+    spr->setTextDatum(MC_DATUM);
+    char buf[20];
+    snprintf(buf, sizeof(buf), "X: %.1f", roll);
+    spr->setTextColor(cAcc1); spr->drawString(buf, 60, 185, 2);
+    snprintf(buf, sizeof(buf), "Y: %.1f", pitch);
+    spr->setTextColor(cAcc2); spr->drawString(buf, 180, 185, 2);
+    
+    // Level-Indikator Text
+    if (totalAngle < 2.0) {
+        spr->setTextColor(TFT_GREEN); spr->drawString("EBEN", 120, 195, 2);
     }
 }

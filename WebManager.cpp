@@ -167,7 +167,7 @@ String getBatteryHtml() {
 String htmlEscape(String str) { str.replace("&", "&amp;"); str.replace("<", "&lt;"); str.replace(">", "&gt;"); str.replace("\"", "&quot;"); return str; }
 
 String getHtmlContent() {
-    String s; s.reserve(25000); 
+    String s; s.reserve(40000); 
     
     char sysD[32]; char sysT[16]; char bdayStr[12]; char btimeStr[6];
     
@@ -226,6 +226,10 @@ body.light-mode .box-title { color: #2e7d32; border-bottom: 1px solid #eee; }
 body.light-mode #w_ssid, body.light-mode #w_ip { color: #555 !important; }
 body.light-mode b[style*="color:#fff"] { color: #000 !important; }
 body.light-mode pre { background: #f0f0f0 !important; color: #000 !important; border: 1px solid #ccc; }
+/* RESPONSIVE: hamburger for small screens */
+.hamburger{display:none;background:#2d2d2d;color:#fff;border:none;font-size:28px;cursor:pointer;padding:10px 16px;width:100%;text-align:left;border-radius:8px;margin-bottom:4px;}
+body.light-mode .hamburger{background:#fff;color:#111;border:1px solid #ccc;}
+@media(max-width:520px){.hamburger{display:block;} .tabs{display:none;flex-direction:column;} .tabs.open{display:flex;} .tab{text-align:left;padding:14px 18px;border-bottom:none;border-left:3px solid transparent;} .tab.active{border-left:3px solid #4CAF50;border-bottom:none;}}
 </style>
 <script>
 function showTab(id, el){ document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active')); document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active')); document.getElementById(id).classList.add('active'); el.classList.add('active'); } 
@@ -338,13 +342,14 @@ function updateVal(id, val) { document.getElementById(id).innerText = val + '%';
     s += F("<form action='/reboot' method='POST' style='margin:0;' onsubmit='return confirm(\"Uhr wirklich neustarten?\");'><button type='submit' style='background:transparent; border:none; color:#f44336; cursor:pointer; padding:0;' title='Neustart'><svg width='28' height='28' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M18.36 6.64a9 9 0 1 1-12.73 0'></path><line x1='12' y1='2' x2='12' y2='12'></line></svg></button></form></div></div>");
 
     // TABS (Mit Übersetzung)
-    s += F("<div class='tabs'><div class='tab active' onclick='showTab(\"p1\", this)'>Home</div><div class='tab' onclick='showTab(\"p2\", this)'>");
+    s += F("<button class='hamburger' onclick='var t=document.querySelector(\".tabs\");t.classList.toggle(\"open\");'>&#9776; Menu</button>");
+    s += F("<div class='tabs'><div class='tab active' onclick='showTab(\"p1\", this);document.querySelector(\".tabs\").classList.remove(\"open\")'>Home</div><div class='tab' onclick='showTab(\"p2\", this);document.querySelector(\".tabs\").classList.remove(\"open\")'>");
     s += tr(sysLang, "Anzeige", "Display", "Affichage");
-    s += F("</div><div class='tab' onclick='showTab(\"p3\", this)'>");
+    s += F("</div><div class='tab' onclick='showTab(\"p3\", this);document.querySelector(\".tabs\").classList.remove(\"open\")'>");
     s += tr(sysLang, "System", "System", "Système");
-    s += F("</div><div class='tab' onclick='showTab(\"p5\", this)'>");
+    s += F("</div><div class='tab' onclick='showTab(\"p5\", this);document.querySelector(\".tabs\").classList.remove(\"open\")'>");
     s += tr(sysLang, "Persoenlich", "Personal", "Personnel");
-    s += F("</div><div class='tab' onclick='showTab(\"p8\", this)'>Hacker Tools</div><div class='tab' onclick='showTab(\"p6\", this)'>Update</div></div>");
+    s += F("</div><div class='tab' onclick='showTab(\"p8\", this);document.querySelector(\".tabs\").classList.remove(\"open\")'>Hacker Tools</div><div class='tab' onclick='showTab(\"p6\", this);document.querySelector(\".tabs\").classList.remove(\"open\")'>Update</div></div>");
 
     // 1. DASHBOARD
     s += F("<div id='p1' class='panel active'><h3>Dashboard</h3><div style='display:grid; grid-template-columns: 1fr 1fr; gap:10px;'>");
@@ -362,9 +367,8 @@ function updateVal(id, val) { document.getElementById(id).innerText = val + '%';
     s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' name='enP3' value='1' "); if(enP3) s += F("checked"); s += F("> 4. Eltern</label></div>");
     s += F("<input type='submit' class='btn' value='Sichten speichern'></form><hr>");
 
-    s += F("<form id='fDesign' onsubmit='return saveForm(\"fDesign\")'><h3>Optik & Verhalten</h3><div style='display:grid; grid-template-columns: 1fr 1fr; gap:10px;'>");
-    s += F("<div><b>Boot-Animation:</b><br><select name='bm'><option value='0'"); if(bootMode==0) s += F(" selected"); s += F(">MS-DOS (486)</option><option value='1'"); if(bootMode==1) s += F(" selected"); s += F(">C64</option><option value='3'"); if(bootMode==3) s += F(" selected"); s += F(">Win98</option><option value='4'"); if(bootMode==4) s += F(" selected"); s += F(">Fast Boot</option></select></div>");
-    s += F("<div><b>AOD Style:</b><br><select name='aodM'><option value='0'"); if(aodMode==0) s += F(" selected"); s += F(">Digital</option><option value='1'"); if(aodMode==1) s += F(" selected"); s += F(">Nerd</option><option value='2'"); if(aodMode==2) s += F(" selected"); s += F(">Wortuhr</option></select></div></div><hr>");
+    s += F("<form id='fDesign' onsubmit='return saveForm(\"fDesign\")'><h3>Optik & Verhalten</h3>");
+    s += F("<b>Boot-Animation:</b><br><select name='bm'><option value='0'"); if(bootMode==0) s += F(" selected"); s += F(">MS-DOS (486)</option><option value='1'"); if(bootMode==1) s += F(" selected"); s += F(">C64</option><option value='3'"); if(bootMode==3) s += F(" selected"); s += F(">Win98</option><option value='4'"); if(bootMode==4) s += F(" selected"); s += F(">Fast Boot</option></select><hr>");
     
     s += F(R"rawliteral(<b>Farb-Presets:</b><br><select id='themeSel' onchange='applyThemePreset()'><option value=''>- Eigene / Manuell -</option><option value='night'>Nightlife</option><option value='day'>Daybreak</option><option value='cyber'>Cyberpunk</option><option value='hacker'>Hacker Matrix</option></select><br>)rawliteral");
     
@@ -378,7 +382,354 @@ function updateVal(id, val) { document.getElementById(id).innerText = val + '%';
     s += F("<div><b>Kopfzeile Text:</b><input name='cHFG' type='color' value='"); s += hexHeadFG; s += F("'></div>");
     s += F("<div><b>App Button BG:</b><input name='cABG' type='color' value='"); s += hexAppBG; s += F("'></div>");
     s += F("<div><b>Warnung (Rot):</b><input name='cWrn' type='color' value='"); s += hexWarn; s += F("'></div>");
-    s += F("</div><br><input type='submit' class='btn' value='Design anwenden'></form></div>");
+    s += F("</div><br><input type='submit' class='btn' value='Design anwenden'></form><hr>");
+
+    // === AOD MANAGER (ehemals Watchface Designer, jetzt im Anzeige-Tab) ===
+    s += F("<form id='fWatchface'><h3>AOD Manager</h3>");
+    s += F("<p style='color:#aaa;font-size:13px;'>Ziehe die Elemente auf dem Canvas an die gewuenschte Position (X+Y). Waehle ein Element aus und aendere die Skalierung stufenlos mit dem Slider.</p>");
+
+    s += F("<div style='display:flex; gap:15px; flex-wrap:wrap; align-items:flex-start;'>");
+
+    // Canvas (240x240 -> 280x280)
+    s += F("<div style='position:relative;'><canvas id='wfCanvas' width='280' height='280' style='border:2px solid #555; border-radius:14px; background:#000; cursor:move;'></canvas></div>");
+
+    // Settings panel right
+    s += F("<div style='flex:1; min-width:220px;'>");
+
+    // Standard-Elemente
+    s += F("<div class='box' style='margin-bottom:8px;'><div class='box-title'>Standard Elemente</div>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfT_cb' onchange='wfUpdate()' "); if(wfShowTime) s += F("checked"); s += F("> Uhrzeit</label>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfD_cb' onchange='wfUpdate()' "); if(wfShowDate) s += F("checked"); s += F("> Datum</label>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfB_cb' onchange='wfUpdate()' "); if(wfShowBatt) s += F("checked"); s += F("> Akku</label>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfS_cb' onchange='wfUpdate()' "); if(wfShowSteps) s += F("checked"); s += F("> Schritte</label></div>");
+
+    // AOD Elemente
+    s += F("<div class='box' style='margin-bottom:8px;'><div class='box-title'>AOD Elemente</div>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfWC_cb' onchange='wfUpdate()' "); if(wfShowWordClock) s += F("checked"); s += F("> Wortuhr</label>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfBC_cb' onchange='wfUpdate()' "); if(wfShowBinClock) s += F("checked"); s += F("> Binaer Uhr</label>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfAn_cb' onchange='wfUpdate()' "); if(wfShowAnalog) s += F("checked"); s += F("> Analoguhr</label>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfLn_cb' onchange='wfUpdate()' "); if(wfShowLine) s += F("checked"); s += F("> Trennlinie</label>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfSA_cb' onchange='wfUpdate()' "); if(wfShowSecArc) s += F("checked"); s += F("> Minuten-Bogen</label>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfWd_cb' onchange='wfUpdate()' "); if(wfShowWeekday) s += F("checked"); s += F("> Wochentag</label>");
+    s += F("<span id='wfAnStyleBox' style='display:"); s += (wfShowAnalog ? "block" : "none"); s += F(";'><b>Analog Stil:</b><select id='wfAnSt_sel' onchange='wfUpdate()'><option value='0'"); if(wfAnalogStyle==0) s += F(" selected"); s += F(">Normal</option><option value='1'"); if(wfAnalogStyle==1) s += F(" selected"); s += F(">Binaer</option><option value='2'"); if(wfAnalogStyle==2) s += F(" selected"); s += F(">Hex</option></select></span></div>");
+
+    // AOD-Farben
+    s += F("<div class='box' style='margin-bottom:8px;'><div class='box-title'>AOD Farben</div>");
+    s += F("<label>Hauptfarbe: <input type='color' id='aodFG_cp' name='aodFG' value='"); s += hexAodFG; s += F("' oninput='wfDraw()'></label><br>");
+    s += F("<label>Akzentfarbe: <input type='color' id='aodAcc_cp' name='aodAcc' value='"); s += hexAodAcc; s += F("' oninput='wfDraw()'></label></div>");
+
+    // Selected element info
+    s += F("<div class='box' id='wfSelBox' style='display:none;'><div class='box-title' id='wfSelTitle'>-</div>");
+    s += F("<span id='wfOptTime' style='display:none;'><b>Format:</b><select id='wfTFm_sel' name='wfTFm' onchange='wfUpdate()'><option value='0'>Digital</option><option value='1'>7-Segment</option></select></span>");
+    s += F("<b>Skalierung:</b> <span id='wfScVal'>1.0</span><br><input type='range' id='wfSc_sl' min='0.3' max='3.0' step='0.1' value='1.0' oninput='wfScaleChange(this.value)'>");
+    s += F("<div style='margin-top:8px; color:#aaa; font-size:12px;'>X: <span id='wfXVal'>-</span> | Y: <span id='wfYVal'>-</span></div></div>");
+
+    // Hidden fields for positions + scales
+    s += F("<input type='hidden' id='wfTY_h' name='wfTY' value='"); s += wfTimeY; s += F("'>");
+    s += F("<input type='hidden' id='wfDY_h' name='wfDY' value='"); s += wfDateY; s += F("'>");
+    s += F("<input type='hidden' id='wfBY_h' name='wfBY' value='"); s += wfBattY; s += F("'>");
+    s += F("<input type='hidden' id='wfSY_h' name='wfSY' value='"); s += wfStepsY; s += F("'>");
+    s += F("<input type='hidden' id='wfTX_h' name='wfTX' value='"); s += wfTimeX; s += F("'>");
+    s += F("<input type='hidden' id='wfDX_h' name='wfDX' value='"); s += wfDateX; s += F("'>");
+    s += F("<input type='hidden' id='wfBX_h' name='wfBX' value='"); s += wfBattX; s += F("'>");
+    s += F("<input type='hidden' id='wfSX_h' name='wfSX' value='"); s += wfStepsX; s += F("'>");
+    s += F("<input type='hidden' id='wfTSc_h' name='wfTSc' value='"); s += String(wfTimeScale, 1); s += F("'>");
+    s += F("<input type='hidden' id='wfDSc_h' name='wfDSc' value='"); s += String(wfDateScale, 1); s += F("'>");
+    s += F("<input type='hidden' id='wfBSc_h' name='wfBSc' value='"); s += String(wfBattScale, 1); s += F("'>");
+    s += F("<input type='hidden' id='wfSSc_h' name='wfSSc' value='"); s += String(wfStepsScale, 1); s += F("'>");
+    // AOD element hidden fields
+    s += F("<input type='hidden' id='wfWCY_h' name='wfWCY' value='"); s += wfWordClockY; s += F("'>");
+    s += F("<input type='hidden' id='wfWCX_h' name='wfWCX' value='"); s += wfWordClockX; s += F("'>");
+    s += F("<input type='hidden' id='wfBCY_h' name='wfBCY' value='"); s += wfBinClockY; s += F("'>");
+    s += F("<input type='hidden' id='wfBCX_h' name='wfBCX' value='"); s += wfBinClockX; s += F("'>");
+    s += F("<input type='hidden' id='wfAnY_h' name='wfAnY' value='"); s += wfAnalogY; s += F("'>");
+    s += F("<input type='hidden' id='wfAnX_h' name='wfAnX' value='"); s += wfAnalogX; s += F("'>");
+    s += F("<input type='hidden' id='wfWCSc_h' name='wfWCSc' value='"); s += String(wfWordClockScale, 1); s += F("'>");
+    s += F("<input type='hidden' id='wfBCSc_h' name='wfBCSc' value='"); s += String(wfBinClockScale, 1); s += F("'>");
+    s += F("<input type='hidden' id='wfAnSc_h' name='wfAnSc' value='"); s += String(wfAnalogScale, 1); s += F("'>");
+    // New AOD elements hidden fields
+    s += F("<input type='hidden' id='wfLnY_h' name='wfLnY' value='"); s += wfLineY; s += F("'>");
+    s += F("<input type='hidden' id='wfLnX_h' name='wfLnX' value='"); s += wfLineX; s += F("'>");
+    s += F("<input type='hidden' id='wfSAY_h' name='wfSAY' value='"); s += wfSecArcY; s += F("'>");
+    s += F("<input type='hidden' id='wfSAX_h' name='wfSAX' value='"); s += wfSecArcX; s += F("'>");
+    s += F("<input type='hidden' id='wfWdY_h' name='wfWdY' value='"); s += wfWeekdayY; s += F("'>");
+    s += F("<input type='hidden' id='wfWdX_h' name='wfWdX' value='"); s += wfWeekdayX; s += F("'>");
+    s += F("<input type='hidden' id='wfLnSc_h' name='wfLnSc' value='"); s += String(wfLineScale, 1); s += F("'>");
+    s += F("<input type='hidden' id='wfSASc_h' name='wfSASc' value='"); s += String(wfSecArcScale, 1); s += F("'>");
+    s += F("<input type='hidden' id='wfWdSc_h' name='wfWdSc' value='"); s += String(wfWeekdayScale, 1); s += F("'>");
+    // Hidden fields for checkboxes (always sent as 0/1)
+    s += F("<input type='hidden' id='wfT_h' name='wfT' value='"); s += (wfShowTime ? "1" : "0"); s += F("'>");
+    s += F("<input type='hidden' id='wfD_h' name='wfD' value='"); s += (wfShowDate ? "1" : "0"); s += F("'>");
+    s += F("<input type='hidden' id='wfB_h' name='wfB' value='"); s += (wfShowBatt ? "1" : "0"); s += F("'>");
+    s += F("<input type='hidden' id='wfS_h' name='wfS' value='"); s += (wfShowSteps ? "1" : "0"); s += F("'>");
+    s += F("<input type='hidden' id='wfWC_h' name='wfWC' value='"); s += (wfShowWordClock ? "1" : "0"); s += F("'>");
+    s += F("<input type='hidden' id='wfBC_h' name='wfBC' value='"); s += (wfShowBinClock ? "1" : "0"); s += F("'>");
+    s += F("<input type='hidden' id='wfAn_h' name='wfAn' value='"); s += (wfShowAnalog ? "1" : "0"); s += F("'>");
+    s += F("<input type='hidden' id='wfLn_h' name='wfLn' value='"); s += (wfShowLine ? "1" : "0"); s += F("'>");
+    s += F("<input type='hidden' id='wfSA_h' name='wfSA' value='"); s += (wfShowSecArc ? "1" : "0"); s += F("'>");
+    s += F("<input type='hidden' id='wfWd_h' name='wfWd' value='"); s += (wfShowWeekday ? "1" : "0"); s += F("'>");
+    s += F("<input type='hidden' id='wfAnSt_h' name='wfAnSt' value='"); s += wfAnalogStyle; s += F("'>");
+
+    s += F("</div></div>");
+
+    // === AOD Manager JavaScript ===
+    s += F("<script>\nvar wfScale=280/240;\n");
+    s += F("var wfElems=[\n");
+    s += F("  {id:'time',label:'Uhrzeit',x:"); s += wfTimeX; s += F(",y:"); s += wfTimeY; s += F(",show:"); s += (wfShowTime?"true":"false"); s += F(",sc:"); s += String(wfTimeScale,1); s += F(",fmt:"); s += wfTimeFmt; s += F("},\n");
+    s += F("  {id:'date',label:'Datum',x:"); s += wfDateX; s += F(",y:"); s += wfDateY; s += F(",show:"); s += (wfShowDate?"true":"false"); s += F(",sc:"); s += String(wfDateScale,1); s += F("},\n");
+    s += F("  {id:'batt',label:'Akku',x:"); s += wfBattX; s += F(",y:"); s += wfBattY; s += F(",show:"); s += (wfShowBatt?"true":"false"); s += F(",sc:"); s += String(wfBattScale,1); s += F("},\n");
+    s += F("  {id:'steps',label:'Schritte',x:"); s += wfStepsX; s += F(",y:"); s += wfStepsY; s += F(",show:"); s += (wfShowSteps?"true":"false"); s += F(",sc:"); s += String(wfStepsScale,1); s += F("},\n");
+    s += F("  {id:'wordclock',label:'Wortuhr',x:"); s += wfWordClockX; s += F(",y:"); s += wfWordClockY; s += F(",show:"); s += (wfShowWordClock?"true":"false"); s += F(",sc:"); s += String(wfWordClockScale,1); s += F("},\n");
+    s += F("  {id:'binclock',label:'Binaer Uhr',x:"); s += wfBinClockX; s += F(",y:"); s += wfBinClockY; s += F(",show:"); s += (wfShowBinClock?"true":"false"); s += F(",sc:"); s += String(wfBinClockScale,1); s += F("},\n");
+    s += F("  {id:'analog',label:'Analoguhr',x:"); s += wfAnalogX; s += F(",y:"); s += wfAnalogY; s += F(",show:"); s += (wfShowAnalog?"true":"false"); s += F(",sc:"); s += String(wfAnalogScale,1); s += F(",ast:"); s += wfAnalogStyle; s += F("},\n");
+    s += F("  {id:'line',label:'Trennlinie',x:"); s += wfLineX; s += F(",y:"); s += wfLineY; s += F(",show:"); s += (wfShowLine?"true":"false"); s += F(",sc:"); s += String(wfLineScale,1); s += F("},\n");
+    s += F("  {id:'secarc',label:'Minuten-Bogen',x:"); s += wfSecArcX; s += F(",y:"); s += wfSecArcY; s += F(",show:"); s += (wfShowSecArc?"true":"false"); s += F(",sc:"); s += String(wfSecArcScale,1); s += F("},\n");
+    s += F("  {id:'weekday',label:'Wochentag',x:"); s += wfWeekdayX; s += F(",y:"); s += wfWeekdayY; s += F(",show:"); s += (wfShowWeekday?"true":"false"); s += F(",sc:"); s += String(wfWeekdayScale,1); s += F("}\n];\n");
+
+    s += F("var wfCvs=document.getElementById('wfCanvas');");
+    s += F("var wfCtx=wfCvs.getContext('2d');");
+    s += F("var wfSel=-1,wfDragging=false,wfDragOffX=0,wfDragOffY=0;");
+
+    // Draw function
+    s += F("function fontH(e){");
+    s += F("var base=14;");
+    s += F("if(e.id=='time')base=36;");
+    s += F("else if(e.id=='date')base=16;");
+    s += F("else if(e.id=='batt')base=14;");
+    s += F("else if(e.id=='steps')base=14;");
+    s += F("else if(e.id=='wordclock')base=100;");
+    s += F("else if(e.id=='binclock')base=30;");
+    s += F("else if(e.id=='analog')base=100;");
+    s += F("else if(e.id=='line')base=8;");
+    s += F("else if(e.id=='secarc')base=100;");
+    s += F("else if(e.id=='weekday')base=24;");
+    s += F("return Math.round(base*e.sc);}");
+
+    s += F("function wfDraw(){");
+    s += F("var cFG=document.getElementById('aodFG_cp').value;");
+    s += F("var cAcc=document.getElementById('aodAcc_cp').value;");
+    s += F("var cDim=cFG+'99';");
+    s += F("wfCtx.fillStyle='#000';wfCtx.fillRect(0,0,280,280);");
+
+    s += F("for(var i=0;i<wfElems.length;i++){");
+    s += F("var e=wfElems[i];if(!e.show)continue;");
+    s += F("var cx=Math.round(e.x*wfScale);var cy=Math.round(e.y*wfScale);");
+    s += F("var fh=Math.round(fontH(e)*wfScale);");
+    s += F("var sel=(wfSel==i);");
+
+    // Render based on type
+    s += F("if(e.id=='time'){");
+    s += F("var fs=Math.round(36*e.sc*wfScale);");
+    s += F("wfCtx.font='bold '+fs+'px '+(e.fmt==1?'monospace':'sans-serif');");
+    s += F("wfCtx.textAlign='center';wfCtx.textBaseline='middle';");
+    s += F("wfCtx.fillStyle=sel?'#ffea00':cFG;");
+    s += F("wfCtx.fillText('12:34',cx,cy);");
+    s += F("}else if(e.id=='date'){");
+    s += F("var fs=Math.round(16*e.sc*wfScale);");
+    s += F("wfCtx.font=fs+'px sans-serif';wfCtx.textAlign='center';wfCtx.textBaseline='middle';");
+    s += F("wfCtx.fillStyle=sel?'#ffea00':cDim;");
+    s += F("wfCtx.fillText('Mo 25.03.',cx,cy);");
+    s += F("}else if(e.id=='batt'){");
+    s += F("var fs=Math.round(14*e.sc*wfScale);");
+    s += F("wfCtx.font=fs+'px sans-serif';wfCtx.textAlign='center';wfCtx.textBaseline='middle';");
+    s += F("wfCtx.fillStyle=sel?'#ffea00':cAcc;");
+    s += F("wfCtx.fillText('87%',cx,cy);");
+    s += F("}else if(e.id=='steps'){");
+    s += F("var fs=Math.round(14*e.sc*wfScale);");
+    s += F("wfCtx.font=fs+'px sans-serif';wfCtx.textAlign='center';wfCtx.textBaseline='middle';");
+    s += F("wfCtx.fillStyle=sel?'#ffea00':cDim;");
+    s += F("wfCtx.fillText('Schritte: --',cx,cy);");
+
+    s += F("}else if(e.id=='wordclock'){");
+    s += F("var grid=['ESKISTAFUNF','ZEHNZWANZIG','DREIVIERTEL','TGNACHVORJM','HALBXZWOLFP','ZWEINSIEBEN','KDREIRHFUNF','ELFNEUNVIER','WACHTZEHNRS','BSECHSFUHRX'];");
+    s += F("var cs=Math.round(10*e.sc*wfScale);var sx=cx-Math.round(55*e.sc*wfScale);var sy=cy-Math.round(50*e.sc*wfScale);");
+    s += F("wfCtx.font=cs+'px monospace';wfCtx.textAlign='left';wfCtx.textBaseline='top';");
+    s += F("for(var r=0;r<10;r++){for(var c=0;c<11;c++){");
+    s += F("wfCtx.fillStyle=(r<3)?");
+    s += F("(sel?'#ffea00':cAcc):(sel?'#776600':'#333');");
+    s += F("wfCtx.fillText(grid[r][c],sx+c*cs,sy+r*cs);}}");
+
+    s += F("}else if(e.id=='binclock'){");
+    s += F("var fs=Math.round(16*e.sc*wfScale);var gap=Math.round(20*e.sc*wfScale);");
+    s += F("wfCtx.font='bold '+fs+'px monospace';wfCtx.textAlign='center';wfCtx.textBaseline='middle';");
+    s += F("wfCtx.fillStyle=sel?'#ffea00':cAcc;");
+    s += F("wfCtx.fillText('001100',cx,cy-gap/2);wfCtx.fillText('100010',cx,cy+gap/2);");
+
+    s += F("}else if(e.id=='analog'){");
+    s += F("var rad=Math.round(50*e.sc*wfScale);");
+    s += F("wfCtx.strokeStyle=sel?'#ffea00':cDim;wfCtx.lineWidth=1;");
+    s += F("wfCtx.beginPath();wfCtx.arc(cx,cy,rad,0,Math.PI*2);wfCtx.stroke();");
+    s += F("for(var n=1;n<=12;n++){var a=n*30*Math.PI/180;var nx=cx+Math.round((rad-12)*Math.sin(a));var ny=cy-Math.round((rad-12)*Math.cos(a));");
+    s += F("wfCtx.font=Math.round(9*e.sc*wfScale)+'px sans-serif';wfCtx.textAlign='center';wfCtx.textBaseline='middle';");
+    s += F("wfCtx.fillStyle=sel?'#ffea00':cFG;");
+    s += F("var lbl='';var ast=e.ast||0;");
+    s += F("if(ast==1){var b=n;var bs='';for(var bi=0;bi<4;bi++){bs=(b%2)+bs;b=Math.floor(b/2);}lbl=bs;}");
+    s += F("else if(ast==2){lbl=n.toString(16).toUpperCase();}else{lbl=''+n;}");
+    s += F("wfCtx.fillText(lbl,nx,ny);}");
+    // Hour hand (pointing ~10:10)
+    s += F("var hA=310*Math.PI/180;wfCtx.strokeStyle=sel?'#ffea00':cFG;wfCtx.lineWidth=2;");
+    s += F("wfCtx.beginPath();wfCtx.moveTo(cx,cy);wfCtx.lineTo(cx+Math.round(rad*0.5*Math.sin(hA)),cy-Math.round(rad*0.5*Math.cos(hA)));wfCtx.stroke();");
+    // Minute hand
+    s += F("var mA=60*Math.PI/180;wfCtx.lineWidth=1;wfCtx.strokeStyle=sel?'#ffea00':cAcc;");
+    s += F("wfCtx.beginPath();wfCtx.moveTo(cx,cy);wfCtx.lineTo(cx+Math.round(rad*0.75*Math.sin(mA)),cy-Math.round(rad*0.75*Math.cos(mA)));wfCtx.stroke();");
+    s += F("wfCtx.fillStyle=sel?'#ffea00':cFG;wfCtx.beginPath();wfCtx.arc(cx,cy,3,0,Math.PI*2);wfCtx.fill();");
+    s += F("}");
+
+    // Trennlinie
+    s += F("else if(e.id=='line'){");
+    s += F("var lw=Math.round(120*e.sc*wfScale);var lh=Math.max(1,Math.round(2*wfScale));");
+    s += F("wfCtx.fillStyle=sel?'#ffea00':cDim;");
+    s += F("wfCtx.fillRect(cx-lw/2,cy-lh/2,lw,lh);");
+    s += F("}");
+
+    // Minuten-Bogen (arc showing ~37 minutes as preview)
+    s += F("else if(e.id=='secarc'){");
+    s += F("var rad=Math.round(50*e.sc*wfScale);");
+    s += F("wfCtx.strokeStyle=sel?'#776600':'#333';wfCtx.lineWidth=Math.max(2,Math.round(4*e.sc*wfScale));");
+    s += F("wfCtx.beginPath();wfCtx.arc(cx,cy,rad,-Math.PI/2,Math.PI*2-Math.PI/2);wfCtx.stroke();");
+    s += F("wfCtx.strokeStyle=sel?'#ffea00':cAcc;");
+    s += F("wfCtx.beginPath();wfCtx.arc(cx,cy,rad,-Math.PI/2,-Math.PI/2+Math.PI*2*37/60);wfCtx.stroke();");
+    s += F("}");
+
+    // Wochentag
+    s += F("else if(e.id=='weekday'){");
+    s += F("var fs=Math.round(24*e.sc*wfScale);");
+    s += F("wfCtx.font='bold '+fs+'px sans-serif';wfCtx.textAlign='center';wfCtx.textBaseline='middle';");
+    s += F("wfCtx.fillStyle=sel?'#ffea00':cAcc;");
+    s += F("wfCtx.fillText('MONTAG',cx,cy);");
+    s += F("}");
+
+    // Selection border
+    s += F("if(sel){wfCtx.strokeStyle='#ffea00';wfCtx.lineWidth=1;wfCtx.setLineDash([4,4]);");
+    s += F("var bx=fh+10;");
+    s += F("if(e.id=='wordclock')bx=Math.round(115*e.sc*wfScale);");
+    s += F("if(e.id=='analog')bx=Math.round(105*e.sc*wfScale);");
+    s += F("if(e.id=='secarc')bx=Math.round(105*e.sc*wfScale);");
+    s += F("if(e.id=='line'){var lw=Math.round(120*e.sc*wfScale)+10;wfCtx.strokeRect(cx-lw/2,cy-8,lw,16);wfCtx.setLineDash([]);}else{");
+    s += F("wfCtx.strokeRect(cx-bx/2,cy-bx/2,bx,bx);wfCtx.setLineDash([]);}}");
+    s += F("}}");
+
+    // Hit test: check proximity to element center
+    s += F("function wfHitTest(mx,my){");
+    s += F("for(var i=wfElems.length-1;i>=0;i--){var e=wfElems[i];if(!e.show)continue;");
+    s += F("var cx=Math.round(e.x*wfScale);var cy=Math.round(e.y*wfScale);");
+    s += F("var r=Math.round(fontH(e)*wfScale/2)+10;");
+    s += F("if(e.id=='wordclock'||e.id=='analog'||e.id=='secarc')r=Math.round(60*e.sc*wfScale);");
+    s += F("if(e.id=='line'){r=Math.round(60*e.sc*wfScale);var ry=10;if(Math.abs(mx-cx)<r&&Math.abs(my-cy)<ry)return i;continue;}");
+    s += F("if(Math.abs(mx-cx)<r&&Math.abs(my-cy)<r)return i;}return -1;}");
+
+    // Mouse events: drag X+Y
+    s += F("wfCvs.addEventListener('mousedown',function(ev){");
+    s += F("var rect=wfCvs.getBoundingClientRect();");
+    s += F("var mx=(ev.clientX-rect.left)*(280/rect.width);");
+    s += F("var my=(ev.clientY-rect.top)*(280/rect.height);");
+    s += F("var hit=wfHitTest(mx,my);wfSel=hit;");
+    s += F("if(hit>=0){wfDragging=true;wfDragOffX=mx-Math.round(wfElems[hit].x*wfScale);wfDragOffY=my-Math.round(wfElems[hit].y*wfScale);}");
+    s += F("wfShowSelOpts();wfDraw();});");
+
+    s += F("wfCvs.addEventListener('mousemove',function(ev){");
+    s += F("if(wfSel<0||!wfDragging)return;var rect=wfCvs.getBoundingClientRect();");
+    s += F("var mx=(ev.clientX-rect.left)*(280/rect.width);");
+    s += F("var my=(ev.clientY-rect.top)*(280/rect.height);");
+    s += F("var nx=Math.round((mx-wfDragOffX)/wfScale);var ny=Math.round((my-wfDragOffY)/wfScale);");
+    s += F("if(nx<0)nx=0;if(nx>240)nx=240;if(ny<0)ny=0;if(ny>240)ny=240;");
+    s += F("wfElems[wfSel].x=nx;wfElems[wfSel].y=ny;wfSyncHidden();");
+    s += F("document.getElementById('wfXVal').innerText=nx;document.getElementById('wfYVal').innerText=ny;wfDraw();});");
+
+    s += F("wfCvs.addEventListener('mouseup',function(){wfDragging=false;});");
+    s += F("wfCvs.addEventListener('mouseleave',function(){wfDragging=false;});");
+
+    // Touch events: drag X+Y
+    s += F("wfCvs.addEventListener('touchstart',function(ev){ev.preventDefault();");
+    s += F("var t=ev.touches[0];var rect=wfCvs.getBoundingClientRect();");
+    s += F("var mx=(t.clientX-rect.left)*(280/rect.width);");
+    s += F("var my=(t.clientY-rect.top)*(280/rect.height);");
+    s += F("var hit=wfHitTest(mx,my);wfSel=hit;");
+    s += F("if(hit>=0){wfDragging=true;wfDragOffX=mx-Math.round(wfElems[hit].x*wfScale);wfDragOffY=my-Math.round(wfElems[hit].y*wfScale);}");
+    s += F("wfShowSelOpts();wfDraw();},{passive:false});");
+
+    s += F("wfCvs.addEventListener('touchmove',function(ev){ev.preventDefault();");
+    s += F("if(wfSel<0||!wfDragging)return;var t=ev.touches[0];var rect=wfCvs.getBoundingClientRect();");
+    s += F("var mx=(t.clientX-rect.left)*(280/rect.width);");
+    s += F("var my=(t.clientY-rect.top)*(280/rect.height);");
+    s += F("var nx=Math.round((mx-wfDragOffX)/wfScale);var ny=Math.round((my-wfDragOffY)/wfScale);");
+    s += F("if(nx<0)nx=0;if(nx>240)nx=240;if(ny<0)ny=0;if(ny>240)ny=240;");
+    s += F("wfElems[wfSel].x=nx;wfElems[wfSel].y=ny;wfSyncHidden();");
+    s += F("document.getElementById('wfXVal').innerText=nx;document.getElementById('wfYVal').innerText=ny;wfDraw();},{passive:false});");
+
+    s += F("wfCvs.addEventListener('touchend',function(){wfDragging=false;});");
+
+    // Sync hidden fields
+    s += F("function wfSyncHidden(){");
+    s += F("var ids=['T','D','B','S','WC','BC','An','Ln','SA','Wd'];var keys=['time','date','batt','steps','wordclock','binclock','analog','line','secarc','weekday'];");
+    s += F("for(var i=0;i<wfElems.length;i++){var p=ids[i];");
+    s += F("document.getElementById('wf'+p+'Y_h').value=wfElems[i].y;");
+    s += F("document.getElementById('wf'+p+'X_h').value=wfElems[i].x;");
+    s += F("document.getElementById('wf'+p+'Sc_h').value=wfElems[i].sc.toFixed(1);");
+    s += F("document.getElementById('wf'+p+'_h').value=wfElems[i].show?'1':'0';}");
+    s += F("document.getElementById('wfAnSt_h').value=wfElems[6].ast||0;}");
+    // Show options for selected element
+    s += F("function wfShowSelOpts(){var box=document.getElementById('wfSelBox');");
+    s += F("document.getElementById('wfOptTime').style.display='none';");
+    s += F("if(wfSel<0){box.style.display='none';return;}");
+    s += F("box.style.display='block';");
+    s += F("document.getElementById('wfSelTitle').innerText=wfElems[wfSel].label;");
+    s += F("document.getElementById('wfXVal').innerText=wfElems[wfSel].x;");
+    s += F("document.getElementById('wfYVal').innerText=wfElems[wfSel].y;");
+    s += F("document.getElementById('wfSc_sl').value=wfElems[wfSel].sc;");
+    s += F("document.getElementById('wfScVal').innerText=wfElems[wfSel].sc.toFixed(1);");
+    s += F("if(wfSel==0){document.getElementById('wfOptTime').style.display='';document.getElementById('wfTFm_sel').value=wfElems[0].fmt||0;}}");
+
+    // Scale slider changed
+    s += F("function wfScaleChange(v){");
+    s += F("if(wfSel<0)return;var fv=parseFloat(v);");
+    s += F("wfElems[wfSel].sc=fv;document.getElementById('wfScVal').innerText=fv.toFixed(1);");
+    s += F("wfSyncHidden();wfDraw();}");
+
+    // Update from checkboxes
+    s += F("function wfUpdate(){");
+    s += F("wfElems[0].show=document.getElementById('wfT_cb').checked;");
+    s += F("wfElems[1].show=document.getElementById('wfD_cb').checked;");
+    s += F("wfElems[2].show=document.getElementById('wfB_cb').checked;");
+    s += F("wfElems[3].show=document.getElementById('wfS_cb').checked;");
+    s += F("wfElems[4].show=document.getElementById('wfWC_cb').checked;");
+    s += F("wfElems[5].show=document.getElementById('wfBC_cb').checked;");
+    s += F("wfElems[6].show=document.getElementById('wfAn_cb').checked;");
+    s += F("wfElems[7].show=document.getElementById('wfLn_cb').checked;");
+    s += F("wfElems[8].show=document.getElementById('wfSA_cb').checked;");
+    s += F("wfElems[9].show=document.getElementById('wfWd_cb').checked;");
+    s += F("if(wfSel==0)wfElems[0].fmt=parseInt(document.getElementById('wfTFm_sel').value);");
+    s += F("wfElems[6].ast=parseInt(document.getElementById('wfAnSt_sel').value);");
+    s += F("document.getElementById('wfAnStyleBox').style.display=wfElems[6].show?'block':'none';");
+    s += F("wfSyncHidden();wfDraw();}");  // Sync hidden fields on every checkbox change
+    
+    // JSON-gebündeltes Speichern
+    s += F("function doSaveAOD(){");
+    s += F("  try { wfSyncHidden(); } catch(e) { console.error('wfSync err', e); }");
+    s += F("  var f = document.getElementById('fWatchface');");
+    s += F("  var inp = f.querySelectorAll('input[name],select[name]');");
+    s += F("  var dataObj = {};");
+    s += F("  for(var i = 0; i < inp.length; i++) {");
+    s += F("    var val = inp[i].value;");
+    s += F("    if(!isNaN(val) && val !== '') dataObj[inp[i].name] = Number(val);");
+    s += F("    else dataObj[inp[i].name] = val;");
+    s += F("  }");
+    s += F("  var params = '_form=fWatchface&aodData=' + encodeURIComponent(JSON.stringify(dataObj));");
+    s += F("  fetch('/save', {");
+    s += F("    method: 'POST',");
+    s += F("    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },");
+    s += F("    body: params");
+    s += F("  }).then(function(r) {");
+    s += F("    if(r.ok) {");
+    s += F("      var t = document.getElementById('toast');");
+    s += F("      t.className = 'toast show';");
+    s += F("      setTimeout(function(){ t.className = t.className.replace('show',''); }, 3000);");
+    s += F("    } else { alert('AOD Speicherfehler: HTTP ' + r.status); }");
+    s += F("  }).catch(function(e){ alert('AOD Netzwerkfehler: ' + e); });");
+    s += F("}");
+    
+    s += F("wfDraw();\n</script>");
+    s += F("<button type='button' class='btn' onclick='doSaveAOD()'>AOD speichern</button></form></div>");
 
     // 3. SYSTEM
     s += F("<div id='p3' class='panel'>");
@@ -414,7 +765,15 @@ function updateVal(id, val) { document.getElementById(id).innerText = val + '%';
     s += F("<form id='fTime' onsubmit='return saveTime()'><h3>Uhrzeit & Zeitzone</h3>");
     s += F("<div style='display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;'><div><b>Datum:</b><br><input type='date' name='md' value='"); s += sysD; s += F("'></div><div><b>Uhrzeit:</b><br><input type='time' name='mt' value='"); s += sysT; s += F("'></div></div>");
     s += F("<div style='display:grid; grid-template-columns:1fr 1fr; gap:10px; align-items:center;'><div><b>Zeitzone:</b><br><select name='ntpz'><option value='CET-1CEST,M3.5.0,M10.5.0/3'"); if(ntpZone == "CET-1CEST,M3.5.0,M10.5.0/3") s += F(" selected"); s += F(">Berlin</option><option value='GMT0BST,M3.5.0/1,M10.5.0'"); if(ntpZone == "GMT0BST,M3.5.0/1,M10.5.0") s += F(" selected"); s += F(">London</option></select></div><div><br><label class='cb-lbl'><input type='checkbox' name='dst' value='1' "); if(aktuell->tm_isdst > 0) s += F("checked"); s += F("> Sommerzeit</label></div></div>");
-    s += F("<div style='display:flex; gap:10px; margin-top:10px;'><input type='submit' class='btn btn-blue' value='Manuell Setzen' style='margin:0;'><button type='button' class='btn btn-gray' style='margin:0;' onclick='fetch(\"/sync\", {method:\"POST\"}).then(()=>setTimeout(()=>location.reload(), 4000))'>NTP Sync</button></div></form></div>");
+    s += F("<div style='display:flex; gap:10px; margin-top:10px;'><input type='submit' class='btn btn-blue' value='Manuell Setzen' style='margin:0;'><button type='button' class='btn btn-gray' style='margin:0;' onclick='fetch(\"/sync\", {method:\"POST\"}).then(()=>setTimeout(()=>location.reload(), 4000))'>NTP Sync</button></div></form>");
+    // Export / Import Settings
+    s += F("<hr><h3>Einstellungen Sichern / Laden</h3>");
+    s += F("<div style='display:flex; gap:10px; flex-wrap:wrap;'>");
+    s += F("<a class='btn btn-blue' style='text-decoration:none;text-align:center;flex:1;' href='/export' download='watchos_settings.json'>&#128190; Export (JSON)</a>");
+    s += F("<button class='btn btn-gray' style='flex:1;' onclick='document.getElementById(\"impFile\").click()'>&#128194; Import (JSON)</button>");
+    s += F("<input type='file' id='impFile' accept='.json' style='display:none' onchange='importSettings(this.files[0])'></div>");
+    s += F("<script>function importSettings(f){if(!f)return;var r=new FileReader();r.onload=function(e){fetch(\"/import\",{method:\"POST\",headers:{\"Content-Type\":\"application/json\"},body:e.target.result}).then(r=>r.text()).then(t=>{var toast=document.getElementById(\"toast\");toast.className=\"toast show\";setTimeout(()=>{toast.className=toast.className.replace(\"show\",\"\");},3000);setTimeout(()=>location.reload(),3500);});};r.readAsText(f);}</script>");
+    s += F("</div>");
 
     // 4. PERSÖNLICH
     s += F("<div id='p5' class='panel'><form id='fPers' onsubmit='return saveForm(\"fPers\")'>");
@@ -505,13 +864,29 @@ function updateVal(id, val) { document.getElementById(id).innerText = val + '%';
 
 void handleRoot() { 
     if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
-    server.send(200, "text/html", getHtmlContent()); 
+    String html = getHtmlContent();
+    server.setContentLength(html.length());
+    server.send(200, "text/html", "");
+    // Chunked senden um Heap-Spike zu vermeiden
+    int pos = 0;
+    while (pos < (int)html.length()) {
+        int chunk = min(2048, (int)html.length() - pos);
+        server.sendContent(html.substring(pos, pos + chunk));
+        pos += chunk;
+    }
+    server.sendContent("");
 }
 
 void handleSave() {
     if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
     // Formulare identifizieren: Jedes Formular sendet ein hidden "_form" Feld
     String formId = server.hasArg("_form") ? server.arg("_form") : "";
+    
+    // DEBUG: Alle empfangenen POST-Parameter auflisten
+    Serial.printf("[SAVE] formId='%s', args=%d\n", formId.c_str(), server.args());
+    for (int i = 0; i < server.args(); i++) {
+        Serial.printf("  [%d] %s = '%s'\n", i, server.argName(i).c_str(), server.arg(i).substring(0, 60).c_str());
+    }
     
     // Variablen nur setzen wenn im POST enthalten
     if (server.hasArg("ssid")) userSSID = server.arg("ssid"); if (server.hasArg("pwd")) userPWD = server.arg("pwd"); if (server.hasArg("ntpz")) ntpZone = server.arg("ntpz");
@@ -556,6 +931,52 @@ void handleSave() {
     if (server.hasArg("hapW")) hapticWaveform = server.arg("hapW").toInt();
     if (server.hasArg("webUsr")) webUser = server.arg("webUsr");
     if (server.hasArg("webPwd")) webPass = server.arg("webPwd");
+
+    // AOD Manager — Variablen aus POST lesen (gleiche Mechanik wie fDesign)
+    if (server.hasArg("wfT"))  wfShowTime  = server.arg("wfT") == "1";
+    if (server.hasArg("wfD"))  wfShowDate  = server.arg("wfD") == "1";
+    if (server.hasArg("wfB"))  wfShowBatt  = server.arg("wfB") == "1";
+    if (server.hasArg("wfS"))  wfShowSteps = server.arg("wfS") == "1";
+    if (server.hasArg("wfWC")) wfShowWordClock = server.arg("wfWC") == "1";
+    if (server.hasArg("wfBC")) wfShowBinClock  = server.arg("wfBC") == "1";
+    if (server.hasArg("wfAn")) wfShowAnalog    = server.arg("wfAn") == "1";
+    if (server.hasArg("wfLn")) wfShowLine      = server.arg("wfLn") == "1";
+    if (server.hasArg("wfSA")) wfShowSecArc    = server.arg("wfSA") == "1";
+    if (server.hasArg("wfWd")) wfShowWeekday   = server.arg("wfWd") == "1";
+    if (server.hasArg("wfTY")) wfTimeY = server.arg("wfTY").toInt();
+    if (server.hasArg("wfDY")) wfDateY = server.arg("wfDY").toInt();
+    if (server.hasArg("wfBY")) wfBattY = server.arg("wfBY").toInt();
+    if (server.hasArg("wfSY")) wfStepsY = server.arg("wfSY").toInt();
+    if (server.hasArg("wfTX")) wfTimeX = server.arg("wfTX").toInt();
+    if (server.hasArg("wfDX")) wfDateX = server.arg("wfDX").toInt();
+    if (server.hasArg("wfBX")) wfBattX = server.arg("wfBX").toInt();
+    if (server.hasArg("wfSX")) wfStepsX = server.arg("wfSX").toInt();
+    if (server.hasArg("wfTSc")) wfTimeScale = server.arg("wfTSc").toFloat();
+    if (server.hasArg("wfDSc")) wfDateScale = server.arg("wfDSc").toFloat();
+    if (server.hasArg("wfBSc")) wfBattScale = server.arg("wfBSc").toFloat();
+    if (server.hasArg("wfSSc")) wfStepsScale = server.arg("wfSSc").toFloat();
+    if (server.hasArg("wfTFm")) wfTimeFmt = server.arg("wfTFm").toInt();
+    if (server.hasArg("wfWCY")) wfWordClockY = server.arg("wfWCY").toInt();
+    if (server.hasArg("wfWCX")) wfWordClockX = server.arg("wfWCX").toInt();
+    if (server.hasArg("wfBCY")) wfBinClockY = server.arg("wfBCY").toInt();
+    if (server.hasArg("wfBCX")) wfBinClockX = server.arg("wfBCX").toInt();
+    if (server.hasArg("wfAnY")) wfAnalogY = server.arg("wfAnY").toInt();
+    if (server.hasArg("wfAnX")) wfAnalogX = server.arg("wfAnX").toInt();
+    if (server.hasArg("wfWCSc")) wfWordClockScale = server.arg("wfWCSc").toFloat();
+    if (server.hasArg("wfBCSc")) wfBinClockScale = server.arg("wfBCSc").toFloat();
+    if (server.hasArg("wfAnSc")) wfAnalogScale = server.arg("wfAnSc").toFloat();
+    if (server.hasArg("wfAnSt")) wfAnalogStyle = server.arg("wfAnSt").toInt();
+    if (server.hasArg("wfLnY")) wfLineY = server.arg("wfLnY").toInt();
+    if (server.hasArg("wfLnX")) wfLineX = server.arg("wfLnX").toInt();
+    if (server.hasArg("wfSAY")) wfSecArcY = server.arg("wfSAY").toInt();
+    if (server.hasArg("wfSAX")) wfSecArcX = server.arg("wfSAX").toInt();
+    if (server.hasArg("wfWdY")) wfWeekdayY = server.arg("wfWdY").toInt();
+    if (server.hasArg("wfWdX")) wfWeekdayX = server.arg("wfWdX").toInt();
+    if (server.hasArg("wfLnSc")) wfLineScale = server.arg("wfLnSc").toFloat();
+    if (server.hasArg("wfSASc")) wfSecArcScale = server.arg("wfSASc").toFloat();
+    if (server.hasArg("wfWdSc")) wfWeekdayScale = server.arg("wfWdSc").toFloat();
+    if (server.hasArg("aodFG")) hexAodFG = server.arg("aodFG");
+    if (server.hasArg("aodAcc")) hexAodAcc = server.arg("aodAcc");
     
     // Checkboxen NUR aktualisieren wenn das Views-Formular gesendet wurde
     if (formId == "fViews") {
@@ -568,8 +989,9 @@ void handleSave() {
 
     // NUR die Preferences speichern die zum jeweiligen Formular gehören
     Serial.printf("[SAVE] formId='%s' - NVS oeffnen...\n", formId.c_str());
-    prefs.begin("clock", false);
-    Serial.printf("[SAVE] NVS freeEntries=%d\n", prefs.freeEntries());
+    bool nvsOK = prefs.begin("clock", false);
+    Serial.printf("[SAVE] NVS open=%d freeEntries=%d\n", nvsOK, prefs.freeEntries());
+    if (!nvsOK) { Serial.println("[SAVE] FEHLER: NVS open failed!"); server.send(500, "text/plain", "NVS Error"); return; }
     
     if (formId == "fDesign") {
         Serial.printf("[SAVE] Design: cBG=%s cHBG=%s cHFG=%s bootM=%d aodM=%d\n", hexBG.c_str(), hexHeadBG.c_str(), hexHeadFG.c_str(), bootMode, aodMode);
@@ -609,6 +1031,62 @@ void handleSave() {
         prefs.putString("evSsid", evilSSID); prefs.putString("evHtml", evilHTML);
         // Also save large HTML to FFat
         if (littleFsReady) writeFileToFS("/evil.html", evilHTML);
+    }
+    else if (formId == "fWatchface") {
+        Serial.println("[SAVE-AOD] Verarbeite gebuendeltes JSON aus AOD Manager...");
+
+        // Prüfen, ob unser zusammengefasstes JSON-Paket angekommen ist
+        if (server.hasArg("aodData")) {
+            String body = server.arg("aodData");
+            
+            // Dein bewährter Minimal-JSON-Parser
+            auto jStr = [&](const String& key) -> String { int i = body.indexOf("\"" + key + "\":\""); if(i<0) return ""; i += key.length()+4; int e = body.indexOf("\"", i); return (e>i) ? body.substring(i, e) : ""; };
+            auto jInt = [&](const String& key, int def) -> int { int i = body.indexOf("\"" + key + "\":"); if(i<0) return def; i += key.length()+3; int e = i; while(e < (int)body.length() && (isdigit(body[e]) || body[e]=='-')) e++; return (e>i) ? body.substring(i, e).toInt() : def; };
+            auto jFloat = [&](const String& key, float def) -> float { int i = body.indexOf("\"" + key + "\":"); if(i<0) return def; i += key.length()+3; int e = i; while(e < (int)body.length() && (isdigit(body[e]) || body[e]=='.' || body[e]=='-')) e++; return (e>i) ? body.substring(i, e).toFloat() : def; };
+
+            // Variablen aus dem JSON parsen
+            wfShowTime = jInt("wfT", wfShowTime); wfShowDate = jInt("wfD", wfShowDate); wfShowBatt = jInt("wfB", wfShowBatt); wfShowSteps = jInt("wfS", wfShowSteps);
+            wfTimeY = jInt("wfTY", wfTimeY); wfDateY = jInt("wfDY", wfDateY); wfBattY = jInt("wfBY", wfBattY); wfStepsY = jInt("wfSY", wfStepsY);
+            wfTimeX = jInt("wfTX", wfTimeX); wfDateX = jInt("wfDX", wfDateX); wfBattX = jInt("wfBX", wfBattX); wfStepsX = jInt("wfSX", wfStepsX);
+            wfTimeScale = jFloat("wfTSc", wfTimeScale); wfDateScale = jFloat("wfDSc", wfDateScale); wfBattScale = jFloat("wfBSc", wfBattScale); wfStepsScale = jFloat("wfSSc", wfStepsScale);
+            wfTimeFmt = jInt("wfTFm", wfTimeFmt);
+
+            wfShowWordClock = jInt("wfWC", wfShowWordClock); wfShowBinClock = jInt("wfBC", wfShowBinClock); wfShowAnalog = jInt("wfAn", wfShowAnalog);
+            wfWordClockY = jInt("wfWCY", wfWordClockY); wfWordClockX = jInt("wfWCX", wfWordClockX);
+            wfBinClockY = jInt("wfBCY", wfBinClockY); wfBinClockX = jInt("wfBCX", wfBinClockX);
+            wfAnalogY = jInt("wfAnY", wfAnalogY); wfAnalogX = jInt("wfAnX", wfAnalogX);
+            wfWordClockScale = jFloat("wfWCSc", wfWordClockScale); wfBinClockScale = jFloat("wfBCSc", wfBinClockScale); wfAnalogScale = jFloat("wfAnSc", wfAnalogScale);
+            wfAnalogStyle = jInt("wfAnSt", wfAnalogStyle);
+
+            wfShowLine = jInt("wfLn", wfShowLine); wfShowSecArc = jInt("wfSA", wfShowSecArc); wfShowWeekday = jInt("wfWd", wfShowWeekday);
+            wfLineY = jInt("wfLnY", wfLineY); wfLineX = jInt("wfLnX", wfLineX);
+            wfSecArcY = jInt("wfSAY", wfSecArcY); wfSecArcX = jInt("wfSAX", wfSecArcX);
+            wfWeekdayY = jInt("wfWdY", wfWeekdayY); wfWeekdayX = jInt("wfWdX", wfWeekdayX);
+            wfLineScale = jFloat("wfLnSc", wfLineScale); wfSecArcScale = jFloat("wfSASc", wfSecArcScale); wfWeekdayScale = jFloat("wfWdSc", wfWeekdayScale);
+
+            // Farben extrahieren
+            String tFG = jStr("aodFG"); if(tFG != "") hexAodFG = tFG;
+            String tAc = jStr("aodAcc"); if(tAc != "") hexAodAcc = tAc;
+        }
+
+        // Alles ins NVS abspeichern
+        prefs.putBool("wfT", wfShowTime); prefs.putBool("wfD", wfShowDate); prefs.putBool("wfB", wfShowBatt); prefs.putBool("wfS", wfShowSteps);
+        prefs.putInt("wfTY", wfTimeY); prefs.putInt("wfDY", wfDateY); prefs.putInt("wfBY", wfBattY); prefs.putInt("wfSY", wfStepsY);
+        prefs.putInt("wfTX", wfTimeX); prefs.putInt("wfDX", wfDateX); prefs.putInt("wfBX", wfBattX); prefs.putInt("wfSX", wfStepsX);
+        prefs.putFloat("wfTSc", wfTimeScale); prefs.putFloat("wfDSc", wfDateScale); prefs.putFloat("wfBSc", wfBattScale); prefs.putFloat("wfSSc", wfStepsScale);
+        prefs.putInt("wfTFm", wfTimeFmt);
+        prefs.putBool("wfWC", wfShowWordClock); prefs.putBool("wfBC", wfShowBinClock); prefs.putBool("wfAn", wfShowAnalog);
+        prefs.putInt("wfWCY", wfWordClockY); prefs.putInt("wfWCX", wfWordClockX);
+        prefs.putInt("wfBCY", wfBinClockY); prefs.putInt("wfBCX", wfBinClockX);
+        prefs.putInt("wfAnY", wfAnalogY); prefs.putInt("wfAnX", wfAnalogX);
+        prefs.putFloat("wfWCSc", wfWordClockScale); prefs.putFloat("wfBCSc", wfBinClockScale); prefs.putFloat("wfAnSc", wfAnalogScale);
+        prefs.putInt("wfAnSt", wfAnalogStyle);
+        prefs.putBool("wfLn", wfShowLine); prefs.putBool("wfSA", wfShowSecArc); prefs.putBool("wfWd", wfShowWeekday);
+        prefs.putInt("wfLnY", wfLineY); prefs.putInt("wfLnX", wfLineX);
+        prefs.putInt("wfSAY", wfSecArcY); prefs.putInt("wfSAX", wfSecArcX);
+        prefs.putInt("wfWdY", wfWeekdayY); prefs.putInt("wfWdX", wfWeekdayX);
+        prefs.putFloat("wfLnSc", wfLineScale); prefs.putFloat("wfSASc", wfSecArcScale); prefs.putFloat("wfWdSc", wfWeekdayScale);
+        prefs.putString("hAodFG", hexAodFG); prefs.putString("hAodAc", hexAodAcc);
     }
     else {
         // Fallback: Alles speichern (kompatibilität mit alten Aufrufen ohne _form)
@@ -690,6 +1168,126 @@ void setupServerRoutes() {
     server.on("/submit", HTTP_POST, handleEvilSubmit);
     server.on("/tos", HTTP_GET, []() { if (evilActive) handleEvilTOS(); else server.send(404, "text/plain", "Not Found"); });
     server.on("/imprint", HTTP_GET, []() { if (evilActive) handleEvilImprint(); else server.send(404, "text/plain", "Not Found"); });
+
+    // Export settings as JSON
+    server.on("/export", HTTP_GET, []() {
+        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        String j = "{";
+        j += "\"ssid\":\"" + userSSID + "\",\"pwd\":\"" + userPWD + "\",\"ntpZ\":\"" + ntpZone + "\",";
+        j += "\"apS\":\"" + apSSID + "\",\"apP\":\"" + apPWD + "\",";
+        j += "\"tag\":" + String(gTag) + ",\"monat\":" + String(gMonat) + ",\"jahr\":" + String(gJahr) + ",\"std\":" + String(gStunde) + ",\"min\":" + String(gMinute) + ",\"alter\":" + String(zielAlter) + ",";
+        j += "\"bootM\":" + String(bootMode) + ",\"aodM\":" + String(aodMode) + ",";
+        j += "\"tDim\":" + String(time_dim_start) + ",\"tAod\":" + String(time_aod_start) + ",\"tSlp\":" + String(time_sleep_start) + ",";
+        j += "\"maxB\":" + String(maxBright) + ",\"minB\":" + String(minBright) + ",";
+        j += "\"cBG\":\"" + hexBG + "\",\"cFG\":\"" + hexFG + "\",\"cAcc1\":\"" + hexAcc1 + "\",\"cAcc2\":\"" + hexAcc2 + "\",\"cBat\":\"" + hexBat + "\",";
+        j += "\"cHBG\":\"" + hexHeadBG + "\",\"cHFG\":\"" + hexHeadFG + "\",\"cABG\":\"" + hexAppBG + "\",\"cWrn\":\"" + hexWarn + "\",";
+        j += "\"lang\":" + String(sysLang) + ",";
+        j += "\"enP0\":" + String(enP0) + ",\"enP1\":" + String(enP1) + ",\"enP2\":" + String(enP2) + ",\"enP3\":" + String(enP3) + ",";
+        j += "\"tAlarm\":" + String(timerAlarmMode) + ",\"hapW\":" + String(hapticWaveform) + ",";
+        j += "\"pN\":\"" + parentName + "\",\"pD\":\"" + parentDate + "\",\"pT\":\"" + parentTime + "\",";
+        j += "\"netS\":" + String(netSalary, 2) + ",\"pt\":" + String(partTimePct) + ",\"vac\":" + String(vacationDays) + ",\"sick\":" + String(sickDays) + ",\"wh\":" + String(workHoursPerDay, 1) + ",\"wd\":" + String(workDaysYear) + ",";
+        j += "\"c1n\":\"" + child1Name + "\",\"c1d\":\"" + child1Date + "\",\"c1t\":\"" + child1Time + "\",";
+        j += "\"c2n\":\"" + child2Name + "\",\"c2d\":\"" + child2Date + "\",\"c2t\":\"" + child2Time + "\",";
+        j += "\"c3n\":\"" + child3Name + "\",\"c3d\":\"" + child3Date + "\",\"c3t\":\"" + child3Time + "\",";
+        j += "\"evSsid\":\"" + evilSSID + "\",";
+        j += "\"spamSsid\":\"" + spamSSIDs + "\",\"buLay\":" + String(badUsbLayout) + ",\"nmapIP\":\"" + nmapBaseIP + "\",\"nmapPorts\":\"" + nmapPorts + "\",";
+        j += "\"tgS0\":\"" + targetSSIDs[0] + "\",\"tgP0\":\"" + targetPWDs[0] + "\",\"tgS1\":\"" + targetSSIDs[1] + "\",\"tgP1\":\"" + targetPWDs[1] + "\",\"tgS2\":\"" + targetSSIDs[2] + "\",\"tgP2\":\"" + targetPWDs[2] + "\",";
+        j += "\"wfT\":" + String(wfShowTime) + ",\"wfD\":" + String(wfShowDate) + ",\"wfB\":" + String(wfShowBatt) + ",\"wfS\":" + String(wfShowSteps) + ",";
+        j += "\"wfTY\":" + String(wfTimeY) + ",\"wfDY\":" + String(wfDateY) + ",\"wfBY\":" + String(wfBattY) + ",\"wfSY\":" + String(wfStepsY) + ",";
+        j += "\"wfTX\":" + String(wfTimeX) + ",\"wfDX\":" + String(wfDateX) + ",\"wfBX\":" + String(wfBattX) + ",\"wfSX\":" + String(wfStepsX) + ",";
+        j += "\"wfTSc\":" + String(wfTimeScale, 1) + ",\"wfDSc\":" + String(wfDateScale, 1) + ",\"wfBSc\":" + String(wfBattScale, 1) + ",\"wfSSc\":" + String(wfStepsScale, 1) + ",";
+        j += "\"wfTFm\":" + String(wfTimeFmt) + ",";
+        j += "\"wfWC\":" + String(wfShowWordClock) + ",\"wfBC\":" + String(wfShowBinClock) + ",\"wfAn\":" + String(wfShowAnalog) + ",";
+        j += "\"wfWCY\":" + String(wfWordClockY) + ",\"wfWCX\":" + String(wfWordClockX) + ",\"wfBCY\":" + String(wfBinClockY) + ",\"wfBCX\":" + String(wfBinClockX) + ",";
+        j += "\"wfAnY\":" + String(wfAnalogY) + ",\"wfAnX\":" + String(wfAnalogX) + ",";
+        j += "\"wfWCSc\":" + String(wfWordClockScale, 1) + ",\"wfBCSc\":" + String(wfBinClockScale, 1) + ",\"wfAnSc\":" + String(wfAnalogScale, 1) + ",";
+        j += "\"wfAnSt\":" + String(wfAnalogStyle) + ",";
+        j += "\"hAodFG\":\"" + hexAodFG + "\",\"hAodAc\":\"" + hexAodAcc + "\"";
+        j += "}";
+        server.sendHeader("Content-Disposition", "attachment; filename=watchos_settings.json");
+        server.send(200, "application/json", j);
+    });
+
+    // Import settings from JSON
+    server.on("/import", HTTP_POST, []() {
+        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        String body = server.arg("plain");
+        if (body.length() < 5) { server.send(400, "text/plain", "Leerer Body"); return; }
+        // Minimal JSON parser - extract key:value pairs
+        auto jStr = [&](const String& key) -> String { int i = body.indexOf("\"" + key + "\":\""); if(i<0) return ""; i += key.length()+4; int e = body.indexOf("\"", i); return (e>i) ? body.substring(i, e) : ""; };
+        auto jInt = [&](const String& key, int def) -> int { int i = body.indexOf("\"" + key + "\":"); if(i<0) return def; i += key.length()+3; int e = i; while(e < (int)body.length() && (isdigit(body[e]) || body[e]=='-')) e++; return (e>i) ? body.substring(i, e).toInt() : def; };
+        auto jFloat = [&](const String& key, float def) -> float { int i = body.indexOf("\"" + key + "\":"); if(i<0) return def; i += key.length()+3; int e = i; while(e < (int)body.length() && (isdigit(body[e]) || body[e]=='.' || body[e]=='-')) e++; return (e>i) ? body.substring(i, e).toFloat() : def; };
+        auto jULong = [&](const String& key, unsigned long def) -> unsigned long { int i = body.indexOf("\"" + key + "\":"); if(i<0) return def; i += key.length()+3; int e = i; while(e < (int)body.length() && isdigit(body[e])) e++; return (e>i) ? strtoul(body.substring(i, e).c_str(), NULL, 10) : def; };
+        // Apply values
+        userSSID = jStr("ssid"); userPWD = jStr("pwd"); ntpZone = jStr("ntpZ");
+        apSSID = jStr("apS"); apPWD = jStr("apP");
+        gTag = jInt("tag", gTag); gMonat = jInt("monat", gMonat); gJahr = jInt("jahr", gJahr); gStunde = jInt("std", gStunde); gMinute = jInt("min", gMinute); zielAlter = jInt("alter", zielAlter);
+        bootMode = jInt("bootM", bootMode); aodMode = jInt("aodM", aodMode);
+        time_dim_start = jULong("tDim", time_dim_start); time_aod_start = jULong("tAod", time_aod_start); time_sleep_start = jULong("tSlp", time_sleep_start);
+        maxBright = jInt("maxB", maxBright); minBright = jInt("minB", minBright);
+        hexBG = jStr("cBG"); hexFG = jStr("cFG"); hexAcc1 = jStr("cAcc1"); hexAcc2 = jStr("cAcc2"); hexBat = jStr("cBat");
+        hexHeadBG = jStr("cHBG"); hexHeadFG = jStr("cHFG"); hexAppBG = jStr("cABG"); hexWarn = jStr("cWrn");
+        sysLang = jInt("lang", sysLang);
+        enP0 = jInt("enP0", enP0); enP1 = jInt("enP1", enP1); enP2 = jInt("enP2", enP2); enP3 = jInt("enP3", enP3);
+        timerAlarmMode = jInt("tAlarm", timerAlarmMode); hapticWaveform = jInt("hapW", hapticWaveform);
+        parentName = jStr("pN"); parentDate = jStr("pD"); parentTime = jStr("pT");
+        netSalary = jFloat("netS", netSalary); partTimePct = jInt("pt", partTimePct); vacationDays = jInt("vac", vacationDays); sickDays = jInt("sick", sickDays); workHoursPerDay = jFloat("wh", workHoursPerDay); workDaysYear = jInt("wd", workDaysYear);
+        child1Name = jStr("c1n"); child1Date = jStr("c1d"); child1Time = jStr("c1t");
+        child2Name = jStr("c2n"); child2Date = jStr("c2d"); child2Time = jStr("c2t");
+        child3Name = jStr("c3n"); child3Date = jStr("c3d"); child3Time = jStr("c3t");
+        evilSSID = jStr("evSsid");
+        spamSSIDs = jStr("spamSsid"); badUsbLayout = jInt("buLay", badUsbLayout); nmapBaseIP = jStr("nmapIP"); nmapPorts = jStr("nmapPorts");
+        targetSSIDs[0] = jStr("tgS0"); targetPWDs[0] = jStr("tgP0"); targetSSIDs[1] = jStr("tgS1"); targetPWDs[1] = jStr("tgP1"); targetSSIDs[2] = jStr("tgS2"); targetPWDs[2] = jStr("tgP2");
+        wfShowTime = jInt("wfT", wfShowTime); wfShowDate = jInt("wfD", wfShowDate); wfShowBatt = jInt("wfB", wfShowBatt); wfShowSteps = jInt("wfS", wfShowSteps);
+        wfTimeY = jInt("wfTY", wfTimeY); wfDateY = jInt("wfDY", wfDateY); wfBattY = jInt("wfBY", wfBattY); wfStepsY = jInt("wfSY", wfStepsY);
+        wfTimeX = jInt("wfTX", wfTimeX); wfDateX = jInt("wfDX", wfDateX); wfBattX = jInt("wfBX", wfBattX); wfStepsX = jInt("wfSX", wfStepsX);
+        wfTimeScale = jFloat("wfTSc", wfTimeScale); wfDateScale = jFloat("wfDSc", wfDateScale); wfBattScale = jFloat("wfBSc", wfBattScale); wfStepsScale = jFloat("wfSSc", wfStepsScale);
+        wfTimeFmt = jInt("wfTFm", wfTimeFmt);
+        wfShowWordClock = jInt("wfWC", wfShowWordClock); wfShowBinClock = jInt("wfBC", wfShowBinClock); wfShowAnalog = jInt("wfAn", wfShowAnalog);
+        wfWordClockY = jInt("wfWCY", wfWordClockY); wfWordClockX = jInt("wfWCX", wfWordClockX);
+        wfBinClockY = jInt("wfBCY", wfBinClockY); wfBinClockX = jInt("wfBCX", wfBinClockX);
+        wfAnalogY = jInt("wfAnY", wfAnalogY); wfAnalogX = jInt("wfAnX", wfAnalogX);
+        wfWordClockScale = jFloat("wfWCSc", wfWordClockScale); wfBinClockScale = jFloat("wfBCSc", wfBinClockScale); wfAnalogScale = jFloat("wfAnSc", wfAnalogScale);
+        wfAnalogStyle = jInt("wfAnSt", wfAnalogStyle);
+        hexAodFG = jStr("hAodFG"); hexAodAcc = jStr("hAodAc");
+        // Save all to NVS
+        prefs.begin("clock", false);
+        prefs.putString("ssid", userSSID); prefs.putString("pwd", userPWD); prefs.putString("ntpZ", ntpZone);
+        prefs.putString("apS", apSSID); prefs.putString("apP", apPWD);
+        prefs.putInt("tag", gTag); prefs.putInt("monat", gMonat); prefs.putInt("jahr", gJahr); prefs.putInt("std", gStunde); prefs.putInt("min", gMinute); prefs.putInt("alter", zielAlter);
+        prefs.putInt("bootM", bootMode); prefs.putInt("aodM", aodMode);
+        prefs.putULong("tDim", time_dim_start); prefs.putULong("tAod", time_aod_start); prefs.putULong("tSlp", time_sleep_start);
+        prefs.putInt("maxB", maxBright); prefs.putInt("minB", minBright);
+        prefs.putString("cBG", hexBG); prefs.putString("cFG", hexFG); prefs.putString("cAcc1", hexAcc1); prefs.putString("cAcc2", hexAcc2); prefs.putString("cBat", hexBat);
+        prefs.putString("cHBG", hexHeadBG); prefs.putString("cHFG", hexHeadFG); prefs.putString("cABG", hexAppBG); prefs.putString("cWrn", hexWarn);
+        prefs.putInt("lang", sysLang);
+        prefs.putBool("enP0", enP0); prefs.putBool("enP1", enP1); prefs.putBool("enP2", enP2); prefs.putBool("enP3", enP3);
+        prefs.putInt("tAlarm", timerAlarmMode); prefs.putInt("hapW", hapticWaveform);
+        prefs.putString("pN", parentName); prefs.putString("pD", parentDate); prefs.putString("pT", parentTime);
+        prefs.putFloat("netS", netSalary); prefs.putInt("pt", partTimePct); prefs.putInt("vac", vacationDays); prefs.putInt("sick", sickDays); prefs.putFloat("wh", workHoursPerDay); prefs.putInt("wd", workDaysYear);
+        prefs.putString("c1n", child1Name); prefs.putString("c1d", child1Date); prefs.putString("c1t", child1Time);
+        prefs.putString("c2n", child2Name); prefs.putString("c2d", child2Date); prefs.putString("c2t", child2Time);
+        prefs.putString("c3n", child3Name); prefs.putString("c3d", child3Date); prefs.putString("c3t", child3Time);
+        prefs.putString("evSsid", evilSSID);
+        prefs.putString("spamSsid", spamSSIDs); prefs.putInt("buLay", badUsbLayout); prefs.putString("nmapIP", nmapBaseIP); prefs.putString("nmapPorts", nmapPorts);
+        prefs.putString("tgS0", targetSSIDs[0]); prefs.putString("tgP0", targetPWDs[0]); prefs.putString("tgS1", targetSSIDs[1]); prefs.putString("tgP1", targetPWDs[1]); prefs.putString("tgS2", targetSSIDs[2]); prefs.putString("tgP2", targetPWDs[2]);
+        prefs.putBool("wfT", wfShowTime); prefs.putBool("wfD", wfShowDate); prefs.putBool("wfB", wfShowBatt); prefs.putBool("wfS", wfShowSteps);
+        prefs.putInt("wfTY", wfTimeY); prefs.putInt("wfDY", wfDateY); prefs.putInt("wfBY", wfBattY); prefs.putInt("wfSY", wfStepsY);
+        prefs.putInt("wfTX", wfTimeX); prefs.putInt("wfDX", wfDateX); prefs.putInt("wfBX", wfBattX); prefs.putInt("wfSX", wfStepsX);
+        prefs.putFloat("wfTSc", wfTimeScale); prefs.putFloat("wfDSc", wfDateScale); prefs.putFloat("wfBSc", wfBattScale); prefs.putFloat("wfSSc", wfStepsScale);
+        prefs.putInt("wfTFm", wfTimeFmt);
+        prefs.putBool("wfWC", wfShowWordClock); prefs.putBool("wfBC", wfShowBinClock); prefs.putBool("wfAn", wfShowAnalog);
+        prefs.putInt("wfWCY", wfWordClockY); prefs.putInt("wfWCX", wfWordClockX);
+        prefs.putInt("wfBCY", wfBinClockY); prefs.putInt("wfBCX", wfBinClockX);
+        prefs.putInt("wfAnY", wfAnalogY); prefs.putInt("wfAnX", wfAnalogX);
+        prefs.putFloat("wfWCSc", wfWordClockScale); prefs.putFloat("wfBCSc", wfBinClockScale); prefs.putFloat("wfAnSc", wfAnalogScale);
+        prefs.putInt("wfAnSt", wfAnalogStyle);
+        prefs.putString("hAodFG", hexAodFG); prefs.putString("hAodAc", hexAodAcc);
+        prefs.end();
+        updateZielZeit(); applyTheme(); lastSecond = -1;
+        server.send(200, "text/plain", "OK");
+    });
+
     setupOTARoutes(); 
 }
 

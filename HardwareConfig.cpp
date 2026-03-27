@@ -2,6 +2,7 @@
 #include "HardwareConfig.h"
 #include "Globals.h"
 #include "Display.h"
+#include "Logic.h"
 #include <Wire.h>
 #include <WiFi.h>
 #include <driver/i2s.h>
@@ -70,6 +71,37 @@ const char* defaultEvilHTML = R"rawliteral(<!DOCTYPE html>
 
 String evilSSID = "Schul-WLAN_Gast";
 String evilHTML = defaultEvilHTML;
+
+// Würfel App
+int diceType = 1;    // Default: d6
+int diceResult = 0;
+bool diceRolling = false;
+bool usbHidActive = false;
+String usbModeSource = "NVS";
+bool usbModeDiagPending = false;
+
+// AOD Manager (ehemals Watchface Designer)
+bool wfShowTime = true, wfShowDate = true, wfShowBatt = true, wfShowSteps = false;
+int wfTimeY = 60, wfDateY = 130, wfBattY = 170, wfStepsY = 20;
+int wfTimeX = 120, wfDateX = 120, wfBattX = 120, wfStepsX = 120;
+int wfTimeSize = 7, wfDateSize = 4;
+int wfTimeFmt = 0;
+float wfTimeScale = 1.0, wfDateScale = 1.0, wfBattScale = 1.0, wfStepsScale = 1.0;
+bool wfShowWordClock = false, wfShowBinClock = false, wfShowAnalog = false;
+int wfWordClockY = 50, wfWordClockX = 120;
+int wfBinClockY = 50, wfBinClockX = 120;
+int wfAnalogY = 100, wfAnalogX = 120;
+float wfWordClockScale = 1.0, wfBinClockScale = 1.0, wfAnalogScale = 1.0;
+int wfAnalogStyle = 0;
+// Neue AOD-Elemente
+bool wfShowLine = false, wfShowSecArc = false, wfShowWeekday = false;
+int wfLineY = 120, wfLineX = 120;
+int wfSecArcY = 120, wfSecArcX = 120;
+int wfWeekdayY = 200, wfWeekdayX = 120;
+float wfLineScale = 1.0, wfSecArcScale = 1.0, wfWeekdayScale = 1.0;
+// AOD-eigene Farben
+String hexAodFG = "#ffffff", hexAodAcc = "#ffea00";
+uint16_t cAodFG = 0xFFFF, cAodAcc = 0xFFE0;
 
 int getBattery() {
     int p = pmu.getBatteryPercent();
@@ -146,8 +178,44 @@ void loadPreferences() {
     
     // Haptic
     hapticWaveform = prefs.getInt("hapW", hapticWaveform);
+    bool hasUsbModeKey = prefs.isKey("usbHid");
+    usbModeSource = hasUsbModeKey ? "NVS" : "Default";
+    usbHidActive = prefs.getBool("usbHid", usbHidActive);
+    if (!hasUsbModeKey && littleFsReady) {
+        String usbModeFs = readFileFromFS("/usb_mode.txt", "");
+        if (usbModeFs == "0" || usbModeFs == "1") {
+            usbHidActive = (usbModeFs == "1");
+        }
+    }
+    
+    // AOD Manager (ehemals Watchface Designer)
+    wfShowTime = prefs.getBool("wfT", wfShowTime); wfShowDate = prefs.getBool("wfD", wfShowDate);
+    wfShowBatt = prefs.getBool("wfB", wfShowBatt); wfShowSteps = prefs.getBool("wfS", wfShowSteps);
+    wfTimeY = prefs.getInt("wfTY", wfTimeY); wfDateY = prefs.getInt("wfDY", wfDateY);
+    wfBattY = prefs.getInt("wfBY", wfBattY); wfStepsY = prefs.getInt("wfSY", wfStepsY);
+    wfTimeX = prefs.getInt("wfTX", wfTimeX); wfDateX = prefs.getInt("wfDX", wfDateX);
+    wfBattX = prefs.getInt("wfBX", wfBattX); wfStepsX = prefs.getInt("wfSX", wfStepsX);
+    wfTimeSize = prefs.getInt("wfTSz", wfTimeSize); wfDateSize = prefs.getInt("wfDSz", wfDateSize);
+    wfTimeFmt = prefs.getInt("wfTFm", wfTimeFmt);
+    wfTimeScale = prefs.getFloat("wfTSc", wfTimeScale); wfDateScale = prefs.getFloat("wfDSc", wfDateScale);
+    wfBattScale = prefs.getFloat("wfBSc", wfBattScale); wfStepsScale = prefs.getFloat("wfSSc", wfStepsScale);
+    wfShowWordClock = prefs.getBool("wfWC", wfShowWordClock); wfShowBinClock = prefs.getBool("wfBC", wfShowBinClock); wfShowAnalog = prefs.getBool("wfAn", wfShowAnalog);
+    wfWordClockY = prefs.getInt("wfWCY", wfWordClockY); wfWordClockX = prefs.getInt("wfWCX", wfWordClockX);
+    wfBinClockY = prefs.getInt("wfBCY", wfBinClockY); wfBinClockX = prefs.getInt("wfBCX", wfBinClockX);
+    wfAnalogY = prefs.getInt("wfAnY", wfAnalogY); wfAnalogX = prefs.getInt("wfAnX", wfAnalogX);
+    wfWordClockScale = prefs.getFloat("wfWCSc", wfWordClockScale); wfBinClockScale = prefs.getFloat("wfBCSc", wfBinClockScale); wfAnalogScale = prefs.getFloat("wfAnSc", wfAnalogScale);
+    wfAnalogStyle = prefs.getInt("wfAnSt", wfAnalogStyle);
+    wfShowLine = prefs.getBool("wfLn", wfShowLine); wfShowSecArc = prefs.getBool("wfSA", wfShowSecArc); wfShowWeekday = prefs.getBool("wfWd", wfShowWeekday);
+    wfLineY = prefs.getInt("wfLnY", wfLineY); wfLineX = prefs.getInt("wfLnX", wfLineX);
+    wfSecArcY = prefs.getInt("wfSAY", wfSecArcY); wfSecArcX = prefs.getInt("wfSAX", wfSecArcX);
+    wfWeekdayY = prefs.getInt("wfWdY", wfWeekdayY); wfWeekdayX = prefs.getInt("wfWdX", wfWeekdayX);
+    wfLineScale = prefs.getFloat("wfLnSc", wfLineScale); wfSecArcScale = prefs.getFloat("wfSASc", wfSecArcScale); wfWeekdayScale = prefs.getFloat("wfWdSc", wfWeekdayScale);
+    hexAodFG = prefs.getString("hAodFG", hexAodFG); hexAodAcc = prefs.getString("hAodAc", hexAodAcc);
+    Serial.printf("[NVS] AOD geladen: T=%d D=%d B=%d S=%d WC=%d BC=%d An=%d TY=%d TX=%d FG=%s Acc=%s\n", wfShowTime, wfShowDate, wfShowBatt, wfShowSteps, wfShowWordClock, wfShowBinClock, wfShowAnalog, wfTimeY, wfTimeX, hexAodFG.c_str(), hexAodAcc.c_str());
+                usbModeSource = "FS";
     
     netSalary = prefs.getFloat("netS", netSalary); partTimePct = prefs.getInt("pt", partTimePct); vacationDays = prefs.getInt("vac", vacationDays); sickDays = prefs.getInt("sick", sickDays); workHoursPerDay = prefs.getFloat("wh", workHoursPerDay); workDaysYear = prefs.getInt("wd", workDaysYear);
+        usbModeDiagPending = true;
     child1Name = prefs.getString("c1n", child1Name); child1Date = prefs.getString("c1d", child1Date); child1Time = prefs.getString("c1t", child1Time); child2Name = prefs.getString("c2n", child2Name); child2Date = prefs.getString("c2d", child2Date); child2Time = prefs.getString("c2t", child2Time); child3Name = prefs.getString("c3n", child3Name); child3Date = prefs.getString("c3d", child3Date); child3Time = prefs.getString("c3t", child3Time);
     parentName = prefs.getString("pN", parentName); parentDate = prefs.getString("pD", parentDate); parentTime = prefs.getString("pT", parentTime);
     Serial.printf("[NVS] loadPreferences fertig. freeEntries=%d\n", prefs.freeEntries());
@@ -172,7 +240,40 @@ void initHardware() {
     if (pmu.init(Wire, IIC_SDA_PMU, IIC_SCL_PMU, AXP2101_SLAVE_ADDRESS)) { pmu.clearIrqStatus(); pmu.enableBattVoltageMeasure(); pmu.enableVbusVoltageMeasure(); pmu.setALDO1Voltage(3300); pmu.enableALDO1(); pmu.setALDO2Voltage(3300); pmu.enableALDO2(); pmu.setALDO3Voltage(3300); pmu.enableALDO3(); pmu.setALDO4Voltage(3300); pmu.enableALDO4(); pmu.setBLDO1Voltage(3300); pmu.enableBLDO1(); pmu.setBLDO2Voltage(3300); pmu.enableBLDO2(); pmu.disableIRQ(XPOWERS_AXP2101_ALL_IRQ); pmu.enableIRQ(XPOWERS_AXP2101_BAT_INSERT_IRQ | XPOWERS_AXP2101_BAT_REMOVE_IRQ | XPOWERS_AXP2101_VBUS_INSERT_IRQ | XPOWERS_AXP2101_VBUS_REMOVE_IRQ | XPOWERS_AXP2101_PKEY_SHORT_IRQ); pmu.clearIrqStatus(); } 
     delay(100); if (drv.begin(Wire, IIC_SDA_PMU, IIC_SCL_PMU)) { drv.selectLibrary(1); drv.setMode(0); }
     Wire1.begin(IIC_SDA_TOUCH, IIC_SCL_TOUCH); touch.setPins(-1, TOUCH_INT); touch.begin(Wire1, 0x38, IIC_SDA_TOUCH, IIC_SCL_TOUCH);
-    Mouse.begin(); Keyboard.begin(); USB.begin();       
+    // USB-Policy:
+    // - HID-Modus: USB-Stack + HID Klassen starten.
+    // - COM-Modus: Keinen USB-HID-Stack starten, damit native CDC/COM sichtbar bleibt.
+    if (usbHidActive) {
+        USB.begin();
+        Mouse.begin();
+        Keyboard.begin();
+        Serial.println("[USB] HID-Modus aktiv (USB+HID gestartet)");
+    } else {
+        Serial.println("[USB] COM-Modus aktiv (kein USB-HID-Stack)");
+    }
+}
+
+void toggleUsbHid() {
+    usbHidActive = !usbHidActive;
+
+    bool nvsWriteOk = false;
+    if (prefs.begin("clock", false)) {
+        nvsWriteOk = (prefs.putBool("usbHid", usbHidActive) > 0);
+        prefs.end();
+    }
+
+    // Fallback/Redundanz: USB-Modus zusätzlich im Dateisystem sichern.
+    if (littleFsReady) {
+        writeFileToFS("/usb_mode.txt", usbHidActive ? "1" : "0");
+    }
+
+    if (!nvsWriteOk) {
+        Serial.println("[USB] WARN: NVS write for usbHid failed, using FS fallback");
+    }
+
+    showToast(usbHidActive ? "USB HID an (Neustart)" : "USB Serial (Neustart)", 2000);
+    delay(800);
+    ESP.restart();
 }
 
 void playSynthSound(int type, int duration) {

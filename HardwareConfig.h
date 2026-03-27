@@ -5,6 +5,7 @@
 void updateZielZeit();
 void loadPreferences();
 void initHardware();
+void toggleUsbHid();
 void showBootSequence();
 void playBootSound(int type);
 int getBattery();

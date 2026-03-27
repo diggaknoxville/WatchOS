@@ -58,8 +58,14 @@ extern bool swRunning, timerRunning;
 extern long timerRemaining;
 extern int t1, t2, t3; 
 
+// Stoppuhr Rundenzeiten
+#define MAX_LAPS 10
+extern long swLaps[MAX_LAPS];
+extern int swLapCount;
+
 extern String toastMsg;
 extern unsigned long toastEndTime;
+extern uint16_t toastColor; // Toast-Hintergrundfarbe
 
 extern uint8_t batHistoryPct[MAX_HISTORY];
 extern int historyCount;
@@ -72,6 +78,9 @@ extern int16_t startX, startY, lastX, lastY;
 extern bool isSwiping;
 
 extern bool jigglerActive;
+extern bool usbHidActive;
+extern String usbModeSource;
+extern bool usbModeDiagPending;
 extern bool evilActive;
 extern String evilLog;
 extern String evilSSID; 
@@ -139,3 +148,35 @@ extern int hapticWaveform;
 
 // FFat (FAT-Dateisystem)
 extern bool littleFsReady;
+
+// Würfel App (Page 24)
+extern int diceType;       // 0=d4, 1=d6, 2=d8, 3=d10, 4=d12, 5=d20, 6=d100, 7=Münze
+extern int diceResult;
+extern bool diceRolling;
+
+// Wasserwaage App (Page 25)
+// (nutzt BMA423 Accelerometer - keine Extra-Globals nötig)
+
+// AOD Manager (ehemals Watchface Designer)
+extern bool wfShowTime, wfShowDate, wfShowBatt, wfShowSteps;
+extern int wfTimeY, wfDateY, wfBattY, wfStepsY;
+extern int wfTimeX, wfDateX, wfBattX, wfStepsX;
+extern int wfTimeSize, wfDateSize;
+extern int wfTimeFmt; // 0=digital, 1=7seg
+extern float wfTimeScale, wfDateScale, wfBattScale, wfStepsScale; // stufenlos 0.5-3.0
+// AOD-Elemente
+extern bool wfShowWordClock, wfShowBinClock, wfShowAnalog;
+extern int wfWordClockY, wfWordClockX;
+extern int wfBinClockY, wfBinClockX;
+extern int wfAnalogY, wfAnalogX;
+extern float wfWordClockScale, wfBinClockScale, wfAnalogScale;
+extern int wfAnalogStyle; // 0=normal, 1=binär Ziffern, 2=hex Ziffern
+// Neue AOD-Elemente
+extern bool wfShowLine, wfShowSecArc, wfShowWeekday;
+extern int wfLineY, wfLineX;
+extern int wfSecArcY, wfSecArcX;
+extern int wfWeekdayY, wfWeekdayX;
+extern float wfLineScale, wfSecArcScale, wfWeekdayScale;
+// AOD-eigene Farben (unabhängig vom Watchface-Farbschema)
+extern String hexAodFG, hexAodAcc;
+extern uint16_t cAodFG, cAodAcc;

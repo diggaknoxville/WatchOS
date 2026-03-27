@@ -19,13 +19,15 @@ extern "C" {
 }
 
 extern void toggleWLAN();
+extern void toggleUsbHid();
 extern void playSynthSound(int type, int duration);
 
 bool badUsbActive = false;
 bool wifiSpamActive = false;
 bool bleSpamActive = false;
 
-void showToast(String msg, int duration) { toastMsg = msg; toastEndTime = millis() + duration; lastSecond = -1; }
+void showToast(String msg, int duration) { toastMsg = msg; toastEndTime = millis() + duration; toastColor = 0x2945; lastSecond = -1; }
+void showToastColor(String msg, int duration, uint16_t col) { toastMsg = msg; toastEndTime = millis() + duration; toastColor = col; lastSecond = -1; }
 void triggerVibration() { if (vibActive) { drv.selectLibrary(1); drv.setMode(0); drv.setWaveform(0, hapticWaveform); drv.setWaveform(1, 0); drv.run(); } }
 void triggerAlarm() { for(int i=0; i<4; i++) { if(timerAlarmMode == 0 || timerAlarmMode == 2) { drv.selectLibrary(1); drv.setMode(0); drv.setWaveform(0, 47); drv.setWaveform(1, 0); drv.run(); } if(timerAlarmMode == 1 || timerAlarmMode == 2) { playSynthSound(6, 200); } delay(400); } }
 
@@ -33,6 +35,7 @@ void killAllApps() {
     swRunning = false; swElapsed = 0; timerRunning = false; timerRemaining = 0; stopMic(); jigglerActive = false;
     badUsbActive = false; wifiSpamActive = false; bleSpamActive = false;
     nmapActive = false; deauthActive = false;
+    diceRolling = false;
     if (probeMonActive) stopProbeMonitor();
     if (bleScanActive) stopBleScan();
     
@@ -510,8 +513,8 @@ void stopBleScan() {
 void checkBackgroundTasks(unsigned long currentMillis) {
     if (probeMonActive) processProbeRing(); // drain ISR ring buffer safely
     bool isCharging = pmu.isVbusIn() || pmu.isCharging();
-    if (isCharging && !wasCharging) { wasCharging = true; showToast("Wird geladen ⚡", 4000); } else if (!isCharging && wasCharging) { wasCharging = false; showToast("Akku-Modus 🔋", 4000); }
-    if (timerRunning && (currentMillis - timerLastTick >= 1000)) { timerRemaining--; timerLastTick = currentMillis; if (timerRemaining <= 0) { timerRunning = false; timerRemaining = 0; triggerAlarm(); lastSecond = -1; lastTouchTime = currentMillis; showToast("Timer abgelaufen! ⏱️", 6000); } }
+    if (isCharging && !wasCharging) { wasCharging = true; showToastColor("Wird geladen ⚡", 4000, 0x07E0); } else if (!isCharging && wasCharging) { wasCharging = false; showToastColor("Akku-Modus 🔋", 4000, 0x4208); }
+    if (timerRunning && (currentMillis - timerLastTick >= 1000)) { timerRemaining--; timerLastTick = currentMillis; if (timerRemaining <= 0) { timerRunning = false; timerRemaining = 0; triggerAlarm(); lastSecond = -1; lastTouchTime = currentMillis; showToastColor("Timer abgelaufen! ⏱️", 6000, 0xFD20); } }
 
     static unsigned long lastJiggle = 0; 
     if (jigglerActive && currentMillis - lastJiggle > 15000) { Mouse.move(2, 2); delay(50); Mouse.move(-2, -2); lastJiggle = currentMillis; }
@@ -524,6 +527,9 @@ void checkBackgroundTasks(unsigned long currentMillis) {
     if (deauthActive) executeDeauth();
     if (nmapActive) executeNmap();
     if (isScanningAir) scanAir();
+
+    // Neue Good App Updates
+    if (diceRolling) updateDiceAnimation();
 
     if (matrixMode) {
         lastTouchTime = currentMillis; setBrightness(maxBright); int16_t mx[2], my[2];
@@ -557,6 +563,18 @@ void checkBackgroundTasks(unsigned long currentMillis) {
             prefs.begin("clock", false); prefs.putInt("hCount", historyCount); prefs.putBytes("hData", batHistoryPct, MAX_HISTORY); prefs.end();
         }
         if (currentPage == 9) lastSecond = -1; 
+        
+        // Batterie-Warnung bei <15% (nur wenn nicht am Laden)
+        static bool lowBatWarned = false;
+        bool isCharging2 = pmu.isVbusIn() || pmu.isCharging();
+        uint8_t rawBat = getBattery();
+        if (rawBat <= 15 && rawBat > 0 && !isCharging2 && !lowBatWarned) {
+            lowBatWarned = true;
+            triggerVibration(); delay(200); triggerVibration();
+            showToastColor("Akku niedrig! " + String(rawBat) + "%", 5000, TFT_RED);
+        } else if (rawBat > 20 || isCharging2) {
+            lowBatWarned = false;
+        }
     }
 }
 
@@ -662,7 +680,7 @@ void handleTouchInput() {
     if(matrixMode) return;
     int16_t x[2], y[2]; 
     bool isTouched = (touch.getPoint(x, y, 1) > 0); 
-    bool isApp = (currentPage >= 7 && currentPage <= 23); 
+    bool isApp = (currentPage >= 7 && currentPage <= 25); 
 
     if (isTouched) {
         // Doppel-Tipp weckt aus AOD (State 3), Sleep (State 4) und Stealth (State 5)
@@ -683,7 +701,7 @@ void handleTouchInput() {
         }
     } else if (isSwiping) {
         isSwiping = false; int dx = lastX - startX; int dy = lastY - startY;
-        bool isGoodApp = (currentPage == 7 || currentPage == 8 || currentPage == 9 || currentPage == 13 || currentPage == 14);
+        bool isGoodApp = (currentPage == 7 || currentPage == 8 || currentPage == 9 || currentPage == 13 || currentPage == 14 || currentPage == 24 || currentPage == 25);
         bool isBadApp  = (currentPage == 12 || (currentPage >= 15 && currentPage <= 21));
         bool isQSApp   = (currentPage == 10 || currentPage == 11);
         
@@ -704,17 +722,16 @@ void handleTouchInput() {
             lastTouchTime = millis(); return;
         }
         // --- Swipe back: Good Apps -> Good Menu, Bad Apps -> Bad Menu ---
+        // Good: Finger rechts ansetzen, nach links wischen (dx < 0) → zurück zum Good Menu
+        // Bad: Finger links ansetzen, nach rechts wischen (dx > 0) → zurück zum Bad Menu
         else if (abs(dx) > 40 && abs(dx) > abs(dy) && isApp) {
-            // Good Apps: Swipe nach links (dx < 0) -> zurück zu Good Menu (22) [Good liegt links]
             if (isGoodApp && dx < 0) { triggerVibration(); slideToPage(22, -1, 0); lastTouchTime = millis(); return; }
-            // Bad Apps: Swipe nach rechts (dx > 0) -> zurück zu Bad Menu (23) [Bad liegt rechts]
             if (isBadApp && dx > 0) { triggerVibration(); slideToPage(23, 1, 0); lastTouchTime = millis(); return; }
-            // Quick-Settings Apps: Swipe nach oben wird schon behandelt, hier: beliebige Richtung -> zurück
             if (isQSApp) { triggerVibration(); slideToPage(5, (dx > 0) ? 1 : -1, 0); lastTouchTime = millis(); return; }
-            // Good Menu (22): Swipe nach rechts (dx > 0) -> zurück zu App Menü (6) [Page 6 liegt rechts von Good]
-            if (currentPage == 22 && dx > 0) { triggerVibration(); slideToPage(6, 1, 0); lastTouchTime = millis(); return; }
-            // Bad Menu (23): Swipe nach links (dx < 0) -> zurück zu App Menü (6) [Page 6 liegt links von Bad]
-            if (currentPage == 23 && dx < 0) { triggerVibration(); slideToPage(6, -1, 0); lastTouchTime = millis(); return; }
+            // Good Menu (22) -> Übersicht (6): nach links wischen (dx < 0)
+            if (currentPage == 22 && dx < 0) { triggerVibration(); slideToPage(6, -1, 0); lastTouchTime = millis(); return; }
+            // Bad Menu (23) -> Übersicht (6): nach rechts wischen (dx > 0)
+            if (currentPage == 23 && dx > 0) { triggerVibration(); slideToPage(6, 1, 0); lastTouchTime = millis(); return; }
         }
         // --- Swipe UP to kill from Menu Pages 22/23 ---
         else if (dy < -60 && abs(dy) > abs(dx) && (currentPage == 22 || currentPage == 23)) {
@@ -749,14 +766,14 @@ void handleTouchInput() {
                 if (touchY >= 25 && touchY < 65) { if (lastX < 120) { toggleWLAN(); triggerVibration(); lastSecond = -1; } else { toggleBT(); triggerVibration(); lastSecond = -1; } } 
                 else if (touchY >= 70 && touchY < 110) { if (lastX < 120) { toggleVibra(); lastSecond = -1; } else { aodActive = !aodActive; prefs.begin("clock",false); prefs.putBool("aod", aodActive); prefs.end(); triggerVibration(); lastSecond = -1; } } 
                 else if (touchY >= 115 && touchY < 155) { if (lastX < 120) slideToPage(10, 0, -1); else slideToPage(11, 0, -1); }
-                else if (touchY >= 162) { killAllApps(); triggerVibration(); showToast("Alle Apps gestoppt"); lastSecond = -1; }
+                else if (touchY >= 162) { if (lastX < 120) { killAllApps(); triggerVibration(); showToast("Alle Apps gestoppt"); lastSecond = -1; } else { toggleUsbHid(); triggerVibration(); lastSecond = -1; } }
             } 
             else if (currentPage == 6) { 
                 if (touchY >= 30 && touchY <= 195) {
                     if (lastX < 120) { 
-                        triggerVibration(); slideToPage(22, -1, 0);
+                        triggerVibration(); slideToPage(22, 1, 0);   // Good=LINKS: kommt von links
                     } else { 
-                        triggerVibration(); slideToPage(23, 1, 0);
+                        triggerVibration(); slideToPage(23, -1, 0);  // Bad=RECHTS: kommt von rechts
                     }
                 }
             }
@@ -765,7 +782,23 @@ void handleTouchInput() {
             else if (currentPage == 23) { handleBadMenuTouch(lastX, touchY); }
             // === App-Page Taps (nur bei echtem Tap, nicht bei Swipe) ===
             else if (currentPage == 7) { 
-                if (touchY >= 150) { if (lastX < 120) { swRunning = !swRunning; triggerVibration(); if(swRunning) swStartTime = millis(); else swElapsed += (millis() - swStartTime); } else { swRunning = false; swElapsed = 0; triggerVibration(); } lastSecond = -1; delay(200); }
+                if (touchY >= 150) {
+                    if (lastX < 80) {
+                        // Start/Stop
+                        swRunning = !swRunning; triggerVibration();
+                        if(swRunning) swStartTime = millis(); else swElapsed += (millis() - swStartTime);
+                    } else if (lastX < 160 && swRunning && swLapCount < MAX_LAPS) {
+                        // Runde
+                        long lapMs = swElapsed + (millis() - swStartTime);
+                        swLaps[swLapCount++] = lapMs;
+                        triggerVibration();
+                    } else if (lastX >= 160) {
+                        // Reset
+                        swRunning = false; swElapsed = 0; swLapCount = 0;
+                        triggerVibration();
+                    }
+                    lastSecond = -1; delay(200);
+                }
             } else if (currentPage == 8) { 
                 if (!timerRunning) { if (touchY >= 80 && touchY <= 130) { if (lastX < 80) timerRemaining = t1 * 60; else if (lastX < 160) timerRemaining = t2 * 60; else timerRemaining = t3 * 60; timerRunning = true; timerLastTick = millis(); triggerVibration(); lastSecond = -1; delay(200); } } 
                 else { if (touchY >= 150) { timerRunning = false; timerRemaining = 0; triggerVibration(); lastSecond = -1; delay(200); } }
@@ -834,6 +867,7 @@ void handleTouchInput() {
                 } else if (touchY >= 100 && touchY < 140) {
                     if (bleScanScrollOffset < bleScanCount - 3) { bleScanScrollOffset++; lastSecond = -1; }
                 }
+            } else if (currentPage == 24) { handleDiceTouch(lastX, touchY);
             }
             lastTouchTime = millis();
         }

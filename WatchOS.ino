@@ -1,4 +1,9 @@
 // --- WatchOS.ino ---
+#ifdef ARDUINO_USB_CDC_ON_BOOT
+#undef ARDUINO_USB_CDC_ON_BOOT
+#endif
+#define ARDUINO_USB_CDC_ON_BOOT 1
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <FS.h>
@@ -29,8 +34,8 @@ SET_LOOP_TASK_STACK_SIZE(16384);
 XPowersAXP2101 pmu; TouchDrvFT6X36 touch; SensorDRV2605 drv; TFT_eSPI tft = TFT_eSPI(); TFT_eSprite cdSprite = TFT_eSprite(&tft); 
 DNSServer dnsServer; WebServer server(80); Preferences prefs; USBHIDMouse Mouse;
 
-String userSSID = "WLAN_NAME", userPWD = "wlan_password"; 
-String apSSID = "WatchOS", apPWD = "password";
+String userSSID = "Skynet", userPWD = "1nt3rn3t!"; 
+String apSSID = "WatchOS", apPWD = "12345678";
 int gTag = 1, gMonat = 1, gJahr = 1990, gStunde = 12, gMinute = 0, zielAlter = 90; 
 float netSalary = 2000.00, workHoursPerDay = 8.0; 
 int partTimePct = 100, vacationDays = 30, sickDays = 0, workDaysYear = 250;
@@ -52,7 +57,8 @@ struct tm zielZeit; int currentPage = 1, mainPage = 1, lastSecond = -1;
 const char* wochentage[] = {"So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"};
 bool matrixMode = false; int matrixY[24] = {0}; bool micActive = false; double debug_rms = 0.0; 
 unsigned long swStartTime = 0, swElapsed = 0, timerLastTick = 0; bool swRunning = false, timerRunning = false; long timerRemaining = 0; int t1 = 3, t2 = 5, t3 = 10; 
-String toastMsg = ""; unsigned long toastEndTime = 0;
+long swLaps[MAX_LAPS] = {0}; int swLapCount = 0;
+String toastMsg = ""; unsigned long toastEndTime = 0; uint16_t toastColor = 0x2945;
 uint8_t batHistoryPct[MAX_HISTORY]; int historyCount = 0; unsigned long lastHistoryTime = 0; const unsigned long historyInterval = 600000; 
 unsigned long lastTouchTime = 0, lastTapTime = 0; int16_t startX = -1, startY = -1, lastX = -1, lastY = -1;
 bool isSwiping = false, wasCharging = false, bleInitDone = false; int powerState = 1; 
@@ -135,6 +141,7 @@ void setup() {
     }
     loadPreferences();
     Serial.printf("Nach loadPreferences: heap=%d cBG=%s cHBG=%s bootM=%d\n", ESP.getFreeHeap(), hexBG.c_str(), hexHeadBG.c_str(), bootMode);
+    Serial.printf("[WIFI-DBG] apSSID='%s' apPWD='%s' userSSID='%s'\n", apSSID.c_str(), apPWD.c_str(), userSSID.c_str());
     initHardware();
     
     setupServerRoutes(); // NEU: Routen-Weiche exakt EINMAL laden!
@@ -142,6 +149,11 @@ void setup() {
     showBootSequence();
     Serial.printf("Nach Boot: heap=%d psram=%d cdSprite=%s\n", ESP.getFreeHeap(), ESP.getFreePsram(), cdSprite.getPointer() ? "OK" : "NULL!");
     applyTheme(); updateZielZeit();
+    if (usbModeDiagPending) {
+        String usbMode = usbHidActive ? "USB HID" : "USB COM";
+        showToast("USB: " + usbMode + " (" + usbModeSource + ")", 3500);
+        usbModeDiagPending = false;
+    }
     lastTouchTime = millis(); tft.fillScreen(cBG);
     Serial.println("=== Setup fertig ===");
 }

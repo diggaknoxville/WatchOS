@@ -17,6 +17,7 @@ uint16_t hex2rgb565(String hex) {
 void applyTheme() { 
     cBG = hex2rgb565(hexBG); cFG = hex2rgb565(hexFG); cAcc1 = hex2rgb565(hexAcc1); cAcc2 = hex2rgb565(hexAcc2); cBatBG = hex2rgb565(hexBat); 
     cHeadBG = hex2rgb565(hexHeadBG); cHeadFG = hex2rgb565(hexHeadFG); cAppBG = hex2rgb565(hexAppBG); cWarn = hex2rgb565(hexWarn);
+    cAodFG = hex2rgb565(hexAodFG); cAodAcc = hex2rgb565(hexAodAcc);
 }
 void setBrightness(int b) { ledcWrite(45, b); } 
 
@@ -203,10 +204,14 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
             const char* monate[] = {"Januar", "Februar", "Maerz", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"};
             char dBuf[30]; snprintf(dBuf, sizeof(dBuf), "%02d. %s %04d", tgt->tm_mday, monate[tgt->tm_mon], tgt->tm_year+1900);
             long myAgeThenSec = targetDate - uTime; int yearsThen = myAgeThenSec / 31536000;
-            spr->setTextDatum(MC_DATUM); spr->setTextColor(cBatBG); spr->drawString("Heute war " + parentName, 120, 30, 2); spr->drawString("in deinem Alter der", 120, 50, 2);
+            spr->setTextDatum(MC_DATUM); spr->setTextColor(cBatBG); spr->drawString("Heute war für " + parentName, 120, 30, 2); spr->drawString("in deinem Alter der", 120, 50, 2);
             spr->setTextColor(cFG); spr->drawString(dBuf, 120, 85, 4); spr->setTextColor(cBatBG); spr->drawString("An diesem Tag warst Du", 120, 135, 2);
-            if (myAgeThenSec < 0) { spr->setTextColor(cAcc2); spr->drawString("Noch nicht", 120, 160, 4); spr->drawString("geboren.", 120, 185, 4); } else { spr->setTextColor(cAcc2); spr->drawString(String(yearsThen) + " Jahre alt.", 120, 175, 4); }
+            if (myAgeThenSec < 0) { spr->setTextColor(cAcc2); spr->drawString("Noch nicht", 120, 160, 4); spr->drawString("geboren.", 120, 185, 4); } else { spr->setTextColor(cAcc2); spr->drawString(String(yearsThen) + " Jahre", 120, 175, 4); }
         } else { spr->setTextDatum(MC_DATUM); spr->setTextColor(cBatBG); spr->drawString("Daten fehlen", 120, 100, 2); }
+    }
+    // === Page 4 reserviert (nicht mehr in Watchface-Rotation) ===
+    else if (page == 4) {
+        // Leer — AOD wird nur im Web-Dashboard konfiguriert
     }
     // FIX: IP Überlappung behoben!
     else if (page == 5) {
@@ -235,10 +240,12 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
         spr->fillRoundRect(125, 70, 100, 40, 10, aodActive ? TFT_GREEN : cBatBG); spr->setTextColor(aodActive ? TFT_BLACK : cFG); spr->drawString("AOD", 175, 90, 2);
         spr->fillRoundRect(15, 115, 100, 40, 10, cBatBG); spr->setTextColor(cFG); spr->drawString("Akku", 65, 135, 2);
         spr->fillRoundRect(125, 115, 100, 40, 10, cBatBG); spr->setTextColor(cFG); spr->drawString("Licht", 175, 135, 2);
-        // Kill All Button
+        // Row 4: Kill All (links) + USB Toggle (rechts)
         bool anyRun = jigglerActive || badUsbActive || wifiSpamActive || bleSpamActive || deauthActive || nmapActive || evilActive || probeMonActive || bleScanActive || swRunning || timerRunning;
-        spr->fillRoundRect(15, 162, 210, 35, 8, anyRun ? TFT_RED : cBatBG); 
-        spr->setTextColor(anyRun ? TFT_WHITE : cFG); spr->drawString("Kill All", 120, 180, 2);
+        spr->fillRoundRect(15, 162, 100, 35, 8, anyRun ? TFT_RED : cBatBG); 
+        spr->setTextColor(anyRun ? TFT_WHITE : cFG); spr->drawString("Kill All", 65, 180, 2);
+        spr->fillRoundRect(125, 162, 100, 35, 8, usbHidActive ? TFT_PURPLE : cBatBG);
+        spr->setTextColor(usbHidActive ? TFT_WHITE : cFG); spr->drawString(usbHidActive ? "USB HID" : "USB COM", 175, 180, 2);
     }
     else if (page == 6) { 
         spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Apps", 120, 2, 2); spr->setTextDatum(MC_DATUM); 
@@ -267,9 +274,24 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
     else if (page == 7) { 
         spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Stoppuhr", 120, 0, 2); long ms = swRunning ? (swElapsed + (millis() - swStartTime)) : swElapsed;
         char swBuf[20]; snprintf(swBuf, sizeof(swBuf), "%02d:%02d.%02d", (int)(ms/60000), (int)((ms/1000)%60), (int)((ms%1000)/10));
-        int bW = get7SegWidth(String(swBuf), 28, 16, 5); draw7SegString(*spr, String(swBuf), 120 - (bW/2), 70, 28, 16, cAcc1, 5);
-        spr->setTextDatum(MC_DATUM); spr->fillRoundRect(20, 150, 90, 40, 6, swRunning ? TFT_ORANGE : TFT_GREEN); spr->setTextColor(TFT_BLACK); spr->drawString(swRunning ? "Stop" : "Start", 65, 170, 2);
-        spr->fillRoundRect(130, 150, 90, 40, 6, cBatBG); spr->setTextColor(cFG); spr->drawString("Reset", 175, 170, 2);
+        int bW = get7SegWidth(String(swBuf), 22, 12, 4); draw7SegString(*spr, String(swBuf), 120 - (bW/2), 25, 22, 12, cAcc1, 4);
+        // Rundenzeiten anzeigen (letzte 3)
+        if (swLapCount > 0) {
+            spr->setTextDatum(MC_DATUM); spr->setTextColor(cBatBG);
+            int showStart = (swLapCount > 3) ? swLapCount - 3 : 0;
+            for (int i = showStart; i < swLapCount; i++) {
+                int row = i - showStart;
+                long lapMs = swLaps[i];
+                char lapBuf[30]; snprintf(lapBuf, sizeof(lapBuf), "R%d  %02d:%02d.%02d", i+1, (int)(lapMs/60000), (int)((lapMs/1000)%60), (int)((lapMs%1000)/10));
+                spr->setTextColor((i == swLapCount - 1) ? cAcc2 : cBatBG);
+                spr->drawString(lapBuf, 120, 62 + row * 18, 2);
+            }
+        }
+        // Buttons: Start/Stop | Runde | Reset
+        spr->setTextDatum(MC_DATUM);
+        spr->fillRoundRect(5, 150, 72, 40, 6, swRunning ? TFT_ORANGE : TFT_GREEN); spr->setTextColor(TFT_BLACK); spr->drawString(swRunning ? "Stop" : "Start", 41, 170, 2);
+        spr->fillRoundRect(84, 150, 72, 40, 6, (swRunning && swLapCount < MAX_LAPS) ? cAcc2 : cBatBG); spr->setTextColor(swRunning ? TFT_BLACK : TFT_DARKGREY); spr->drawString("Runde", 120, 170, 2);
+        spr->fillRoundRect(163, 150, 72, 40, 6, cBatBG); spr->setTextColor(cFG); spr->drawString("Reset", 199, 170, 2);
     }
     else if (page == 8) { 
         spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Timer", 120, 0, 2); spr->setTextDatum(MC_DATUM); 
@@ -399,8 +421,10 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
     }
     else if (page == 22) { renderGoodMenu(spr); }
     else if (page == 23) { renderBadMenu(spr); }
+    else if (page == 24) { showDice(spr); }
+    else if (page == 25) { showLevel(spr); }
     
-    // Page indicator dots for watchfaces (pages 0-3)
+    // Page indicator dots for watchfaces (pages 0-3 only, Page 4 = AOD Manager Info)
     if (page >= 0 && page <= 3) {
         int dotY = spr->height() - 8;
         int enabledPages[4]; int numEnabled = 0;
@@ -419,7 +443,7 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
         }
     }
 
-    if (millis() < toastEndTime) { int tW = spr->textWidth(toastMsg, 2) + 40; int tX = (240 - tW) / 2; spr->fillRoundRect(tX, 165, tW, 30, 15, TFT_DARKGREY); spr->setTextColor(TFT_WHITE, TFT_DARKGREY); spr->drawCentreString(toastMsg, 120, 173, 2); }
+    if (millis() < toastEndTime) { int tW = spr->textWidth(toastMsg, 2) + 40; int tX = (240 - tW) / 2; spr->fillRoundRect(tX, 165, tW, 30, 15, toastColor); spr->setTextColor(TFT_WHITE, toastColor); spr->drawCentreString(toastMsg, 120, 173, 2); }
 }
 
 void slideToPage(int newPage, int dx, int dy) {
@@ -458,7 +482,8 @@ void slideToPage(int newPage, int dx, int dy) {
 
 void renderUI(unsigned long currentMillis) {
     time_t jetzt; time(&jetzt); struct tm *aktuell = localtime(&jetzt); bool isCharging = pmu.isVbusIn() || pmu.isCharging(); static unsigned long lastFrame = 0;
-    bool fastRefresh = (currentPage == 1 || currentPage == 7 || currentPage == 9); bool forceRender = (aktuell->tm_sec != lastSecond) || (fastRefresh && (currentMillis - lastFrame > 50)) || (currentMillis < toastEndTime) || (currentPage >= 13 && currentPage <= 23);
+
+    bool fastRefresh = (currentPage == 1 || currentPage == 7 || currentPage == 9 || currentPage == 25); bool forceRender = (aktuell->tm_sec != lastSecond) || (fastRefresh && (currentMillis - lastFrame > 50)) || (currentMillis < toastEndTime) || (currentPage >= 13 && currentPage <= 25);
     if (forceRender) { 
         if (cdSprite.getPointer() == nullptr) {
             Serial.println("[RENDER] cdSprite ist NULL - recreate!");
@@ -512,26 +537,66 @@ void renderAOD() {
 
         tft.fillScreen(TFT_BLACK);
 
-        if (aodMode == 0) {
-            tft.setTextDatum(MC_DATUM);
-            tft.setTextColor(cFG, TFT_BLACK);
+        int offX = aodX - 120; // Burn-in offset
+        int offY = aodY - 110;
+
+        // === Digitale Uhrzeit ===
+        if (wfShowTime) {
             char aodBuf[10]; snprintf(aodBuf, sizeof(aodBuf), "%02d:%02d", aktuell->tm_hour, aktuell->tm_min);
-            tft.drawString(aodBuf, aodX, aodY - 35, 7);
-            tft.setTextColor(cBatBG, TFT_BLACK);
+            int px = wfTimeX + offX, py = wfTimeY + offY;
+            tft.setTextDatum(MC_DATUM); tft.setTextColor(cAodFG, TFT_BLACK);
+            if (wfTimeFmt == 1) {
+                // 7-Segment: Basis 40px Höhe bei Scale 1.0
+                int sH = (int)(40 * wfTimeScale); int sW = (int)(sH * 0.6); int sp = (int)(sH * 0.15);
+                int totalW = get7SegWidth(String(aodBuf), sH, sW, sp);
+                // 7seg braucht einen Sprite — zeichne als text fallback im AOD
+                tft.drawString(aodBuf, px, py, wfTimeScale >= 1.2 ? 7 : (wfTimeScale >= 0.7 ? 6 : 4));
+            } else {
+                // Digital: Basis Font 6 (~36px) bei Scale 1.0, stufenlos per setTextSize für >1.0
+                if (wfTimeScale <= 0.6) { tft.setTextSize(1); tft.drawString(aodBuf, px, py, 4); }
+                else if (wfTimeScale <= 1.0) { tft.setTextSize(1); tft.drawString(aodBuf, px, py, 6); }
+                else if (wfTimeScale <= 1.5) { tft.setTextSize(1); tft.drawString(aodBuf, px, py, 7); }
+                else { tft.setTextSize(2); tft.drawString(aodBuf, px, py, 4); } // 2x Font 4 = ~52px
+            }
+            tft.setTextSize(1); // Reset
+        }
+
+        // === Datum ===
+        if (wfShowDate) {
             char dateBuf[20]; snprintf(dateBuf, sizeof(dateBuf), "%s, %02d.%02d.", wochentage[aktuell->tm_wday], aktuell->tm_mday, aktuell->tm_mon + 1);
-            tft.drawString(dateBuf, aodX, aodY + 20, 4);
+            int px = wfDateX + offX, py = wfDateY + offY;
+            tft.setTextDatum(MC_DATUM); tft.setTextColor(cBatBG, TFT_BLACK);
+            int font = 4; if (wfDateScale < 0.7) font = 2; else if (wfDateScale > 1.5) font = 4;
+            tft.drawString(dateBuf, px, py, font);
         }
-        else if (aodMode == 1) {
+
+        // === Akku (mit integriertem Lade-Indikator) ===
+        if (wfShowBatt) {
+            int px = wfBattX + offX, py = wfBattY + offY;
             tft.setTextDatum(MC_DATUM);
-            tft.setTextColor(cAcc2, TFT_BLACK);
-            String hStr = "", mStr = "";
-            int numH = aktuell->tm_hour, numM = aktuell->tm_min;
-            for(int i=0; i<6; i++) { hStr = String(numH % 2) + hStr; numH /= 2; }
-            for(int i=0; i<6; i++) { mStr = String(numM % 2) + mStr; numM /= 2; }
-            tft.drawString(hStr, aodX, aodY - 20, 4);
-            tft.drawString(mStr, aodX, aodY + 15, 4);
+            if (isCharging) {
+                // Lade-Modus: Prozent pulsierend anzeigen (ohne Blitz)
+                uint8_t bri = 100 + animPhase * 50; // 100..250 pulsierend
+                uint16_t pulseCol = tft.color565(bri, bri, 0);
+                tft.setTextColor(pulseCol, TFT_BLACK);
+                tft.drawString(String(batPct) + "%", px, py, 4);
+            } else {
+                uint16_t bCol = (batPct > 50) ? TFT_GREEN : (batPct > 20) ? TFT_YELLOW : TFT_RED;
+                tft.setTextColor(bCol, TFT_BLACK);
+                tft.drawString(String(batPct) + "%", px, py, 4);
+            }
         }
-        else if (aodMode == 2) {
+
+        // === Schritte ===
+        if (wfShowSteps) {
+            int px = wfStepsX + offX, py = wfStepsY + offY;
+            tft.setTextDatum(MC_DATUM); tft.setTextColor(cAodAcc, TFT_BLACK);
+            tft.drawString("Schritte: --", px, py, 2);
+        }
+
+        // === Wortuhr ===
+        if (wfShowWordClock) {
+            int px = wfWordClockX + offX, py = wfWordClockY + offY;
             tft.setTextDatum(TL_DATUM);
             const char* grid[10] = {"ESKISTAFUNF", "ZEHNZWANZIG", "DREIVIERTEL", "TGNACHVORJM", "HALBXZWOLFP", "ZWEINSIEBEN", "KDREIRHFUNF", "ELFNEUNVIER", "WACHTZEHNRS", "BSECHSFUHRX"};
             bool active[10][11] = {false};
@@ -542,46 +607,123 @@ void renderAOD() {
             switch(m5) { case 0: setW(9,7,3); break; case 1: setW(0,7,4); setW(3,2,4); break; case 2: setW(1,0,4); setW(3,2,4); break; case 3: setW(2,4,7); setW(3,2,4); break; case 4: setW(1,4,7); setW(3,2,4); break; case 5: setW(0,7,4); setW(3,6,3); setW(4,0,4); break; case 6: setW(4,0,4); break; case 7: setW(0,7,4); setW(3,2,4); setW(4,0,4); break; case 8: setW(1,4,7); setW(3,6,3); break; case 9: setW(2,4,7); setW(3,6,3); break; case 10: setW(1,0,4); setW(3,6,3); break; case 11: setW(0,7,4); setW(3,6,3); break; }
             int sH = h; if (m >= 25) sH++; sH = sH % 12; if (sH == 0) sH = 12;
             switch(sH) { case 1: if (m5==0) setW(5,2,3); else setW(5,2,4); break; case 2: setW(5,0,4); break; case 3: setW(6,1,4); break; case 4: setW(7,7,4); break; case 5: setW(6,7,4); break; case 6: setW(9,1,5); break; case 7: setW(5,5,6); break; case 8: setW(8,1,4); break; case 9: setW(7,3,4); break; case 10: setW(8,5,4); break; case 11: setW(7,0,3); break; case 12: setW(4,5,5); break; }
-            int stX = aodX - 95; int stY = aodY - 100; int sXs = 18; int sYs = 18;
-            for(int r=0; r<10; r++) { for(int c=0; c<11; c++) { tft.setTextColor(active[r][c] ? cAcc1 : cBatBG, TFT_BLACK); tft.drawChar(grid[r][c], stX + c*sXs, stY + r*sYs, 2); } }
+            // Basis: 14px pro Zeichen bei Scale 1.0 → 11 Spalten = 154px, 10 Zeilen = 140px
+            int sXs = (int)(14 * wfWordClockScale); int sYs = (int)(14 * wfWordClockScale);
+            int stX = px - (int)(77 * wfWordClockScale); int stY = py - (int)(70 * wfWordClockScale);
+            int fnt = 1; // Font 1 = 8px, passt gut für 14px Spacing
+            if (wfWordClockScale >= 1.5) fnt = 2; // Ab 1.5x Scale: Font 2
+            for(int r=0; r<10; r++) { for(int c=0; c<11; c++) { tft.setTextColor(active[r][c] ? cAodAcc : cBatBG, TFT_BLACK); tft.drawChar(grid[r][c], stX + c*sXs, stY + r*sYs, fnt); } }
         }
 
-        // Draw battery info (full redraw)
-        drawAodBattery(aodX, aodY, isCharging, batPct, animPhase);
-    }
-    else if (isCharging && animTick) {
-        // Only update the charging bolt area — no full screen redraw
-        drawAodBattery(aodX, aodY, true, batPct, animPhase);
-    }
-}
+        // === Binäruhr ===
+        if (wfShowBinClock) {
+            int px = wfBinClockX + offX, py = wfBinClockY + offY;
+            tft.setTextDatum(MC_DATUM); tft.setTextColor(cAodAcc, TFT_BLACK);
+            String hStr = "", mStr = "";
+            int numH = aktuell->tm_hour, numM = aktuell->tm_min;
+            for(int i=0; i<6; i++) { hStr = String(numH % 2) + hStr; numH /= 2; }
+            for(int i=0; i<6; i++) { mStr = String(numM % 2) + mStr; numM /= 2; }
+            // Binär: Basis Font 4 bei Scale 1.0, Gap 24
+            int fnt = 4; if (wfBinClockScale < 0.7) fnt = 2; else if (wfBinClockScale > 1.5) fnt = 6;
+            int gap = (int)(24 * wfBinClockScale);
+            tft.drawString(hStr, px, py - gap/2, fnt);
+            tft.drawString(mStr, px, py + gap/2, fnt);
+        }
 
-// Helper: draw charging bolt or battery % in AOD area
-void drawAodBattery(int aodX, int aodY, bool isCharging, int batPct, uint8_t animPhase) {
-    tft.setTextDatum(MC_DATUM);
-    if (isCharging) {
-        uint8_t bri = 100 + animPhase * 50; // 100..250
-        uint16_t boltCol = tft.color565(bri, bri, 0);
-        int bx = aodX, by = aodY + 72;
-        // Clear bolt area
-        tft.fillRect(bx - 12, by - 16, 24, 34, TFT_BLACK);
-        // Lightning bolt shape: zig-zag polygon drawn with two triangles
-        //    top spike going upper-left to center-right
-        //    bottom spike from center-left to lower-right
-        //       *  (bx-2, by-14)
-        //      / \
-        //     /   * (bx+6, by-2)
-        //    * ---/  (bx-4, by-2)
-        //     \
-        //      * (bx+2, by+14)
-        tft.fillTriangle(bx - 2, by - 14, bx + 6, by - 2, bx - 4, by - 2, boltCol);  // top half
-        tft.fillTriangle(bx + 4, by + 2,  bx - 6, by + 2, bx + 2, by + 14, boltCol);  // bottom half
-        // Battery percentage text
-        tft.fillRect(aodX - 30, aodY + 86, 60, 18, TFT_BLACK);
-        tft.setTextColor(boltCol, TFT_BLACK);
-        tft.drawString(String(batPct) + "%", aodX, aodY + 96, 2);
-    } else {
-        tft.fillRect(aodX - 30, aodY + 80, 60, 18, TFT_BLACK);
-        tft.setTextColor(cBatBG, TFT_BLACK);
-        tft.drawString(String(batPct) + "%", aodX, aodY + 90, 2);
+        // === Analoguhr ===
+        if (wfShowAnalog) {
+            int cx = wfAnalogX + offX, cy = wfAnalogY + offY;
+            int r = (int)(80 * wfAnalogScale); // Basis: 80px Radius bei Scale 1.0 = 160px Durchmesser
+            // Ziffernblatt
+            tft.drawCircle(cx, cy, r, cBatBG);
+            for (int i = 0; i < 12; i++) {
+                float angle = i * 30.0 * 3.14159 / 180.0;
+                int x1 = cx + (int)((r - 6) * sin(angle));
+                int y1 = cy - (int)((r - 6) * cos(angle));
+                int x2 = cx + (int)(r * sin(angle));
+                int y2 = cy - (int)(r * cos(angle));
+                tft.drawLine(x1, y1, x2, y2, cBatBG);
+                // Ziffern je nach Stil
+                int numX = cx + (int)((r - 14) * sin(angle));
+                int numY = cy - (int)((r - 14) * cos(angle));
+                tft.setTextDatum(MC_DATUM); tft.setTextColor(cBatBG, TFT_BLACK);
+                int num = (i == 0) ? 12 : i;
+                if (wfAnalogStyle == 1) {
+                    // Binär
+                    String bStr = ""; int n = num; for(int b=0; b<4; b++) { bStr = String(n%2) + bStr; n /= 2; }
+                    tft.drawString(bStr, numX, numY, 1);
+                } else if (wfAnalogStyle == 2) {
+                    // Hex
+                    char hBuf[4]; snprintf(hBuf, sizeof(hBuf), "%X", num);
+                    tft.drawString(hBuf, numX, numY, 1);
+                } else {
+                    tft.drawString(String(num), numX, numY, 1);
+                }
+            }
+            // Stundenzeiger
+            float hAngle = ((aktuell->tm_hour % 12) + aktuell->tm_min / 60.0) * 30.0 * 3.14159 / 180.0;
+            int hx = cx + (int)((r * 0.5) * sin(hAngle));
+            int hy = cy - (int)((r * 0.5) * cos(hAngle));
+            tft.drawLine(cx, cy, hx, hy, cAodFG); tft.drawLine(cx+1, cy, hx+1, hy, cAodFG);
+            // Minutenzeiger
+            float mAngle = aktuell->tm_min * 6.0 * 3.14159 / 180.0;
+            int mx = cx + (int)((r * 0.75) * sin(mAngle));
+            int my = cy - (int)((r * 0.75) * cos(mAngle));
+            tft.drawLine(cx, cy, mx, my, cAodAcc);
+            // Mittelpunkt
+            tft.fillCircle(cx, cy, 3, cAodFG);
+        }
+
+        // === Trennlinie ===
+        if (wfShowLine) {
+            int px = wfLineX + offX, py = wfLineY + offY;
+            int lw = (int)(120 * wfLineScale);
+            tft.drawFastHLine(px - lw / 2, py, lw, cBatBG);
+            tft.drawFastHLine(px - lw / 2, py + 1, lw, cBatBG);
+        }
+
+        // === Minuten-Bogen ===
+        if (wfShowSecArc) {
+            int cx = wfSecArcX + offX, cy = wfSecArcY + offY;
+            int r = (int)(80 * wfSecArcScale);
+            int lw = (int)(4 * wfSecArcScale); if (lw < 2) lw = 2;
+            // Hintergrund-Ring (dunkel)
+            for (int a = 0; a < 360; a += 3) {
+                float rad = a * 3.14159 / 180.0;
+                int x1 = cx + (int)((r - lw) * sin(rad));
+                int y1 = cy - (int)((r - lw) * cos(rad));
+                tft.drawPixel(x1, y1, tft.color565(30, 30, 30));
+            }
+            // Fortschritts-Bogen (Minuten 0-59 = 0°-360°)
+            int endAngle = (int)(aktuell->tm_min * 6); // 6° pro Minute
+            for (int a = 0; a < endAngle; a++) {
+                float rad = a * 3.14159 / 180.0;
+                for (int t = -lw/2; t <= lw/2; t++) {
+                    int px = cx + (int)((r + t) * sin(rad));
+                    int py = cy - (int)((r + t) * cos(rad));
+                    tft.drawPixel(px, py, cAodAcc);
+                }
+            }
+        }
+
+        // === Wochentag ===
+        if (wfShowWeekday) {
+            int px = wfWeekdayX + offX, py = wfWeekdayY + offY;
+            tft.setTextDatum(MC_DATUM); tft.setTextColor(cAodAcc, TFT_BLACK);
+            const char* tage[] = {"SONNTAG", "MONTAG", "DIENSTAG", "MITTWOCH", "DONNERSTAG", "FREITAG", "SAMSTAG"};
+            int fnt = 4; if (wfWeekdayScale < 0.7) fnt = 2; else if (wfWeekdayScale > 1.5) fnt = 4;
+            tft.drawString(tage[aktuell->tm_wday], px, py, fnt);
+        }
+    }
+    else if (isCharging && animTick && wfShowBatt) {
+        // Nur Lade-Puls-Animation updaten (kein voller Redraw) — nur Prozent pulsierend
+        int offX = aodX - 120, offY = aodY - 110;
+        int px = wfBattX + offX, py = wfBattY + offY;
+        uint8_t bri = 100 + animPhase * 50;
+        uint16_t pulseCol = tft.color565(bri, bri, 0);
+        tft.setTextDatum(MC_DATUM);
+        tft.fillRect(px - 40, py - 12, 80, 24, TFT_BLACK);
+        tft.setTextColor(pulseCol, TFT_BLACK);
+        tft.drawString(String(batPct) + "%", px, py, 4);
     }
 }

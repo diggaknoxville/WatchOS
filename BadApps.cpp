@@ -30,8 +30,8 @@ void renderBadMenu(TFT_eSprite *spr) {
     };
     int count = 8;
 
-    int bW = 100, bH = 42, gapY = 6;
-    int startY = 24;
+    int bW = 100, bH = 38, gapY = 4;
+    int startY = 22;
     for (int i = 0; i < count; i++) {
         int col = i % 2;
         int row = i / 2;
@@ -54,7 +54,7 @@ void renderBadMenu(TFT_eSprite *spr) {
 }
 
 void handleBadMenuTouch(int x, int touchY) {
-    int bH = 42, gapY = 6, startY = 24;
+    int bH = 38, gapY = 4, startY = 22;
     int row = (touchY - startY) / (bH + gapY);
     int col = (x < 120) ? 0 : 1;
     int idx = row * 2 + col;

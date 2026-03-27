@@ -14,3 +14,11 @@ void handleRechnerTouch(int x, int y);
 // Jiggler (Page 14)
 void showJiggler(TFT_eSprite *spr);
 void handleJigglerTouch(int x, int y);
+
+// Würfel (Page 24)
+void showDice(TFT_eSprite *spr);
+void handleDiceTouch(int x, int y);
+void updateDiceAnimation();
+
+// Wasserwaage (Page 25)
+void showLevel(TFT_eSprite *spr);
