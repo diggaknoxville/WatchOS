@@ -27,6 +27,57 @@ const char* tr(int lang, const char* de, const char* en, const char* fr) {
     return de;
 }
 
+// Estimate minutes to empty/full from recent battery history samples.
+// Returns -1 when there is not enough directional trend data.
+static int estimateBatteryEtaMinutes(bool chargingNow, int currentPct) {
+    if (historyCount < 2 || historyInterval <= 0) return -1;
+
+    int start = max(0, historyCount - 24); // last up to ~24 samples
+    float dirSum = 0.0f;
+    int dirCnt = 0;
+
+    auto decodePct = [](int raw) {
+        int pct = raw % 100;
+        if (raw >= 200 && pct == 0 && raw != 200) pct = 100;
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+        return pct;
+    };
+
+    int prev = decodePct(batHistoryPct[start]);
+    for (int i = start + 1; i < historyCount; i++) {
+        int cur = decodePct(batHistoryPct[i]);
+        int d = cur - prev;
+        prev = cur;
+
+        // Ignore implausible jumps from sampling glitches.
+        if (abs(d) > 20) continue;
+
+        if (chargingNow) {
+            if (d > 0) { dirSum += (float)d; dirCnt++; }
+        } else {
+            if (d < 0) { dirSum += (float)(-d); dirCnt++; }
+        }
+    }
+
+    if (dirCnt == 0) return -1;
+
+    float avgDeltaPerSample = dirSum / (float)dirCnt;
+    float minsPerSample = (float)historyInterval / 60000.0f;
+    if (avgDeltaPerSample <= 0.0001f || minsPerSample <= 0.0f) return -1;
+
+    float pctPerMinute = avgDeltaPerSample / minsPerSample;
+    if (pctPerMinute <= 0.0001f) return -1;
+
+    float remainingPct = chargingNow ? (100.0f - (float)currentPct) : (float)currentPct;
+    if (remainingPct <= 0.0f) return 0;
+
+    int eta = (int)(remainingPct / pctPerMinute);
+    if (eta < 0) eta = -1;
+    if (eta > 10080) eta = 10080; // cap at 7 days
+    return eta;
+}
+
 void handleApiStatus() {
     time_t jetzt; time(&jetzt); struct tm *aktuell = localtime(&jetzt);
     float dailyNet = (netSalary * 12.0) / 365.0; float fraction = (millis() % 1000) / 1000.0; 
@@ -47,70 +98,139 @@ void handleApiStatus() {
     else if (rssi >= -50) rssi_pct = 100;
     else rssi_pct = 2 * (rssi + 100);
     
-    char json[900];
-    snprintf(json, sizeof(json), "{\"akku\":%d,\"volt\":\"%.2f\",\"cpu\":\"%.1f\",\"ram_free\":%d,\"ram_tot\":%d,\"geld\":\"%.4f\",\"wifi\":%s,\"charging\":%s,\"bt\":%s,\"ssid\":\"%s\",\"ip\":\"%s\",\"cpufreq\":%d,\"uptime\":%lu,\"rssi\":%d,\"rssi_pct\":%d}", 
-             getBattery(), pmu.getBattVoltage()/1000.0, temperatureRead(), 
+    int battPct = getBattery();
+    int etaMin = estimateBatteryEtaMinutes(isCharging, battPct);
+    const char* etaMode = "unknown";
+    if (etaMin >= 0) etaMode = isCharging ? "charge" : "discharge";
+
+    char json[1024];
+    snprintf(json, sizeof(json), "{\"akku\":%d,\"volt\":\"%.2f\",\"cpu\":\"%.1f\",\"ram_free\":%d,\"ram_tot\":%d,\"geld\":\"%.4f\",\"wifi\":%s,\"charging\":%s,\"bt\":%s,\"ssid\":\"%s\",\"ip\":\"%s\",\"cpufreq\":%d,\"uptime\":%lu,\"rssi\":%d,\"rssi_pct\":%d,\"eta_min\":%d,\"eta_mode\":\"%s\"}", 
+             battPct, pmu.getBattVoltage()/1000.0, temperatureRead(), 
              (int)(ESP.getFreeHeap() / 1024), (int)(ESP.getHeapSize() / 1024), earnedToday, 
              (WiFi.status() == WL_CONNECTED || wlanActive || evilActive || wifiSpamActive || deauthActive || nmapActive) ? "true" : "false",
              isCharging ? "true" : "false", btActive ? "true" : "false", currentSSID.c_str(), currentIP.c_str(),
-             ESP.getCpuFreqMHz(), millis() / 1000, rssi, rssi_pct);
+             ESP.getCpuFreqMHz(), millis() / 1000, rssi, rssi_pct, etaMin, etaMode);
     server.send(200, "application/json", json);
 }
 
 String getBatteryHtml() {
-    time_t jetzt; time(&jetzt); struct tm *aktuell = localtime(&jetzt); int curH = aktuell->tm_hour; int curM = aktuell->tm_min; String s; s.reserve(4000);
-    
+    time_t jetzt; time(&jetzt); struct tm *aktuell = localtime(&jetzt); int curH = aktuell->tm_hour; int curM = aktuell->tm_min; String s; s.reserve(6400);
+
+    const char* tTitle = tr(sysLang, "Akku Verlauf & Power Status", "Battery History & Power Status", "Historique Batterie & Etat Energie");
+    const char* tBack = tr(sysLang, "Zurueck zum Dashboard", "Back to Dashboard", "Retour au Dashboard");
+    const char* tFilterRange = tr(sysLang, "Zeitraum", "Time Range", "Periode");
+    const char* tFilterMode = tr(sysLang, "Modus", "Mode", "Mode");
+    const char* tAll = tr(sysLang, "Alles", "All", "Tout");
+    const char* tLast6h = tr(sysLang, "Letzte 6h", "Last 6h", "Dernieres 6h");
+    const char* tLast24h = tr(sysLang, "Letzte 24h", "Last 24h", "Dernieres 24h");
+    const char* tLast72h = tr(sysLang, "Letzte 72h", "Last 72h", "Dernieres 72h");
+    const char* tNormal = tr(sysLang, "Normal", "Normal", "Normal");
+    const char* tHack = tr(sysLang, "Hacking", "Hacking", "Hacking");
+    const char* tCharge = tr(sysLang, "Laden", "Charging", "Charge");
+
     s += F(R"rawliteral(<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>
     <style>
       body{background:#1a1a1a;color:#fff;font-family:sans-serif;text-align:center;padding:20px;margin:0;}
-      .btn{background:#555;color:white;padding:12px 20px;border:none;border-radius:6px;text-decoration:none;display:inline-block;margin-top:20px;}
-      #chart-container { position: relative; max-width: 800px; margin: 0 auto; background: #2d2d2d; border-radius: 10px; padding: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); }
+      .btn{background:#555;color:white;padding:12px 20px;border:none;border-radius:8px;text-decoration:none;display:inline-block;margin-top:20px;min-height:44px;line-height:20px;}
+      #chart-container { position: relative; max-width: 900px; margin: 0 auto; background: #2d2d2d; border-radius: 12px; padding: 18px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); }
       canvas { width: 100%; height: auto; cursor: crosshair; }
-      #tooltip { position: absolute; background: rgba(0,0,0,0.85); padding: 12px; border-radius: 6px; color: #fff; font-size: 13px; pointer-events: none; display: none; text-align: left; z-index: 10; border: 1px solid #555; white-space: nowrap; transform: translate(-50%, -120%); }
-      .legend { display: flex; justify-content: center; flex-wrap: wrap; gap: 15px; margin-top: 20px; font-size: 13px; }
+      #tooltip { position: absolute; background: rgba(0,0,0,0.9); padding: 10px; border-radius: 6px; color: #fff; font-size: 13px; pointer-events: none; display: none; text-align: left; z-index: 10; border: 1px solid #555; white-space: nowrap; transform: translate(-50%, -120%); }
+      .legend { display: flex; justify-content: center; flex-wrap: wrap; gap: 12px; margin-top: 16px; font-size: 12px; }
       .leg-item { display: flex; align-items: center; gap: 6px; color: #ccc; }
       .dot { width: 12px; height: 12px; border-radius: 50%; }
+      .filters { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; margin: 0 0 14px 0; }
+      .fg { background:#1f1f1f; border:1px solid #505050; border-radius:8px; padding:8px 10px; }
+      .grp { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+      .tag { font-size:12px; color:#bbb; }
+      .fbtn { background:#3a3a3a; color:#fff; border:1px solid #666; border-radius:6px; padding:8px 10px; min-height:38px; cursor:pointer; }
+      .fbtn.active { background:#4CAF50; color:#000; border-color:#4CAF50; font-weight:bold; }
+      select { background:#111; color:#fff; border:1px solid #666; border-radius:6px; padding:8px; min-height:38px; }
     </style>
-    </head><body>
-    <h2>Akku Verlauf & Power Status</h2>
-    <div id='chart-container'>
-      <div id='tooltip'></div>
-      <canvas id='chart' width='800' height='350'></canvas>
-      <div class='legend'>
-         <div class='leg-item'><div class='dot' style='background:#4CAF50;'></div>Normal (AOD / Sleep)</div>
-         <div class='leg-item'><div class='dot' style='background:#ff0000;'></div>Stealth (Hacking aktiv)</div>
-         <div class='leg-item'><div class='dot' style='background:#00aaff;'></div>Am Strom geladen</div>
-      </div>
-    </div>
-    <a href='/' class='btn'>&#8592; Zurueck zum Dashboard</a>
-    <script>)rawliteral");
+    </head><body>)rawliteral");
+
+    s += "<h2>" + String(tTitle) + "</h2>";
+    s += F("<div id='chart-container'>");
+    s += F("<div class='filters'>");
+    s += "<div class='fg grp'><span class='tag'>" + String(tFilterRange) + "</span>";
+    s += "<button class='fbtn active' data-range='6h'>" + String(tLast6h) + "</button>";
+    s += "<button class='fbtn' data-range='24h'>" + String(tLast24h) + "</button>";
+    s += "<button class='fbtn' data-range='72h'>" + String(tLast72h) + "</button>";
+    s += "<button class='fbtn' data-range='all'>" + String(tAll) + "</button></div>";
+    s += "<div class='fg grp'><span class='tag'>" + String(tFilterMode) + "</span>";
+    s += "<select id='modeFilter'><option value='all'>" + String(tAll) + "</option><option value='0'>" + String(tNormal) + "</option><option value='1'>" + String(tHack) + "</option><option value='2'>" + String(tCharge) + "</option></select></div>";
+    s += F("</div><div id='tooltip'></div><canvas id='chart' width='860' height='360'></canvas>");
+    s += F("<div class='legend'>");
+    s += "<div class='leg-item'><div class='dot' style='background:#4CAF50;'></div>" + String(tr(sysLang, "Linie: Normal", "Line: Normal", "Ligne: Normal")) + "</div>";
+    s += "<div class='leg-item'><div class='dot' style='background:#ff0000;'></div>" + String(tr(sysLang, "Linie: Hacking", "Line: Hacking", "Ligne: Hacking")) + "</div>";
+    s += "<div class='leg-item'><div class='dot' style='background:#00aaff;'></div>" + String(tr(sysLang, "Linie: Laden", "Line: Charging", "Ligne: Charge")) + "</div>";
+    s += "<div class='leg-item'><div class='dot' style='background:#2ecc71;'></div>" + String(tr(sysLang, "Flaeche: 75-100%", "Area: 75-100%", "Surface: 75-100%")) + "</div>";
+    s += "<div class='leg-item'><div class='dot' style='background:#f1c40f;'></div>" + String(tr(sysLang, "Flaeche: 50-74%", "Area: 50-74%", "Surface: 50-74%")) + "</div>";
+    s += "<div class='leg-item'><div class='dot' style='background:#ff9800;'></div>" + String(tr(sysLang, "Flaeche: 25-49%", "Area: 25-49%", "Surface: 25-49%")) + "</div>";
+    s += "<div class='leg-item'><div class='dot' style='background:#e53935;'></div>" + String(tr(sysLang, "Flaeche: 0-24%", "Area: 0-24%", "Surface: 0-24%")) + "</div>";
+    s += F("</div></div>");
+    s += "<a href='/' class='btn'>&#8592; " + String(tBack) + "</a>";
+    s += F("<script>");
 
     s += F("var rawData = [");
     for(int i=0; i<historyCount; i++) { s += batHistoryPct[i]; if(i < historyCount - 1) s += F(","); }
     s += F("];\nvar intervalMins = "); s += (historyInterval / 60000); s += F(";\nvar curH = "); s += curH; s += F(";\nvar curM = "); s += curM; s += F(";\n");
 
+    s += "var txBattery='" + String(tr(sysLang, "Akku", "Battery", "Batterie")) + "';";
+    s += "var txStatus='" + String(tr(sysLang, "Status", "Status", "Statut")) + "';";
+    s += "var txZone='" + String(tr(sysLang, "Krit. Zone", "Critical Zone", "Zone Critique")) + "';";
+    s += "var zoneGreen='" + String(tr(sysLang, "Gruen", "Green", "Vert")) + "';";
+    s += "var zoneYellow='" + String(tr(sysLang, "Gelb", "Yellow", "Jaune")) + "';";
+    s += "var zoneOrange='" + String(tr(sysLang, "Orange", "Orange", "Orange")) + "';";
+    s += "var zoneRed='" + String(tr(sysLang, "Rot", "Red", "Rouge")) + "';";
+    s += "var stCharge='" + String(tr(sysLang, "Laden (USB)", "Charging (USB)", "Charge (USB)")) + "';";
+    s += "var stHack='" + String(tr(sysLang, "Hacking aktiv", "Hacking active", "Hacking actif")) + "';";
+    s += "var stNormal='" + String(tr(sysLang, "Normal", "Normal", "Normal")) + "';";
+
     s += F(R"rawliteral(
     var canvas = document.getElementById('chart'); var ctx = canvas.getContext('2d'); var tooltip = document.getElementById('tooltip');
     var w = canvas.width; var h = canvas.height; var padX = 50; var padY = 30; var chartW = w - padX * 2; var chartH = h - padY * 2;
     var curDate = new Date(); curDate.setHours(curH, curM, 0, 0);
-
-    var data = [];
+    var dataRaw = [];
     for(var i=0; i<rawData.length; i++) {
         var v = rawData[i]; var pct = v % 100;
-        if(v >= 200 && pct === 0 && v !== 200) pct = 100; 
+        if(v >= 200 && pct === 0 && v !== 200) pct = 100;
         var state = (v >= 200) ? 2 : (v >= 100 ? 1 : 0);
         var t = new Date(curDate.getTime() - (rawData.length - 1 - i) * intervalMins * 60000);
-        data.push({ x: padX + (i / Math.max(1, rawData.length - 1)) * chartW, y: padY + chartH - (pct / 100) * chartH, pct: pct, state: state, time: t });
+        dataRaw.push({ pct: pct, state: state, time: t });
+    }
+
+    var selectedRange = '6h';
+    var data = [];
+
+    function modeColor(state){ if(state === 2) return '#00aaff'; if(state === 1) return '#ff0000'; return '#4CAF50'; }
+    function battFillColor(pct){ if(pct >= 75) return 'rgba(46,204,113,0.28)'; if(pct >= 50) return 'rgba(241,196,15,0.28)'; if(pct >= 25) return 'rgba(255,152,0,0.30)'; return 'rgba(229,57,53,0.34)'; }
+
+    function inRange(t) {
+        var diffH = (curDate.getTime() - t.getTime()) / 3600000;
+        if(selectedRange === '6h') return diffH <= 6.0;
+        if(selectedRange === '24h') return diffH <= 24.0;
+        if(selectedRange === '72h') return diffH <= 72.0;
+        return true;
+    }
+
+    function applyFilters() {
+        var mode = document.getElementById('modeFilter').value;
+        var filtered = [];
+        for (var i = 0; i < dataRaw.length; i++) {
+            if (!inRange(dataRaw[i].time)) continue;
+            if (mode !== 'all' && dataRaw[i].state !== parseInt(mode)) continue;
+            filtered.push(dataRaw[i]);
+        }
+        data = [];
+        for (var j = 0; j < filtered.length; j++) {
+            data.push({ x: padX + (j / Math.max(1, filtered.length - 1)) * chartW, y: padY + chartH - (filtered[j].pct / 100) * chartH, pct: filtered[j].pct, state: filtered[j].state, time: filtered[j].time });
+        }
     }
 
     function drawBase() {
         ctx.clearRect(0,0,w,h); ctx.fillStyle = '#aaa'; ctx.strokeStyle = '#444'; ctx.lineWidth = 1; ctx.font = '12px sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
         ctx.beginPath();
-        for(var i=0; i<=4; i++){
-            var y = padY + chartH - (i/4)*chartH;
-            ctx.moveTo(padX, y); ctx.lineTo(w-padX, y);
-            ctx.fillText(i*25+'%', padX - 10, y);
-        }
+        for(var i=0; i<=4; i++){ var y = padY + chartH - (i/4)*chartH; ctx.moveTo(padX, y); ctx.lineTo(w-padX, y); ctx.fillText(i*25+'%', padX - 10, y); }
         ctx.stroke();
 
         ctx.textAlign = 'center'; ctx.textBaseline = 'top';
@@ -118,24 +238,38 @@ String getBatteryHtml() {
             var numLabels = 6;
             for(var i=0; i<=numLabels; i++) {
                 var idx = Math.floor(i * (data.length-1) / numLabels);
-                if(data[idx]) {
-                    var tx = data[idx].x;
-                    var tm = ('0'+data[idx].time.getHours()).slice(-2) + ':' + ('0'+data[idx].time.getMinutes()).slice(-2);
-                    ctx.fillText(tm, tx, h - padY + 10);
-                }
+                if(data[idx]) { var tx = data[idx].x; var tm = ('0'+data[idx].time.getHours()).slice(-2) + ':' + ('0'+data[idx].time.getMinutes()).slice(-2); ctx.fillText(tm, tx, h - padY + 10); }
+            }
+        }
+
+        if(data.length > 1) {
+            for(var i=1; i<data.length; i++) {
+                var x1 = data[i-1].x, x2 = data[i].x, y1 = data[i-1].y, y2 = data[i].y;
+                var midPct = Math.round((data[i-1].pct + data[i].pct) / 2);
+                ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x2, padY + chartH); ctx.lineTo(x1, padY + chartH); ctx.closePath();
+                ctx.fillStyle = battFillColor(midPct); ctx.fill();
             }
         }
 
         if(data.length > 1) {
             ctx.lineWidth = 3;
-            for(var i=1; i<data.length; i++) {
-                ctx.beginPath(); ctx.moveTo(data[i-1].x, data[i-1].y); ctx.lineTo(data[i].x, data[i].y);
-                if(data[i].state === 2) ctx.strokeStyle = '#00aaff'; else if(data[i].state === 1) ctx.strokeStyle = '#ff0000'; else ctx.strokeStyle = '#4CAF50';
-                ctx.stroke();
-            }
+            for(var i=1; i<data.length; i++) { ctx.beginPath(); ctx.moveTo(data[i-1].x, data[i-1].y); ctx.lineTo(data[i].x, data[i].y); ctx.strokeStyle = modeColor(data[i].state); ctx.stroke(); }
         }
     }
-    drawBase();
+
+    function redraw() { applyFilters(); drawBase(); }
+
+    document.querySelectorAll('[data-range]').forEach(function(btn){
+        btn.addEventListener('click', function(){
+            selectedRange = btn.getAttribute('data-range');
+            document.querySelectorAll('[data-range]').forEach(function(b){ b.classList.remove('active'); });
+            btn.classList.add('active');
+            tooltip.style.display = 'none';
+            redraw();
+        });
+    });
+
+    document.getElementById('modeFilter').addEventListener('change', function(){ tooltip.style.display = 'none'; redraw(); });
 
     canvas.addEventListener('mousemove', function(e) {
         var rect = canvas.getBoundingClientRect(); var scaleX = canvas.width / rect.width; var scaleY = canvas.height / rect.height;
@@ -147,19 +281,21 @@ String getBatteryHtml() {
 
         drawBase();
         ctx.beginPath(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]); ctx.moveTo(closest.x, padY); ctx.lineTo(closest.x, padY + chartH); ctx.stroke(); ctx.setLineDash([]);
-        ctx.beginPath(); ctx.arc(closest.x, closest.y, 6, 0, 2*Math.PI); ctx.fillStyle = closest.state === 2 ? '#00aaff' : (closest.state === 1 ? '#ff0000' : '#4CAF50'); ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle='#fff'; ctx.stroke();
+        ctx.beginPath(); ctx.arc(closest.x, closest.y, 6, 0, 2*Math.PI); ctx.fillStyle = modeColor(closest.state); ctx.fill(); ctx.lineWidth=2; ctx.strokeStyle='#fff'; ctx.stroke();
 
-        var stateStr = closest.state === 2 ? '⚡ Laden (USB)' : (closest.state === 1 ? '🔥 Hacking aktiv' : '💤 Normal');
+        var stateStr = closest.state === 2 ? stCharge : (closest.state === 1 ? stHack : stNormal);
+        var krit = (closest.pct >= 75) ? zoneGreen : (closest.pct >= 50) ? zoneYellow : (closest.pct >= 25) ? zoneOrange : zoneRed;
         var timeStr = ('0'+closest.time.getHours()).slice(-2) + ':' + ('0'+closest.time.getMinutes()).slice(-2);
-        tooltip.innerHTML = '<b style="color:#4CAF50;">' + timeStr + ' Uhr</b><br><br><b>Akku:</b> ' + closest.pct + '%<br><b>Status:</b> ' + stateStr;
+        tooltip.innerHTML = '<b style="color:#4CAF50;">' + timeStr + '</b><br><br><b>' + txBattery + ':</b> ' + closest.pct + '%<br><b>' + txStatus + ':</b> ' + stateStr + '<br><b>' + txZone + ':</b> ' + krit;
         tooltip.style.display = 'block';
-        
+
         var tipX = (closest.x / scaleX);
         if(tipX + 120 > rect.width) tipX -= 50; else if(tipX - 120 < 0) tipX += 50;
         tooltip.style.left = tipX + 'px'; tooltip.style.top = (closest.y / scaleY) + 'px';
     });
 
     canvas.addEventListener('mouseleave', function() { tooltip.style.display = 'none'; drawBase(); });
+    redraw();
     </script></body></html>)rawliteral");
     return s;
 }
@@ -206,7 +342,7 @@ body{font-family:sans-serif;background:#1a1a1a;color:#ffffff;padding:10px;margin
 .panel.active{display:block;} 
 input,select,textarea{padding:10px;margin:8px 0;border-radius:6px;border:1px solid #555;width:100%;box-sizing:border-box;background:#fff;color:#000; transition: background 0.3s, color 0.3s, border 0.3s;} 
 input[type='color']{padding:0;height:40px;cursor:pointer;} 
-.btn{background:#4CAF50;color:white;font-weight:bold;border:none;cursor:pointer;padding:12px;border-radius:6px;width:100%;margin-bottom:10px;} 
+.btn{background:#4CAF50;color:white;font-weight:bold;border:none;cursor:pointer;padding:12px;border-radius:6px;width:100%;margin-bottom:10px;min-height:44px;} 
 .btn-blue{background:#2196F3;} .btn-red{background:#f44336;} .btn-gray{background:#555;} 
 .toast{visibility:hidden;min-width:250px;background-color:#4CAF50;color:#fff;text-align:center;border-radius:5px;padding:16px;position:fixed;z-index:1;left:50%;bottom:30px;transform:translateX(-50%);} 
 .toast.show{visibility:visible;animation:fadein 0.5s, fadeout 0.5s 2.5s;} 
@@ -226,12 +362,54 @@ body.light-mode .box-title { color: #2e7d32; border-bottom: 1px solid #eee; }
 body.light-mode #w_ssid, body.light-mode #w_ip { color: #555 !important; }
 body.light-mode b[style*="color:#fff"] { color: #000 !important; }
 body.light-mode pre { background: #f0f0f0 !important; color: #000 !important; border: 1px solid #ccc; }
+/* ACCESSIBILITY: high contrast mode */
+body.high-contrast { background:#000 !important; color:#fff !important; }
+body.high-contrast .tabs, body.high-contrast .panel, body.high-contrast .box { background:#000 !important; border:2px solid #fff !important; box-shadow:none !important; }
+body.high-contrast .tab { color:#fff !important; }
+body.high-contrast .tab.active { background:#111 !important; border-bottom:3px solid #ffea00 !important; color:#ffea00 !important; }
+body.high-contrast input, body.high-contrast select, body.high-contrast textarea { background:#000 !important; color:#fff !important; border:2px solid #fff !important; }
+body.high-contrast .box-title { color:#ffea00 !important; border-bottom:1px solid #ffea00 !important; }
+body.high-contrast .btn { border:2px solid #fff !important; }
+body.high-contrast #wifi_icon, body.high-contrast #bt_icon { stroke:#fff !important; }
 /* RESPONSIVE: hamburger for small screens */
 .hamburger{display:none;background:#2d2d2d;color:#fff;border:none;font-size:28px;cursor:pointer;padding:10px 16px;width:100%;text-align:left;border-radius:8px;margin-bottom:4px;}
 body.light-mode .hamburger{background:#fff;color:#111;border:1px solid #ccc;}
 @media(max-width:520px){.hamburger{display:block;} .tabs{display:none;flex-direction:column;} .tabs.open{display:flex;} .tab{text-align:left;padding:14px 18px;border-bottom:none;border-left:3px solid transparent;} .tab.active{border-left:3px solid #4CAF50;border-bottom:none;}}
 </style>
 <script>
+const I18N = {
+    selectFirmware: { de:'Bitte Firmware-Datei waehlen!', en:'Please select a firmware file!', fr:'Veuillez selectionner un fichier firmware !' },
+    otaSuccess: { de:'Erfolgreich! Neustart...', en:'Success! Rebooting...', fr:'Succes ! Redemarrage...' },
+    otaError: { de:'Fehler!', en:'Error!', fr:'Erreur !' },
+    fileVersion: { de:'Datei-Version', en:'File version', fr:'Version fichier' },
+    current: { de:'Aktuell', en:'Current', fr:'Actuelle' },
+    unknown: { de:'unbekannt', en:'unknown', fr:'inconnue' },
+    notAvailable: { de:'nicht verfuegbar', en:'not available', fr:'indisponible' },
+    stopBadAppsOk: { de:'Bad Apps gestoppt.', en:'Bad apps stopped.', fr:'Apps bad arretees.' },
+    stopBadAppsFail: { de:'Stop fehlgeschlagen', en:'Stop failed', fr:'Echec de l\'arret' },
+    scanWifiBusy: { de:'Scanne... (kann dauern)', en:'Scanning... (may take a while)', fr:'Scan en cours... (cela peut prendre du temps)' },
+    scanWifiIdle: { de:'WLANs scannen', en:'Scan WiFis', fr:'Scanner les WiFis' },
+    scanFoundNetworks: { de:'Netzwerke gefunden!', en:'networks found!', fr:'reseaux trouves !' },
+    scanError: { de:'Fehler beim Scannen', en:'Error during scan', fr:'Erreur pendant le scan' },
+    scanRouterBusy: { de:'Scanne Router...', en:'Scanning routers...', fr:'Scan des routeurs...' },
+    scanRouterIdle: { de:'Router scannen', en:'Scan routers', fr:'Scanner les routeurs' },
+    deauthConfirmPrefix: { de:'Deauth auf ', en:'Prepare deauth for ', fr:'Preparer deauth pour ' },
+    deauthConfirmSuffix: { de:'? Danach 3s Safety-Countdown.', en:'? Then 3s safety countdown.', fr:' ? Puis compte a rebours securite de 3s.' },
+    deauthStartedPrefix: { de:'Deauth Angriff auf ', en:'Deauth attack started on ', fr:'Attaque deauth lancee sur ' },
+    chargingShort: { de:'Laedt', en:'Charging', fr:'Charge' },
+    etaUnknown: { de:'--', en:'--', fr:'--' },
+    etaToEmpty: { de:'bis leer', en:'to empty', fr:'jusqu\'a vide' },
+    etaToFull: { de:'bis voll', en:'to full', fr:'jusqu\'a plein' },
+    aodSaveError: { de:'AOD Speicherfehler: HTTP ', en:'AOD save error: HTTP ', fr:'Erreur de sauvegarde AOD : HTTP ' },
+    aodNetError: { de:'AOD Netzwerkfehler: ', en:'AOD network error: ', fr:'Erreur reseau AOD : ' }
+};
+function t(k){
+    var l=(window.UI_LANG===undefined?0:window.UI_LANG);
+    var e=I18N[k];
+    if(!e) return k;
+    return l===1?e.en:(l===2?e.fr:e.de);
+}
+function i18n3(de,en,fr){ return (window.UI_LANG===1?en:(window.UI_LANG===2?fr:de)); }
 function showTab(id, el){ document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active')); document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active')); document.getElementById(id).classList.add('active'); el.classList.add('active'); } 
 function toggleTheme() { 
     document.body.classList.toggle('light-mode'); 
@@ -239,6 +417,10 @@ function toggleTheme() {
     localStorage.setItem('lightMode', isLight);
     document.getElementById('moon_icon').style.display = isLight ? 'none' : 'block';
     document.getElementById('sun_icon').style.display = isLight ? 'block' : 'none';
+}
+function toggleContrast() {
+    document.body.classList.toggle('high-contrast');
+    localStorage.setItem('highContrast', document.body.classList.contains('high-contrast'));
 }
 function applyThemePreset() { 
     var v = document.getElementById('themeSel').value; 
@@ -254,22 +436,111 @@ function setC(bg,fg,a1,a2,bat, hbg, hfg, abg, wrn) {
 function saveForm(formId){ var data = new URLSearchParams(new FormData(document.getElementById(formId))); data.append('_form', formId); fetch('/save', {method:'POST', body:data}).then(()=>{ var t = document.getElementById('toast'); t.className = 'toast show'; setTimeout(function(){ t.className = t.className.replace('show', ''); }, 3000); }); return false; }
 function saveTime(){ var data = new URLSearchParams(new FormData(document.getElementById('fTime'))); fetch('/settime', {method:'POST', body:data}).then(()=>{ var t = document.getElementById('toast'); t.className = 'toast show'; setTimeout(function(){ t.className = t.className.replace('show', ''); }, 3000); }); return false; }
 function previewHTML() { var w = window.open('', '_blank'); w.document.write(document.getElementsByName('evHtml')[0].value); w.document.close(); }
-function uploadOTA() { var file = document.getElementById('otafile').files[0]; if(!file) { alert('Bitte Firmware-Datei waehlen!'); return; } var fd = new FormData(); fd.append('update', file); var xhr = new XMLHttpRequest(); document.getElementById('otaprog-container').style.display = 'block'; xhr.upload.addEventListener('progress', function(e) { if(e.lengthComputable) { var pct = Math.round((e.loaded / e.total) * 100); document.getElementById('otaprog').style.width = pct + '%'; document.getElementById('otaprog').innerHTML = pct + '%'; } }, false); xhr.addEventListener('load', function() { if(xhr.status == 200) { document.getElementById('otaprog').innerHTML = 'Erfolgreich! Neustart...'; setTimeout(function(){ location.reload(); }, 6000); } else { document.getElementById('otaprog').innerHTML = 'Fehler!'; document.getElementById('otaprog').style.background = 'red'; } }, false); xhr.open('POST', '/update?size=' + file.size, true); xhr.send(fd); }
+async function fileSHA256(file) {
+    var buf = await file.arrayBuffer();
+    var hash = await crypto.subtle.digest('SHA-256', buf);
+    var bytes = Array.from(new Uint8Array(hash));
+    return bytes.map(function(b){ return b.toString(16).padStart(2, '0'); }).join('');
+}
+function parseVersionFromFilename(name) {
+    var m = name.match(/v?(\d+\.\d+\.\d+)/i);
+    return m ? m[1] : null;
+}
+function updateOtaMeta() {
+    var file = document.getElementById('otafile').files[0];
+    if(!file) return;
+    var cur = document.getElementById('ota_cur_ver') ? document.getElementById('ota_cur_ver').innerText : '';
+    var found = parseVersionFromFilename(file.name);
+    var meta = document.getElementById('ota_meta');
+    if(meta) meta.innerText = found
+        ? (t('fileVersion') + ': ' + found + ' | ' + t('current') + ': ' + cur)
+        : (t('fileVersion') + ': ' + t('unknown') + ' | ' + t('current') + ': ' + cur);
+    fileSHA256(file).then(function(h){ var out = document.getElementById('ota_sha'); if(out) out.innerText = 'SHA-256: ' + h; }).catch(function(){ var out = document.getElementById('ota_sha'); if(out) out.innerText = 'SHA-256: ' + t('notAvailable'); });
+}
+function uploadOTA() {
+    var file = document.getElementById('otafile').files[0];
+    if(!file) { alert(t('selectFirmware')); return; }
+    var fd = new FormData(); fd.append('update', file);
+    var xhr = new XMLHttpRequest();
+    document.getElementById('otaprog-container').style.display = 'block';
+    xhr.upload.addEventListener('progress', function(e) {
+        if(e.lengthComputable) {
+            var pct = Math.round((e.loaded / e.total) * 100);
+            document.getElementById('otaprog').style.width = pct + '%';
+            document.getElementById('otaprog').innerHTML = pct + '%';
+        }
+    }, false);
+    xhr.addEventListener('load', function() {
+        if(xhr.status == 200) {
+            document.getElementById('otaprog').innerHTML = t('otaSuccess');
+            setTimeout(function(){ location.reload(); }, 6000);
+        } else {
+            document.getElementById('otaprog').innerHTML = t('otaError');
+            document.getElementById('otaprog').style.background = 'red';
+        }
+    }, false);
+    xhr.open('POST', '/update?size=' + file.size, true);
+    xhr.send(fd);
+}
+
+function applyPortPreset(val) {
+    var out = document.getElementsByName('nmapPorts')[0];
+    if(!out) return;
+    var map = {
+        quick: '80,443',
+        webdev: '80,443,3000,5173,8080,8443',
+        full: '21,22,23,25,53,80,110,139,143,443,445,3389,5900,8080'
+    };
+    if(map[val]) out.value = map[val];
+}
+
+function saveAndRememberHacker() {
+    var f = document.getElementById('fHacker1');
+    if(f) {
+        var data = {
+            tgS0: (f.querySelector('[name=tgS0]')||{}).value || '',
+            tgS1: (f.querySelector('[name=tgS1]')||{}).value || '',
+            tgS2: (f.querySelector('[name=tgS2]')||{}).value || '',
+            nmapIP: (f.querySelector('[name=nmapIP]')||{}).value || '',
+            nmapPorts: (f.querySelector('[name=nmapPorts]')||{}).value || ''
+        };
+        localStorage.setItem('hackerRecent', JSON.stringify(data));
+    }
+    return saveForm('fHacker1');
+}
+
+function loadHackerRecent() {
+    var raw = localStorage.getItem('hackerRecent');
+    if(!raw) return;
+    try {
+        var d = JSON.parse(raw);
+        var f = document.getElementById('fHacker1');
+        if(!f) return;
+        ['tgS0','tgS1','tgS2','nmapIP','nmapPorts'].forEach(function(k){
+            var el = f.querySelector('[name='+k+']');
+            if(el && d[k] && el.value.trim() === '') el.value = d[k];
+        });
+    } catch(e) {}
+}
+
+function stopBadApps() {
+    fetch('/stopbad', {method:'POST'}).then(function(){ alert(t('stopBadAppsOk')); }).catch(function(){ alert(t('stopBadAppsFail')); });
+}
 
 function scanWifi() {
-    var btn = document.getElementById('scanBtn'); btn.value = 'Scanne... (kann dauern)';
+    var btn = document.getElementById('scanBtn'); btn.value = t('scanWifiBusy');
     fetch('/wifiscan').then(r=>r.json()).then(d=>{
-        btn.value = 'WLANs scannen';
+        btn.value = t('scanWifiIdle');
         var dl = document.getElementById('scannedWifis'); dl.innerHTML = '';
         var unique = []; d.forEach(ssid => { if(unique.indexOf(ssid) === -1 && ssid.length > 0) { unique.push(ssid); var opt = document.createElement('option'); opt.value = ssid; dl.appendChild(opt); } });
-        alert(unique.length + ' Netzwerke gefunden!');
-    }).catch(e=>{ btn.value = 'WLANs scannen'; alert('Fehler beim Scannen'); });
+        alert(unique.length + ' ' + t('scanFoundNetworks'));
+    }).catch(e=>{ btn.value = t('scanWifiIdle'); alert(t('scanError')); });
 }
 
 function scanRouters() {
-    var btn = document.getElementById('scanRBtn'); btn.value = 'Scanne Router...';
+    var btn = document.getElementById('scanRBtn'); btn.value = t('scanRouterBusy');
     fetch('/routerscan').then(r=>r.json()).then(d=>{
-        btn.value = 'Routern scannen';
+        btn.value = t('scanRouterIdle');
         var t = document.getElementById('routerTable'); t.innerHTML = '';
         d.forEach(n => {
             var div = document.createElement('div');
@@ -279,45 +550,85 @@ function scanRouters() {
         });
     });
 }
-function deauthMac(mac) { fetch('/deauth?mac='+mac); alert('Deauth Angriff auf ' + mac + ' gestartet!'); }
+function deauthMac(mac) {
+    var c = 3;
+    var ok = confirm(t('deauthConfirmPrefix') + mac + t('deauthConfirmSuffix'));
+    if(!ok) return;
+    var iv = setInterval(function(){
+        c--;
+        if(c <= 0) {
+            clearInterval(iv);
+            fetch('/deauth?mac='+mac);
+            alert(t('deauthStartedPrefix') + mac + '!');
+        }
+    }, 1000);
+}
 
-function updateLive() { 
-    fetch('/api/status').then(r=>r.json()).then(d=>{ 
-        if(document.getElementById('d_ak')) document.getElementById('d_ak').innerHTML = d.akku + '%' + (d.charging ? ' <span style="color:#00aaff;">(L&auml;dt)</span>' : ''); 
-        if(document.getElementById('d_vo')) document.getElementById('d_vo').innerHTML = d.volt + ' V'; 
-        if(document.getElementById('d_cp')) document.getElementById('d_cp').innerHTML = d.cpu + ' &deg;C'; 
-        if(document.getElementById('d_ge')) document.getElementById('d_ge').innerHTML = d.geld + ' &euro;'; 
-        if(document.getElementById('d_cf')) document.getElementById('d_cf').innerHTML = d.cpufreq + ' MHz';
-        
-        // RAM (RELATIV)
-        if(document.getElementById('d_ra')) { 
-            let rPct = Math.round((d.ram_free / d.ram_tot) * 100);
-            document.getElementById('d_ra').innerHTML = d.ram_free + ' KB / ' + d.ram_tot + ' KB (' + rPct + '%)'; 
-        }
-        // WLAN SIGNAL (RELATIV)
-        if(document.getElementById('d_rs')) { 
-            document.getElementById('d_rs').innerHTML = (d.rssi < 0) ? d.rssi + ' dBm (' + d.rssi_pct + '%)' : '--'; 
-        }
-        
-        if(document.getElementById('d_up')) { let u = d.uptime; let h = Math.floor(u/3600); let m = Math.floor((u%3600)/60); document.getElementById('d_up').innerHTML = h+'h '+m+'m '+(u%60)+'s'; }
-        
-        if(document.getElementById('h_batt_txt')) {
-            document.getElementById('h_batt_txt').innerText = d.akku + '%' + (d.charging ? ' \u26A1' : '');
-            var f = document.getElementById('h_batt_fill'); f.style.width = d.akku + '%';
-            if(d.charging) f.style.background = '#00aaff'; else if(d.akku > 50) f.style.background = '#4CAF50'; else if(d.akku > 20) f.style.background = '#ff9800'; else f.style.background = '#f44336';
-        }
-        
-        if(document.getElementById('w_ssid')) document.getElementById('w_ssid').innerText = d.ssid;
-        if(document.getElementById('w_ip')) document.getElementById('w_ip').innerText = d.ip;
-        
-        if(document.getElementById('wifi_icon')) document.getElementById('wifi_icon').setAttribute('stroke', d.wifi ? (document.body.classList.contains('light-mode') ? '#000' : '#fff') : '#555');
-        if(document.getElementById('bt_icon')) document.getElementById('bt_icon').setAttribute('stroke', d.bt ? '#00aaff' : '#555');
-        
-        setTimeout(updateLive, 500); 
-    }).catch(e=>{ setTimeout(updateLive, 2000); }); 
+let liveInFlight = false;
+let liveTimer = null;
+function scheduleLive(ms){ if(liveTimer) clearTimeout(liveTimer); liveTimer = setTimeout(updateLive, ms); }
+function setHtmlIfChanged(id, html){ var el=document.getElementById(id); if(el && el.innerHTML!==html) el.innerHTML=html; }
+function setTextIfChanged(id, txt){ var el=document.getElementById(id); if(el && el.innerText!==txt) el.innerText=txt; }
+
+function fmtEta(mins, mode){
+    if(mins === undefined || mins === null || mins < 0) return t('etaUnknown');
+    var h = Math.floor(mins / 60);
+    var m = mins % 60;
+    var base = h > 0 ? (h + 'h ' + m + 'm') : (m + 'm');
+    if(mode === 'charge') return base + ' ' + t('etaToFull');
+    if(mode === 'discharge') return base + ' ' + t('etaToEmpty');
+    return base;
+}
+
+function updateLive() {
+    if (liveInFlight) return;
+    liveInFlight = true;
+    fetch('/api/status', { cache: 'no-store' }).then(r=>r.json()).then(d=>{
+        requestAnimationFrame(function(){
+            setHtmlIfChanged('d_ak', d.akku + '%' + (d.charging ? (' <span style="color:#00aaff;">(' + t('chargingShort') + ')</span>') : ''));
+            setHtmlIfChanged('d_vo', d.volt + ' V');
+            setHtmlIfChanged('d_cp', d.cpu + ' &deg;C');
+            setHtmlIfChanged('d_ge', d.geld + ' &euro;');
+            setHtmlIfChanged('d_cf', d.cpufreq + ' MHz');
+
+            if(document.getElementById('d_ra')) {
+                let rPct = Math.round((d.ram_free / d.ram_tot) * 100);
+                setHtmlIfChanged('d_ra', d.ram_free + ' KB / ' + d.ram_tot + ' KB (' + rPct + '%)');
+            }
+            if(document.getElementById('d_rs')) {
+                setHtmlIfChanged('d_rs', (d.rssi < 0) ? d.rssi + ' dBm (' + d.rssi_pct + '%)' : '--');
+            }
+            if(document.getElementById('d_up')) {
+                let u = d.uptime; let h = Math.floor(u/3600); let m = Math.floor((u%3600)/60);
+                setHtmlIfChanged('d_up', h+'h '+m+'m '+(u%60)+'s');
+            }
+            setHtmlIfChanged('d_eta', fmtEta(d.eta_min, d.eta_mode));
+
+            if(document.getElementById('h_batt_txt')) {
+                setTextIfChanged('h_batt_txt', d.akku + '%' + (d.charging ? ' \u26A1' : ''));
+                var f = document.getElementById('h_batt_fill');
+                f.style.width = d.akku + '%';
+                if(d.charging) f.style.background = '#00aaff'; else if(d.akku > 50) f.style.background = '#4CAF50'; else if(d.akku > 20) f.style.background = '#ff9800'; else f.style.background = '#f44336';
+            }
+
+            setTextIfChanged('w_ssid', d.ssid);
+            setTextIfChanged('w_ip', d.ip);
+
+            if(document.getElementById('wifi_icon')) document.getElementById('wifi_icon').setAttribute('stroke', d.wifi ? (document.body.classList.contains('light-mode') ? '#000' : '#fff') : '#555');
+            if(document.getElementById('bt_icon')) document.getElementById('bt_icon').setAttribute('stroke', d.bt ? '#00aaff' : '#555');
+        });
+
+        liveInFlight = false;
+        scheduleLive(document.hidden ? 2500 : 700);
+    }).catch(function(){
+        liveInFlight = false;
+        scheduleLive(2500);
+    });
 }
 window.onload = function() {
     if(localStorage.getItem('lightMode') === 'true') { toggleTheme(); }
+    if(localStorage.getItem('highContrast') === 'true') { document.body.classList.add('high-contrast'); }
+    loadHackerRecent();
     updateLive();
 };
 function syncTitle(id, val) { document.getElementById(id).innerText = val; }
@@ -326,20 +637,23 @@ function updateVal(id, val) { document.getElementById(id).innerText = val + '%';
 
     // HEADER mit Dark/Light Switcher (Sonne/Mond)
     s += F("<div style='display:flex; align-items:center; justify-content:space-between; margin-bottom:15px; padding-top:5px;'>");
-    s += F("<h2 style='margin:0;'>WatchOS Zentrale</h2>");
+    s += F("<h2 style='margin:0;'>"); s += tr(sysLang, "WatchOS Zentrale", "WatchOS Hub", "Centre WatchOS"); s += F("</h2>");
     s += F("<div style='display:flex; align-items:center; gap:15px;'>");
     
     s += F("<div style='display:flex; align-items:center; gap:5px;'><svg id='bt_icon' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='#555' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6.5 6.5 17.5 17.5 12 23 12 1 17.5 6.5 6.5 17.5'></polyline></svg></div>");
     s += F("<div style='display:flex; align-items:center; gap:5px; text-align:right;'><div style='display:flex; flex-direction:column; font-size:10px; color:#aaa; line-height:1.2;'><span id='w_ssid'></span><span id='w_ip'></span></div><svg id='wifi_icon' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='#555' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M5 12.55a11 11 0 0 1 14.08 0'></path><path d='M1.42 9a16 16 0 0 1 21.16 0'></path><path d='M8.53 16.11a6 6 0 0 1 6.95 0'></path><line x1='12' y1='20' x2='12.01' y2='20'></line></svg></div>");
-    s += F("<div style='display:flex; align-items:center; gap:5px; font-size:13px; font-weight:bold;'><span id='h_batt_txt'>--%</span><div style='width:22px; height:11px; border:2px solid #aaa; border-radius:3px; position:relative;'><div id='h_batt_fill' style='background:#4CAF50; width:50%; height:100%; transition: width 0.3s;'></div><div style='position:absolute; right:-4px; top:2px; width:2px; height:5px; background:#aaa; border-radius:0 2px 2px 0;'></div></div></div>");
+    s += F("<a href='/battery' style='display:flex; align-items:center; gap:5px; font-size:13px; font-weight:bold; color:inherit; text-decoration:none;'><span id='h_batt_txt'>--%</span><div style='width:22px; height:11px; border:2px solid #aaa; border-radius:3px; position:relative;'><div id='h_batt_fill' style='background:#4CAF50; width:50%; height:100%; transition: width 0.3s;'></div><div style='position:absolute; right:-4px; top:2px; width:2px; height:5px; background:#aaa; border-radius:0 2px 2px 0;'></div></div></a>");
     
     // Sun / Moon Toggle
     s += F("<div style='cursor:pointer;' onclick='toggleTheme()'>");
     s += F("<svg id='moon_icon' width='22' height='22' viewBox='0 0 24 24' fill='none' stroke='#aaa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z'></path></svg>");
     s += F("<svg id='sun_icon' width='22' height='22' viewBox='0 0 24 24' fill='none' stroke='#ffa500' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' style='display:none;'><circle cx='12' cy='12' r='5'></circle><line x1='12' y1='1' x2='12' y2='3'></line><line x1='12' y1='21' x2='12' y2='23'></line><line x1='4.22' y1='4.22' x2='5.64' y2='5.64'></line><line x1='18.36' y1='18.36' x2='19.78' y2='19.78'></line><line x1='1' y1='12' x2='3' y2='12'></line><line x1='21' y1='12' x2='23' y2='12'></line><line x1='4.22' y1='19.78' x2='5.64' y2='18.36'></line><line x1='18.36' y1='5.64' x2='19.78' y2='4.22'></line></svg>");
     s += F("</div>");
+    s += F("<div style='cursor:pointer; color:#aaa; font-size:14px; font-weight:bold; border:1px solid #666; border-radius:6px; padding:4px 8px;' onclick='toggleContrast()' title='"); s += tr(sysLang, "Hoher Kontrast", "High Contrast", "Haut contraste"); s += F("'>HC</div>");
 
-    s += F("<form action='/reboot' method='POST' style='margin:0;' onsubmit='return confirm(\"Uhr wirklich neustarten?\");'><button type='submit' style='background:transparent; border:none; color:#f44336; cursor:pointer; padding:0;' title='Neustart'><svg width='28' height='28' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M18.36 6.64a9 9 0 1 1-12.73 0'></path><line x1='12' y1='2' x2='12' y2='12'></line></svg></button></form></div></div>");
+    s += F("<form action='/reboot' method='POST' style='margin:0;' onsubmit='return confirm(\""); s += tr(sysLang, "Uhr wirklich neustarten?", "Really reboot watch?", "Redemarrer la montre ?"); s += F("\");'><button type='submit' style='background:transparent; border:none; color:#f44336; cursor:pointer; padding:0;' title='"); s += tr(sysLang, "Neustart", "Reboot", "Redemarrer"); s += F("'><svg width='28' height='28' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M18.36 6.64a9 9 0 1 1-12.73 0'></path><line x1='12' y1='2' x2='12' y2='12'></line></svg></button></form></div></div>");
+
+    s += F("<script>window.UI_LANG="); s += String(sysLang); s += F(";</script>");
 
     // TABS (Mit Übersetzung)
     s += F("<button class='hamburger' onclick='var t=document.querySelector(\".tabs\");t.classList.toggle(\"open\");'>&#9776; Menu</button>");
@@ -349,12 +663,28 @@ function updateVal(id, val) { document.getElementById(id).innerText = val + '%';
     s += tr(sysLang, "System", "System", "Système");
     s += F("</div><div class='tab' onclick='showTab(\"p5\", this);document.querySelector(\".tabs\").classList.remove(\"open\")'>");
     s += tr(sysLang, "Persoenlich", "Personal", "Personnel");
-    s += F("</div><div class='tab' onclick='showTab(\"p8\", this);document.querySelector(\".tabs\").classList.remove(\"open\")'>Hacker Tools</div><div class='tab' onclick='showTab(\"p6\", this);document.querySelector(\".tabs\").classList.remove(\"open\")'>Update</div></div>");
+    s += F("</div><div class='tab' onclick='showTab(\"p8\", this);document.querySelector(\".tabs\").classList.remove(\"open\")'>");
+    s += tr(sysLang, "Hacker Tools", "Hacker Tools", "Outils Hacker");
+    s += F("</div><div class='tab' onclick='showTab(\"p6\", this);document.querySelector(\".tabs\").classList.remove(\"open\")'>");
+    s += tr(sysLang, "Update", "Update", "Mise a jour");
+    s += F("</div></div>");
 
     // 1. DASHBOARD
     s += F("<div id='p1' class='panel active'><h3>Dashboard</h3><div style='display:grid; grid-template-columns: 1fr 1fr; gap:10px;'>");
-    s += F("<div class='box'><div class='box-title'>Hardware</div>Akku: <b id='d_ak' style='color:#fff;'>--%</b><br>Volt: <b id='d_vo' style='color:#fff;'>-- V</b><br>CPU Takt: <b id='d_cf' style='color:#fff;'>-- MHz</b><br>CPU Temp: <b id='d_cp' style='color:#fff;'>-- &deg;C</b><br>RAM: <b id='d_ra' style='color:#fff;'>-- KB</b><br>Uptime: <b id='d_up' style='color:#fff;'>--</b><br>WLAN Signal: <b id='d_rs' style='color:#fff;'>--</b><br><br><a href='/battery' style='color:#4CAF50;text-decoration:none;'>&#8594; Akkuverlauf oeffnen</a></div>");
-    s += F("<div class='box'><div class='box-title'>"); s += tr(sysLang, "Leben", "Life", "Vie"); s += F("</div>Restzeit: <b style='color:#fff;'>"); s += String(rJ); s += F(" J, "); s += String(rM); s += F(" M, "); s += String(rT); s += F(" T</b><br>O-Kosten: <b id='d_ge' style='color:#fff;'>0.0000 &euro;</b><br>Eltern: <b style='color:#fff;'>"); s += parentStr; s += F("</b><br>Kinder: <b style='color:#fff;'>"); s += kindStr; s += F("</b><br><br><form action='/matrix' method='POST' style='margin:0;'><input type='submit' class='btn' style='background:#000;color:#0f0;border:1px solid #0f0;margin:0;padding:8px;' value='[ ENTER MATRIX ]'></form></div>");
+    s += F("<div class='box'><div class='box-title'>"); s += tr(sysLang, "Hardware", "Hardware", "Materiel"); s += F("</div>");
+    s += tr(sysLang, "Akku", "Battery", "Batterie"); s += F(": <b id='d_ak' style='color:#fff;'>--%</b><br>");
+    s += tr(sysLang, "Volt", "Voltage", "Tension"); s += F(": <b id='d_vo' style='color:#fff;'>-- V</b><br>");
+    s += tr(sysLang, "CPU Takt", "CPU Clock", "Frequence CPU"); s += F(": <b id='d_cf' style='color:#fff;'>-- MHz</b><br>");
+    s += tr(sysLang, "CPU Temp", "CPU Temp", "Temp CPU"); s += F(": <b id='d_cp' style='color:#fff;'>-- &deg;C</b><br>");
+    s += F("RAM: <b id='d_ra' style='color:#fff;'>-- KB</b><br>");
+    s += tr(sysLang, "Akku ETA", "Battery ETA", "ETA batterie"); s += F(": <b id='d_eta' style='color:#fff;'>--</b><br>");
+    s += F("Uptime: <b id='d_up' style='color:#fff;'>--</b><br>");
+    s += tr(sysLang, "WLAN Signal", "WiFi Signal", "Signal WiFi"); s += F(": <b id='d_rs' style='color:#fff;'>--</b></div>");
+    s += F("<div class='box'><div class='box-title'>"); s += tr(sysLang, "Leben", "Life", "Vie"); s += F("</div>");
+    s += tr(sysLang, "Restzeit", "Remaining time", "Temps restant"); s += F(": <b style='color:#fff;'>"); s += String(rJ); s += F(" J, "); s += String(rM); s += F(" M, "); s += String(rT); s += F(" T</b><br>");
+    s += tr(sysLang, "O-Kosten", "Opportunity cost", "Cout opportunite"); s += F(": <b id='d_ge' style='color:#fff;'>0.0000 &euro;</b><br>");
+    s += tr(sysLang, "Eltern", "Parents", "Parents"); s += F(": <b style='color:#fff;'>"); s += parentStr; s += F("</b><br>");
+    s += tr(sysLang, "Kinder", "Children", "Enfants"); s += F(": <b style='color:#fff;'>"); s += kindStr; s += F("</b><br><br><form action='/matrix' method='POST' style='margin:0;'><input type='submit' class='btn' style='background:#000;color:#0f0;border:1px solid #0f0;margin:0;padding:8px;' value='[ ENTER MATRIX ]'></form></div>");
     s += F("</div></div>");
     
     // 2. ANZEIGE (9 Farben im Grid)
@@ -362,31 +692,31 @@ function updateVal(id, val) { document.getElementById(id).innerText = val + '%';
     s += F("<form id='fViews' onsubmit='return saveForm(\"fViews\")'><h3>"); s += tr(sysLang, "Sichten (Gesten)", "Views (Gestures)", "Vues (Gestes)"); s += F("</h3>");
     s += F("<div style='display:flex; flex-direction:column; gap:5px; margin-bottom:15px;'>");
     s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' name='enP0' value='1' "); if(enP0) s += F("checked"); s += F("> 1. Dashboard</label>");
-    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' name='enP1' value='1' "); if(enP1) s += F("checked"); s += F("> 2. Opportunitaet</label>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' name='enP1' value='1' "); if(enP1) s += F("checked"); s += F("> 2. "); s += tr(sysLang, "Opportunitaet", "Opportunity", "Opportunite"); s += F("</label>");
     s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' name='enP2' value='1' "); if(enP2) s += F("checked"); s += F("> 3. Kinder</label>");
     s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' name='enP3' value='1' "); if(enP3) s += F("checked"); s += F("> 4. Eltern</label></div>");
-    s += F("<input type='submit' class='btn' value='Sichten speichern'></form><hr>");
+    s += F("<input type='submit' class='btn' value='"); s += tr(sysLang, "Sichten speichern", "Save views", "Enregistrer vues"); s += F("'></form><hr>");
 
-    s += F("<form id='fDesign' onsubmit='return saveForm(\"fDesign\")'><h3>Optik & Verhalten</h3>");
-    s += F("<b>Boot-Animation:</b><br><select name='bm'><option value='0'"); if(bootMode==0) s += F(" selected"); s += F(">MS-DOS (486)</option><option value='1'"); if(bootMode==1) s += F(" selected"); s += F(">C64</option><option value='3'"); if(bootMode==3) s += F(" selected"); s += F(">Win98</option><option value='4'"); if(bootMode==4) s += F(" selected"); s += F(">Fast Boot</option></select><hr>");
+    s += F("<form id='fDesign' onsubmit='return saveForm(\"fDesign\")'><h3>"); s += tr(sysLang, "Optik & Verhalten", "Look & Behavior", "Apparence & Comportement"); s += F("</h3>");
+    s += F("<b>"); s += tr(sysLang, "Boot-Animation", "Boot animation", "Animation de demarrage"); s += F(":</b><br><select name='bm'><option value='0'"); if(bootMode==0) s += F(" selected"); s += F(">MS-DOS (486)</option><option value='1'"); if(bootMode==1) s += F(" selected"); s += F(">C64</option><option value='3'"); if(bootMode==3) s += F(" selected"); s += F(">Win98</option><option value='4'"); if(bootMode==4) s += F(" selected"); s += F(">Fast Boot</option></select><hr>");
     
     s += F(R"rawliteral(<b>Farb-Presets:</b><br><select id='themeSel' onchange='applyThemePreset()'><option value=''>- Eigene / Manuell -</option><option value='night'>Nightlife</option><option value='day'>Daybreak</option><option value='cyber'>Cyberpunk</option><option value='hacker'>Hacker Matrix</option></select><br>)rawliteral");
     
     s += F("<div style='display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:10px; font-size:12px;'>");
-    s += F("<div><b>Hintergrund:</b><input name='cBG' type='color' value='"); s += hexBG; s += F("'></div>");
-    s += F("<div><b>Standard Text:</b><input name='cFG' type='color' value='"); s += hexFG; s += F("'></div>");
-    s += F("<div><b>Akzent 1:</b><input name='cAcc1' type='color' value='"); s += hexAcc1; s += F("'></div>");
-    s += F("<div><b>Akzent 2:</b><input name='cAcc2' type='color' value='"); s += hexAcc2; s += F("'></div>");
-    s += F("<div><b>Batterie:</b><input name='cBat' type='color' value='"); s += hexBat; s += F("'></div>");
-    s += F("<div><b>Kopfzeile BG:</b><input name='cHBG' type='color' value='"); s += hexHeadBG; s += F("'></div>");
-    s += F("<div><b>Kopfzeile Text:</b><input name='cHFG' type='color' value='"); s += hexHeadFG; s += F("'></div>");
-    s += F("<div><b>App Button BG:</b><input name='cABG' type='color' value='"); s += hexAppBG; s += F("'></div>");
-    s += F("<div><b>Warnung (Rot):</b><input name='cWrn' type='color' value='"); s += hexWarn; s += F("'></div>");
-    s += F("</div><br><input type='submit' class='btn' value='Design anwenden'></form><hr>");
+    s += F("<div><b>"); s += tr(sysLang, "Hintergrund", "Background", "Arriere-plan"); s += F(":</b><input name='cBG' type='color' value='"); s += hexBG; s += F("'></div>");
+    s += F("<div><b>"); s += tr(sysLang, "Standard Text", "Default text", "Texte par defaut"); s += F(":</b><input name='cFG' type='color' value='"); s += hexFG; s += F("'></div>");
+    s += F("<div><b>"); s += tr(sysLang, "Akzent 1", "Accent 1", "Accent 1"); s += F(":</b><input name='cAcc1' type='color' value='"); s += hexAcc1; s += F("'></div>");
+    s += F("<div><b>"); s += tr(sysLang, "Akzent 2", "Accent 2", "Accent 2"); s += F(":</b><input name='cAcc2' type='color' value='"); s += hexAcc2; s += F("'></div>");
+    s += F("<div><b>"); s += tr(sysLang, "Batterie", "Battery", "Batterie"); s += F(":</b><input name='cBat' type='color' value='"); s += hexBat; s += F("'></div>");
+    s += F("<div><b>"); s += tr(sysLang, "Kopfzeile BG", "Header BG", "Fond en-tete"); s += F(":</b><input name='cHBG' type='color' value='"); s += hexHeadBG; s += F("'></div>");
+    s += F("<div><b>"); s += tr(sysLang, "Kopfzeile Text", "Header text", "Texte en-tete"); s += F(":</b><input name='cHFG' type='color' value='"); s += hexHeadFG; s += F("'></div>");
+    s += F("<div><b>"); s += tr(sysLang, "App Button BG", "App button BG", "Fond bouton app"); s += F(":</b><input name='cABG' type='color' value='"); s += hexAppBG; s += F("'></div>");
+    s += F("<div><b>"); s += tr(sysLang, "Warnung (Rot)", "Warning (red)", "Alerte (rouge)"); s += F(":</b><input name='cWrn' type='color' value='"); s += hexWarn; s += F("'></div>");
+    s += F("</div><br><input type='submit' class='btn' value='"); s += tr(sysLang, "Design anwenden", "Apply design", "Appliquer le design"); s += F("'></form><hr>");
 
     // === AOD MANAGER (ehemals Watchface Designer, jetzt im Anzeige-Tab) ===
-    s += F("<form id='fWatchface'><h3>AOD Manager</h3>");
-    s += F("<p style='color:#aaa;font-size:13px;'>Ziehe die Elemente auf dem Canvas an die gewuenschte Position (X+Y). Waehle ein Element aus und aendere die Skalierung stufenlos mit dem Slider.</p>");
+    s += F("<form id='fWatchface'><h3>"); s += tr(sysLang, "AOD Manager", "AOD Manager", "Gestionnaire AOD"); s += F("</h3>");
+    s += F("<p style='color:#aaa;font-size:13px;'>"); s += tr(sysLang, "Ziehe die Elemente auf dem Canvas an die gewuenschte Position (X+Y). Waehle ein Element aus und aendere die Skalierung stufenlos mit dem Slider.", "Drag elements on the canvas to the desired position (X+Y). Select an element and adjust scale smoothly with the slider.", "Faites glisser les elements sur le canevas a la position souhaitee (X+Y). Selectionnez un element et ajustez l'echelle avec le curseur."); s += F("</p>");
 
     s += F("<div style='display:flex; gap:15px; flex-wrap:wrap; align-items:flex-start;'>");
 
@@ -397,21 +727,21 @@ function updateVal(id, val) { document.getElementById(id).innerText = val + '%';
     s += F("<div style='flex:1; min-width:220px;'>");
 
     // Standard-Elemente
-    s += F("<div class='box' style='margin-bottom:8px;'><div class='box-title'>Standard Elemente</div>");
-    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfT_cb' onchange='wfUpdate()' "); if(wfShowTime) s += F("checked"); s += F("> Uhrzeit</label>");
-    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfD_cb' onchange='wfUpdate()' "); if(wfShowDate) s += F("checked"); s += F("> Datum</label>");
-    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfB_cb' onchange='wfUpdate()' "); if(wfShowBatt) s += F("checked"); s += F("> Akku</label>");
-    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfS_cb' onchange='wfUpdate()' "); if(wfShowSteps) s += F("checked"); s += F("> Schritte</label></div>");
+    s += F("<div class='box' style='margin-bottom:8px;'><div class='box-title'>"); s += tr(sysLang, "Standard Elemente", "Standard elements", "Elements standards"); s += F("</div>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfT_cb' onchange='wfUpdate()' "); if(wfShowTime) s += F("checked"); s += F("> "); s += tr(sysLang, "Uhrzeit", "Time", "Heure"); s += F("</label>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfD_cb' onchange='wfUpdate()' "); if(wfShowDate) s += F("checked"); s += F("> "); s += tr(sysLang, "Datum", "Date", "Date"); s += F("</label>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfB_cb' onchange='wfUpdate()' "); if(wfShowBatt) s += F("checked"); s += F("> "); s += tr(sysLang, "Akku", "Battery", "Batterie"); s += F("</label>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfS_cb' onchange='wfUpdate()' "); if(wfShowSteps) s += F("checked"); s += F("> "); s += tr(sysLang, "Schritte", "Steps", "Pas"); s += F("</label></div>");
 
     // AOD Elemente
-    s += F("<div class='box' style='margin-bottom:8px;'><div class='box-title'>AOD Elemente</div>");
-    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfWC_cb' onchange='wfUpdate()' "); if(wfShowWordClock) s += F("checked"); s += F("> Wortuhr</label>");
-    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfBC_cb' onchange='wfUpdate()' "); if(wfShowBinClock) s += F("checked"); s += F("> Binaer Uhr</label>");
-    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfAn_cb' onchange='wfUpdate()' "); if(wfShowAnalog) s += F("checked"); s += F("> Analoguhr</label>");
-    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfLn_cb' onchange='wfUpdate()' "); if(wfShowLine) s += F("checked"); s += F("> Trennlinie</label>");
-    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfSA_cb' onchange='wfUpdate()' "); if(wfShowSecArc) s += F("checked"); s += F("> Minuten-Bogen</label>");
-    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfWd_cb' onchange='wfUpdate()' "); if(wfShowWeekday) s += F("checked"); s += F("> Wochentag</label>");
-    s += F("<span id='wfAnStyleBox' style='display:"); s += (wfShowAnalog ? "block" : "none"); s += F(";'><b>Analog Stil:</b><select id='wfAnSt_sel' onchange='wfUpdate()'><option value='0'"); if(wfAnalogStyle==0) s += F(" selected"); s += F(">Normal</option><option value='1'"); if(wfAnalogStyle==1) s += F(" selected"); s += F(">Binaer</option><option value='2'"); if(wfAnalogStyle==2) s += F(" selected"); s += F(">Hex</option></select></span></div>");
+    s += F("<div class='box' style='margin-bottom:8px;'><div class='box-title'>"); s += tr(sysLang, "AOD Elemente", "AOD elements", "Elements AOD"); s += F("</div>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfWC_cb' onchange='wfUpdate()' "); if(wfShowWordClock) s += F("checked"); s += F("> "); s += tr(sysLang, "Wortuhr", "Word clock", "Horloge en mots"); s += F("</label>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfBC_cb' onchange='wfUpdate()' "); if(wfShowBinClock) s += F("checked"); s += F("> "); s += tr(sysLang, "Binaer Uhr", "Binary clock", "Horloge binaire"); s += F("</label>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfAn_cb' onchange='wfUpdate()' "); if(wfShowAnalog) s += F("checked"); s += F("> "); s += tr(sysLang, "Analoguhr", "Analog clock", "Horloge analogique"); s += F("</label>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfLn_cb' onchange='wfUpdate()' "); if(wfShowLine) s += F("checked"); s += F("> "); s += tr(sysLang, "Trennlinie", "Divider", "Ligne separatrice"); s += F("</label>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfSA_cb' onchange='wfUpdate()' "); if(wfShowSecArc) s += F("checked"); s += F("> "); s += tr(sysLang, "Minuten-Bogen", "Minute arc", "Arc des minutes"); s += F("</label>");
+    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' id='wfWd_cb' onchange='wfUpdate()' "); if(wfShowWeekday) s += F("checked"); s += F("> "); s += tr(sysLang, "Wochentag", "Weekday", "Jour de la semaine"); s += F("</label>");
+    s += F("<span id='wfAnStyleBox' style='display:"); s += (wfShowAnalog ? "block" : "none"); s += F(";'><b>"); s += tr(sysLang, "Analog Stil", "Analog style", "Style analogique"); s += F(":</b><select id='wfAnSt_sel' onchange='wfUpdate()'><option value='0'"); if(wfAnalogStyle==0) s += F(" selected"); s += F(">"); s += tr(sysLang, "Normal", "Normal", "Normal"); s += F("</option><option value='1'"); if(wfAnalogStyle==1) s += F(" selected"); s += F(">"); s += tr(sysLang, "Binaer", "Binary", "Binaire"); s += F("</option><option value='2'"); if(wfAnalogStyle==2) s += F(" selected"); s += F(">Hex</option></select></span></div>");
 
     // AOD-Farben
     s += F("<div class='box' style='margin-bottom:8px;'><div class='box-title'>AOD Farben</div>");
@@ -724,26 +1054,26 @@ function updateVal(id, val) { document.getElementById(id).innerText = val + '%';
     s += F("      var t = document.getElementById('toast');");
     s += F("      t.className = 'toast show';");
     s += F("      setTimeout(function(){ t.className = t.className.replace('show',''); }, 3000);");
-    s += F("    } else { alert('AOD Speicherfehler: HTTP ' + r.status); }");
-    s += F("  }).catch(function(e){ alert('AOD Netzwerkfehler: ' + e); });");
+    s += F("    } else { alert(i18n3('AOD Speicherfehler: HTTP ', 'AOD save error: HTTP ', 'Erreur de sauvegarde AOD : HTTP ') + r.status); }");
+    s += F("  }).catch(function(e){ alert(i18n3('AOD Netzwerkfehler: ', 'AOD network error: ', 'Erreur reseau AOD : ') + e); });");
     s += F("}");
     
     s += F("wfDraw();\n</script>");
-    s += F("<button type='button' class='btn' onclick='doSaveAOD()'>AOD speichern</button></form></div>");
+    s += F("<button type='button' class='btn' onclick='doSaveAOD()'>"); s += tr(sysLang, "AOD speichern", "Save AOD", "Enregistrer AOD"); s += F("</button></form></div>");
 
     // 3. SYSTEM
     s += F("<div id='p3' class='panel'>");
     s += F("<form id='fSys' onsubmit='return saveForm(\"fSys\")'>");
     
-    s += F("<h3>System Sprache</h3>");
+    s += F("<h3>"); s += tr(sysLang, "System Sprache", "System Language", "Langue Systeme"); s += F("</h3>");
     s += F("<select name='sysLang'><option value='0'"); if(sysLang==0) s += F(" selected"); s += F(">Deutsch</option><option value='1'"); if(sysLang==1) s += F(" selected"); s += F(">English</option><option value='2'"); if(sysLang==2) s += F(" selected"); s += F(">Français</option></select><hr>");
 
-    s += F("<h3>WLAN Konfiguration</h3><div style='display:grid; grid-template-columns:1fr 1fr; gap:10px;'>");
-    s += F("<div class='box'><div class='box-title'>Hotspot (Uhr)</div><b>SSID:</b><input name='apSsid' type='text' value='"); s += apSSID; s += F("'><b>Passwort:</b><input name='apPwd' type='text' value='"); s += apPWD; s += F("'></div>");
-    s += F("<div class='box'><div class='box-title'>Client (Heim/Handy)</div><b>SSID:</b><input name='ssid' type='text' value='"); s += userSSID; s += F("'><b>Passwort:</b><input name='pwd' type='password' value='"); s += userPWD; s += F("'></div></div><hr>");
+    s += F("<h3>"); s += tr(sysLang, "WLAN Konfiguration", "WiFi Configuration", "Configuration WiFi"); s += F("</h3><div style='display:grid; grid-template-columns:1fr 1fr; gap:10px;'>");
+    s += F("<div class='box'><div class='box-title'>"); s += tr(sysLang, "Hotspot (Uhr)", "Hotspot (watch)", "Hotspot (montre)"); s += F("</div><b>SSID:</b><input name='apSsid' type='text' value='"); s += apSSID; s += F("'><b>"); s += tr(sysLang, "Passwort", "Password", "Mot de passe"); s += F(":</b><input name='apPwd' type='text' value='"); s += apPWD; s += F("'></div>");
+    s += F("<div class='box'><div class='box-title'>"); s += tr(sysLang, "Client (Heim/Handy)", "Client (home/phone)", "Client (maison/telephone)"); s += F("</div><b>SSID:</b><input name='ssid' type='text' value='"); s += userSSID; s += F("'><b>"); s += tr(sysLang, "Passwort", "Password", "Mot de passe"); s += F(":</b><input name='pwd' type='password' value='"); s += userPWD; s += F("'></div></div><hr>");
     
     int valMax = (maxBright * 100) / 255; int valMin = (minBright * 100) / 255;
-    s += F("<h3>Helligkeit & Timer</h3>");
+    s += F("<h3>"); s += tr(sysLang, "Helligkeit & Timer", "Brightness & Timer", "Luminosite & Minuteur"); s += F("</h3>");
     s += F("<b>Helligkeit Aktiv: </b><span id='slM_v' style='color:#4CAF50;'>"); s += valMax; s += F("%</span><br><input name='maxb_pct' type='range' min='5' max='100' value='"); s += valMax; s += F("' oninput='updateVal(\"slM_v\", this.value)'>");
     s += F("<b>Helligkeit AOD: </b><span id='slA_v' style='color:#4CAF50;'>"); s += valMin; s += F("%</span><br><input name='minb_pct' type='range' min='0' max='100' value='"); s += valMin; s += F("' oninput='updateVal(\"slA_v\", this.value)'><br><br>");
     
@@ -755,19 +1085,19 @@ function updateVal(id, val) { document.getElementById(id).innerText = val + '%';
     
     s += F("<b>Haptic Waveform (1-123): </b><span id='hap_v' style='color:#4CAF50;'>"); s += hapticWaveform; s += F("</span><br><input name='hapW' type='range' min='1' max='123' value='"); s += hapticWaveform; s += F("' oninput='updateVal(\"hap_v\", this.value)'><hr>");
     
-    s += F("<h3>Web Dashboard Schutz</h3>");
-    s += F("<label class='cb-lbl'><input type='checkbox' name='webAuth' value='1' "); if(webAuthEnabled) s += F("checked"); s += F("> Passwort-Schutz aktivieren</label>");
-    s += F("<b>Benutzername:</b><input name='webUsr' type='text' value='"); s += htmlEscape(webUser); s += F("'>");
-    s += F("<b>Passwort:</b><input name='webPwd' type='password' value='"); s += htmlEscape(webPass); s += F("'><hr>");
+    s += F("<h3>"); s += tr(sysLang, "Web Dashboard Schutz", "Web Dashboard Protection", "Protection Dashboard Web"); s += F("</h3>");
+    s += F("<label class='cb-lbl'><input type='checkbox' name='webAuth' value='1' "); if(webAuthEnabled) s += F("checked"); s += F("> "); s += tr(sysLang, "Passwort-Schutz aktivieren", "Enable password protection", "Activer protection par mot de passe"); s += F("</label>");
+    s += F("<b>"); s += tr(sysLang, "Benutzername", "Username", "Nom d'utilisateur"); s += F(":</b><input name='webUsr' type='text' value='"); s += htmlEscape(webUser); s += F("'>");
+    s += F("<b>"); s += tr(sysLang, "Passwort", "Password", "Mot de passe"); s += F(":</b><input name='webPwd' type='password' value='"); s += htmlEscape(webPass); s += F("'><hr>");
     
-    s += F("<input type='submit' class='btn' value='System speichern'></form><hr>");
+    s += F("<input type='submit' class='btn' value='"); s += tr(sysLang, "System speichern", "Save system", "Enregistrer systeme"); s += F("'></form><hr>");
 
-    s += F("<form id='fTime' onsubmit='return saveTime()'><h3>Uhrzeit & Zeitzone</h3>");
-    s += F("<div style='display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;'><div><b>Datum:</b><br><input type='date' name='md' value='"); s += sysD; s += F("'></div><div><b>Uhrzeit:</b><br><input type='time' name='mt' value='"); s += sysT; s += F("'></div></div>");
-    s += F("<div style='display:grid; grid-template-columns:1fr 1fr; gap:10px; align-items:center;'><div><b>Zeitzone:</b><br><select name='ntpz'><option value='CET-1CEST,M3.5.0,M10.5.0/3'"); if(ntpZone == "CET-1CEST,M3.5.0,M10.5.0/3") s += F(" selected"); s += F(">Berlin</option><option value='GMT0BST,M3.5.0/1,M10.5.0'"); if(ntpZone == "GMT0BST,M3.5.0/1,M10.5.0") s += F(" selected"); s += F(">London</option></select></div><div><br><label class='cb-lbl'><input type='checkbox' name='dst' value='1' "); if(aktuell->tm_isdst > 0) s += F("checked"); s += F("> Sommerzeit</label></div></div>");
-    s += F("<div style='display:flex; gap:10px; margin-top:10px;'><input type='submit' class='btn btn-blue' value='Manuell Setzen' style='margin:0;'><button type='button' class='btn btn-gray' style='margin:0;' onclick='fetch(\"/sync\", {method:\"POST\"}).then(()=>setTimeout(()=>location.reload(), 4000))'>NTP Sync</button></div></form>");
+    s += F("<form id='fTime' onsubmit='return saveTime()'><h3>"); s += tr(sysLang, "Uhrzeit & Zeitzone", "Time & Timezone", "Heure & Fuseau horaire"); s += F("</h3>");
+    s += F("<div style='display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px;'><div><b>"); s += tr(sysLang, "Datum", "Date", "Date"); s += F(":</b><br><input type='date' name='md' value='"); s += sysD; s += F("'></div><div><b>"); s += tr(sysLang, "Uhrzeit", "Time", "Heure"); s += F(":</b><br><input type='time' name='mt' value='"); s += sysT; s += F("'></div></div>");
+    s += F("<div style='display:grid; grid-template-columns:1fr 1fr; gap:10px; align-items:center;'><div><b>"); s += tr(sysLang, "Zeitzone", "Timezone", "Fuseau horaire"); s += F(":</b><br><select name='ntpz'><option value='CET-1CEST,M3.5.0,M10.5.0/3'"); if(ntpZone == "CET-1CEST,M3.5.0,M10.5.0/3") s += F(" selected"); s += F(">Berlin</option><option value='GMT0BST,M3.5.0/1,M10.5.0'"); if(ntpZone == "GMT0BST,M3.5.0/1,M10.5.0") s += F(" selected"); s += F(">London</option></select></div><div><br><label class='cb-lbl'><input type='checkbox' name='dst' value='1' "); if(aktuell->tm_isdst > 0) s += F("checked"); s += F("> "); s += tr(sysLang, "Sommerzeit", "Daylight saving", "Heure d'ete"); s += F("</label></div></div>");
+    s += F("<div style='display:flex; gap:10px; margin-top:10px;'><input type='submit' class='btn btn-blue' value='"); s += tr(sysLang, "Manuell setzen", "Set manually", "Regler manuellement"); s += F("' style='margin:0;'><button type='button' class='btn btn-gray' style='margin:0;' onclick='fetch(\"/sync\", {method:\"POST\"}).then(()=>setTimeout(()=>location.reload(), 4000))'>NTP Sync</button></div></form>");
     // Export / Import Settings
-    s += F("<hr><h3>Einstellungen Sichern / Laden</h3>");
+    s += F("<hr><h3>"); s += tr(sysLang, "Einstellungen sichern / laden", "Backup / restore settings", "Sauvegarder / charger les reglages"); s += F("</h3>");
     s += F("<div style='display:flex; gap:10px; flex-wrap:wrap;'>");
     s += F("<a class='btn btn-blue' style='text-decoration:none;text-align:center;flex:1;' href='/export' download='watchos_settings.json'>&#128190; Export (JSON)</a>");
     s += F("<button class='btn btn-gray' style='flex:1;' onclick='document.getElementById(\"impFile\").click()'>&#128194; Import (JSON)</button>");
@@ -776,8 +1106,8 @@ function updateVal(id, val) { document.getElementById(id).innerText = val + '%';
     s += F("</div>");
 
     // 4. PERSÖNLICH
-    s += F("<div id='p5' class='panel'><form id='fPers' onsubmit='return saveForm(\"fPers\")'>");
-    s += F("<b>Dein Geburtsdatum & Zeit:</b><br><input name='bday' type='date' value='"); s += bdayStr; s += F("' style='width:60%;display:inline-block;'><input name='btime' type='time' value='"); s += btimeStr; s += F("' style='width:35%;display:inline-block;float:right;'>");
+    s += F("<div id='p5' class='panel'><form id='fPers' onsubmit='return saveForm(\"fPers\")'><h3>"); s += tr(sysLang, "Persoenliche Daten", "Personal Data", "Donnees personnelles"); s += F("</h3>");
+    s += F("<b>"); s += tr(sysLang, "Dein Geburtsdatum & Zeit", "Your birth date & time", "Votre date et heure de naissance"); s += F(":</b><br><input name='bday' type='date' value='"); s += bdayStr; s += F("' style='width:60%;display:inline-block;'><input name='btime' type='time' value='"); s += btimeStr; s += F("' style='width:35%;display:inline-block;float:right;'>");
     s += F("<b>Ziel-Alter:</b><input name='a' type='number' min='1' max='120' value='"); s += zielAlter; s += F("'><hr>");
     s += F("<b>Elternteil Name:</b><input name='pN' type='text' value='"); s += parentName; s += F("'>");
     s += F("<b>Geburt & Zeit:</b><br><input name='pD' type='date' value='"); s += parentDate; s += F("' style='width:60%;display:inline-block;'><input name='pT' type='time' value='"); s += parentTime; s += F("' style='width:35%;display:inline-block;float:right;'><hr>");
@@ -788,31 +1118,39 @@ function updateVal(id, val) { document.getElementById(id).innerText = val + '%';
     s += F("<b>Kind 2 Geburtsdatum & Zeit:</b><br><input name='c2d' type='date' value='"); s += child2Date; s += F("' style='width:60%;display:inline-block;'><input name='c2t' type='time' value='"); s += child2Time; s += F("' style='width:35%;display:inline-block;float:right;'><br>");
     s += F("<b>Kind 3 Name:</b><input name='c3n' type='text' value='"); s += child3Name; s += F("'>");
     s += F("<b>Kind 3 Geburtsdatum & Zeit:</b><br><input name='c3d' type='date' value='"); s += child3Date; s += F("' style='width:60%;display:inline-block;'><input name='c3t' type='time' value='"); s += child3Time; s += F("' style='width:35%;display:inline-block;float:right;'><br>");
-    s += F("<input type='submit' class='btn' value='Daten speichern'></form></div>");
+    s += F("<input type='submit' class='btn' value='"); s += tr(sysLang, "Daten speichern", "Save data", "Enregistrer donnees"); s += F("'></form></div>");
 
     // 5. HACKER TOOLS
     s += F("<div id='p8' class='panel'>");
-    s += F("<h3>Nmap Portscanner (Netzwerke)</h3>");
+    s += F("<div style='position:sticky; top:6px; z-index:5; margin-bottom:10px;'><button type='button' class='btn btn-red' onclick='stopBadApps()' style='margin:0;'>");
+    s += tr(sysLang, "Not-Aus: Bad Apps stoppen", "Emergency Stop: Stop Bad Apps", "Arret d'urgence: Stopper Apps Bad");
+    s += F("</button></div>");
+    s += F("<h3>"); s += tr(sysLang, "Nmap Portscanner (Netzwerke)", "Nmap Port Scanner (Networks)", "Scanner Nmap (Reseaux)"); s += F("</h3>");
     s += F("<datalist id='scannedWifis'></datalist>");
-    s += F("<input type='button' id='scanBtn' class='btn btn-blue' value='WLANs scannen' onclick='scanWifi()'><br><br>");
-    s += F("<form id='fHacker1' onsubmit='return saveForm(\"fHacker1\")'>");
+    s += F("<input type='button' id='scanBtn' class='btn btn-blue' value='"); s += tr(sysLang, "WLANs scannen", "Scan WiFis", "Scanner les WiFis"); s += F("' onclick='scanWifi()'><br><br>");
+    s += F("<form id='fHacker1' onsubmit='return saveAndRememberHacker()'>");
     for(int i=0; i<3; i++) {
         s += F("<b>Slot "); s += (i+1); s += F(":</b><div style='display:flex; gap:5px; margin-bottom:10px;'>");
         s += F("<input name='tgS"); s += i; s += F("' type='text' list='scannedWifis' placeholder='SSID' value='"); s += htmlEscape(targetSSIDs[i]); s += F("'>");
-        s += F("<input name='tgP"); s += i; s += F("' type='text' placeholder='Passwort' value='"); s += htmlEscape(targetPWDs[i]); s += F("'>");
+        s += F("<input name='tgP"); s += i; s += F("' type='text' placeholder='"); s += tr(sysLang, "Passwort", "Password", "Mot de passe"); s += F("' value='"); s += htmlEscape(targetPWDs[i]); s += F("'>");
         s += F("</div>");
     }
     s += F("<b>Basis-IP:</b><input name='nmapIP' type='text' value='"); s += htmlEscape(nmapBaseIP); s += F("'>");
     s += F("<b>Ports (kommagetrennt):</b><input name='nmapPorts' type='text' value='"); s += htmlEscape(nmapPorts); s += F("'>");
-    s += F("<input type='submit' class='btn btn-red' style='margin-bottom:20px;' value='Nmap Ziele Speichern'></form>");
+    s += F("<div style='display:flex; gap:8px; flex-wrap:wrap; margin:6px 0 12px 0;'>");
+    s += F("<button type='button' class='btn btn-gray' style='margin:0; width:auto; padding:8px 10px;' onclick=\"applyPortPreset('quick')\">Quick</button>");
+    s += F("<button type='button' class='btn btn-gray' style='margin:0; width:auto; padding:8px 10px;' onclick=\"applyPortPreset('webdev')\">WebDev</button>");
+    s += F("<button type='button' class='btn btn-gray' style='margin:0; width:auto; padding:8px 10px;' onclick=\"applyPortPreset('full')\">Full</button>");
+    s += F("</div>");
+    s += F("<input type='submit' class='btn btn-red' style='margin-bottom:20px;' value='"); s += tr(sysLang, "Nmap Ziele speichern", "Save Nmap targets", "Enregistrer cibles Nmap"); s += F("'></form>");
     
     s += F("<b>Nmap Scan Ergebnisse:</b>");
     s += F("<pre style='background:#111; color:#0f0; padding:10px; border-radius:5px; min-height:50px; max-height:200px; overflow-y:auto; font-size:12px;'>");
-    s += (nmapLog.length() > 0 ? htmlEscape(nmapLog) : String("Bisher keine Scans..."));
+    s += (nmapLog.length() > 0 ? htmlEscape(nmapLog) : String(tr(sysLang, "Bisher keine Scans...", "No scans yet...", "Aucun scan pour l'instant...")));
     s += F("</pre>");
 
-    s += F("<hr><h3>WiFi Deauther (Kicker)</h3>");
-    s += F("<input type='button' id='scanRBtn' class='btn btn-blue' value='Routern scannen' onclick='scanRouters()'>");
+    s += F("<hr><h3>"); s += tr(sysLang, "WiFi Deauther (Kicker)", "WiFi Deauther", "Deauther WiFi"); s += F("</h3>");
+    s += F("<input type='button' id='scanRBtn' class='btn btn-blue' value='"); s += tr(sysLang, "Router scannen", "Scan routers", "Scanner les routeurs"); s += F("' onclick='scanRouters()'>");
     s += F("<div id='routerTable'></div>");
 
     s += F("<hr><h3>BadUSB / Rubber Ducky</h3><form id='fHacker2' onsubmit='return saveForm(\"fHacker2\")'>");
@@ -822,15 +1160,15 @@ function updateVal(id, val) { document.getElementById(id).innerText = val + '%';
     if(badUsbLayout==1) s += F(" selected");
     s += F(">DE (QWERTZ)</option></select><br><br>");
     
-    s += F("<details style='background:#222;padding:10px;border-radius:6px;margin-bottom:8px;'><summary style='cursor:pointer;color:#4CAF50;font-weight:bold;'>Skript 1: <span id='sN0'>"); s += htmlEscape(badUsbNames[0]); s += F("</span></summary>");
+    s += F("<details style='background:#222;padding:10px;border-radius:6px;margin-bottom:8px;'><summary style='cursor:pointer;color:#4CAF50;font-weight:bold;'>"); s += tr(sysLang, "Skript 1", "Script 1", "Script 1"); s += F(": <span id='sN0'>"); s += htmlEscape(badUsbNames[0]); s += F("</span></summary>");
     s += F("Name: <input name='buN0' type='text' value='"); s += htmlEscape(badUsbNames[0]); s += F("' oninput='syncTitle(\"sN0\", this.value)'><br>");
     s += F("Code: <textarea name='buS0' rows='4' style='font-family:monospace; font-size:11px;'>"); s += htmlEscape(badUsbScripts[0]); s += F("</textarea></details>");
 
-    s += F("<details style='background:#222;padding:10px;border-radius:6px;margin-bottom:8px;'><summary style='cursor:pointer;color:#4CAF50;font-weight:bold;'>Skript 2: <span id='sN1'>"); s += htmlEscape(badUsbNames[1]); s += F("</span></summary>");
+    s += F("<details style='background:#222;padding:10px;border-radius:6px;margin-bottom:8px;'><summary style='cursor:pointer;color:#4CAF50;font-weight:bold;'>"); s += tr(sysLang, "Skript 2", "Script 2", "Script 2"); s += F(": <span id='sN1'>"); s += htmlEscape(badUsbNames[1]); s += F("</span></summary>");
     s += F("Name: <input name='buN1' type='text' value='"); s += htmlEscape(badUsbNames[1]); s += F("' oninput='syncTitle(\"sN1\", this.value)'><br>");
     s += F("Code: <textarea name='buS1' rows='4' style='font-family:monospace; font-size:11px;'>"); s += htmlEscape(badUsbScripts[1]); s += F("</textarea></details>");
 
-    s += F("<details style='background:#222;padding:10px;border-radius:6px;margin-bottom:8px;'><summary style='cursor:pointer;color:#4CAF50;font-weight:bold;'>Skript 3: <span id='sN2'>"); s += htmlEscape(badUsbNames[2]); s += F("</span></summary>");
+    s += F("<details style='background:#222;padding:10px;border-radius:6px;margin-bottom:8px;'><summary style='cursor:pointer;color:#4CAF50;font-weight:bold;'>"); s += tr(sysLang, "Skript 3", "Script 3", "Script 3"); s += F(": <span id='sN2'>"); s += htmlEscape(badUsbNames[2]); s += F("</span></summary>");
     s += F("Name: <input name='buN2' type='text' value='"); s += htmlEscape(badUsbNames[2]); s += F("' oninput='syncTitle(\"sN2\", this.value)'><br>");
     s += F("Code: <textarea name='buS2' rows='4' style='font-family:monospace; font-size:11px;'>"); s += htmlEscape(badUsbScripts[2]); s += F("</textarea></details>");
     
@@ -845,20 +1183,22 @@ function updateVal(id, val) { document.getElementById(id).innerText = val + '%';
     s += F("<textarea name='evHtml' rows='12' style='font-family:monospace; font-size:11px;'>"); s += htmlEscape(evilHTML); s += F("</textarea>");
     s += F("<div style='display:flex;gap:10px;'><button type='button' class='btn btn-blue' onclick='previewHTML()'>HTML Vorschau</button><input type='submit' class='btn btn-red' value='Evil Portal Speichern'></div></form>");
     
-    s += F("<hr><h3>Phishing Logbuch</h3><div style='background:#111;color:#0f0;padding:10px;text-align:left;font-family:monospace;min-height:100px;max-height:300px;overflow-y:auto;'>");
-    s += (evilLog.length() > 0 ? evilLog : F("Bisher keine Phishing-Opfer..."));
-    s += F("</div><br><form action='/clearlog' method='POST'><input type='submit' class='btn btn-gray' value='Logbuch leeren'></form></div>");
+    s += F("<hr><h3>"); s += tr(sysLang, "Phishing Logbuch", "Phishing logbook", "Journal phishing"); s += F("</h3><div style='background:#111;color:#0f0;padding:10px;text-align:left;font-family:monospace;min-height:100px;max-height:300px;overflow-y:auto;'>");
+    s += (evilLog.length() > 0 ? evilLog : String(tr(sysLang, "Bisher keine Phishing-Opfer...", "No phishing victims yet...", "Aucune victime de phishing pour l'instant...")));
+    s += F("</div><br><form action='/clearlog' method='POST'><input type='submit' class='btn btn-gray' value='"); s += tr(sysLang, "Logbuch leeren", "Clear logbook", "Vider le journal"); s += F("'></form></div>");
 
     // 6. UPDATE
-    s += F("<div id='p6' class='panel'><h3>Firmware Update</h3>");
-    s += F("<p>WatchOS Version: <b style='color:#4CAF50;'>"); s += WATCHOS_VERSION; s += F("</b><br>Build: <b style='color:#4CAF50;'>");
+    s += F("<div id='p6' class='panel'><h3>"); s += tr(sysLang, "Firmware Update", "Firmware Update", "Mise a jour Firmware"); s += F("</h3>");
+    s += F("<p>"); s += tr(sysLang, "WatchOS Version", "WatchOS Version", "Version WatchOS"); s += F(": <b id='ota_cur_ver' style='color:#4CAF50;'>"); s += WATCHOS_VERSION; s += F("</b><br>Build: <b style='color:#4CAF50;'>");
     s += String(__DATE__) + " - " + String(__TIME__);
-    s += F("</b></p><hr><p>Waehle die kompilierte .bin Datei aus.</p>");
-    s += F("<input type='file' id='otafile' accept='.bin' style='background:#333;color:#fff;padding:10px;margin:8px 0;border-radius:6px;width:100%;box-sizing:border-box;'><br><br>");
-    s += F("<button type='button' class='btn btn-red' onclick='uploadOTA()'>Firmware flashen</button>");
+    s += F("</b></p><hr><p>"); s += tr(sysLang, "Waehle die kompilierte .bin Datei aus.", "Select the compiled .bin file.", "Selectionnez le fichier .bin compile."); s += F("</p>");
+    s += F("<input type='file' id='otafile' accept='.bin' onchange='updateOtaMeta()' style='background:#333;color:#fff;padding:10px;margin:8px 0;border-radius:6px;width:100%;box-sizing:border-box;'><br>");
+    s += F("<div id='ota_meta' style='font-size:12px; color:#bbb; margin:4px 0;'></div>");
+    s += F("<div id='ota_sha' style='font-family:monospace; font-size:11px; color:#9fd; margin:4px 0 10px 0; word-break:break-all;'></div>");
+    s += F("<button type='button' class='btn btn-red' onclick='uploadOTA()'>"); s += tr(sysLang, "Firmware flashen", "Flash firmware", "Flasher le firmware"); s += F("</button>");
     s += F("<div id='otaprog-container' style='display:none;background:#222;border-radius:4px;margin-top:10px;height:20px;width:100%;overflow:hidden;'><div id='otaprog' style='background:#4CAF50;height:100%;width:0%;text-align:center;font-size:12px;line-height:20px;'>0%</div></div></div>");
     
-    s += F("<div id='toast' class='toast'>Gespeichert! &#10004;</div></body></html>");
+    s += F("<div id='toast' class='toast'>"); s += tr(sysLang, "Gespeichert", "Saved", "Enregistre"); s += F("! &#10004;</div></body></html>");
     return s;
 }
 
@@ -1159,6 +1499,11 @@ void setupServerRoutes() {
             deauthState = 2; deauthActive = true;
             WiFi.mode(WIFI_AP); esp_wifi_set_promiscuous(true); lastSecond = -1;
         }
+        server.send(200, "text/plain", "OK");
+    });
+
+    server.on("/stopbad", HTTP_POST, []() {
+        killBadApps();
         server.send(200, "text/plain", "OK");
     });
 

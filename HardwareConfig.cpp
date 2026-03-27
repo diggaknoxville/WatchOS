@@ -185,8 +185,10 @@ void loadPreferences() {
         String usbModeFs = readFileFromFS("/usb_mode.txt", "");
         if (usbModeFs == "0" || usbModeFs == "1") {
             usbHidActive = (usbModeFs == "1");
+            usbModeSource = "FS";
         }
     }
+    usbModeDiagPending = true;
     
     // AOD Manager (ehemals Watchface Designer)
     wfShowTime = prefs.getBool("wfT", wfShowTime); wfShowDate = prefs.getBool("wfD", wfShowDate);
@@ -212,10 +214,8 @@ void loadPreferences() {
     wfLineScale = prefs.getFloat("wfLnSc", wfLineScale); wfSecArcScale = prefs.getFloat("wfSASc", wfSecArcScale); wfWeekdayScale = prefs.getFloat("wfWdSc", wfWeekdayScale);
     hexAodFG = prefs.getString("hAodFG", hexAodFG); hexAodAcc = prefs.getString("hAodAc", hexAodAcc);
     Serial.printf("[NVS] AOD geladen: T=%d D=%d B=%d S=%d WC=%d BC=%d An=%d TY=%d TX=%d FG=%s Acc=%s\n", wfShowTime, wfShowDate, wfShowBatt, wfShowSteps, wfShowWordClock, wfShowBinClock, wfShowAnalog, wfTimeY, wfTimeX, hexAodFG.c_str(), hexAodAcc.c_str());
-                usbModeSource = "FS";
     
     netSalary = prefs.getFloat("netS", netSalary); partTimePct = prefs.getInt("pt", partTimePct); vacationDays = prefs.getInt("vac", vacationDays); sickDays = prefs.getInt("sick", sickDays); workHoursPerDay = prefs.getFloat("wh", workHoursPerDay); workDaysYear = prefs.getInt("wd", workDaysYear);
-        usbModeDiagPending = true;
     child1Name = prefs.getString("c1n", child1Name); child1Date = prefs.getString("c1d", child1Date); child1Time = prefs.getString("c1t", child1Time); child2Name = prefs.getString("c2n", child2Name); child2Date = prefs.getString("c2d", child2Date); child2Time = prefs.getString("c2t", child2Time); child3Name = prefs.getString("c3n", child3Name); child3Date = prefs.getString("c3d", child3Date); child3Time = prefs.getString("c3t", child3Time);
     parentName = prefs.getString("pN", parentName); parentDate = prefs.getString("pD", parentDate); parentTime = prefs.getString("pT", parentTime);
     Serial.printf("[NVS] loadPreferences fertig. freeEntries=%d\n", prefs.freeEntries());
@@ -241,15 +241,15 @@ void initHardware() {
     delay(100); if (drv.begin(Wire, IIC_SDA_PMU, IIC_SCL_PMU)) { drv.selectLibrary(1); drv.setMode(0); }
     Wire1.begin(IIC_SDA_TOUCH, IIC_SCL_TOUCH); touch.setPins(-1, TOUCH_INT); touch.begin(Wire1, 0x38, IIC_SDA_TOUCH, IIC_SCL_TOUCH);
     // USB-Policy:
-    // - HID-Modus: USB-Stack + HID Klassen starten.
-    // - COM-Modus: Keinen USB-HID-Stack starten, damit native CDC/COM sichtbar bleibt.
+    // - USB-Stack immer starten (CDC/COM bleibt verfuegbar)
+    // - HID-Klassen nur im HID-Modus starten
+    USB.begin();
     if (usbHidActive) {
-        USB.begin();
         Mouse.begin();
         Keyboard.begin();
         Serial.println("[USB] HID-Modus aktiv (USB+HID gestartet)");
     } else {
-        Serial.println("[USB] COM-Modus aktiv (kein USB-HID-Stack)");
+        Serial.println("[USB] COM-Modus aktiv (nur USB-CDC)");
     }
 }
 
