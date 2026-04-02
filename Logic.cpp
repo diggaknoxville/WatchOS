@@ -512,12 +512,13 @@ void stopBleScan() {
 
 void checkBackgroundTasks(unsigned long currentMillis) {
     if (probeMonActive) processProbeRing(); // drain ISR ring buffer safely
-    bool isCharging = pmu.isVbusIn() || pmu.isCharging();
+    refreshPowerTelemetry(false);
+    bool isCharging = isChargingCached(false);
     if (isCharging && !wasCharging) { wasCharging = true; showToastColor("Wird geladen ⚡", 4000, 0x07E0); } else if (!isCharging && wasCharging) { wasCharging = false; showToastColor("Akku-Modus 🔋", 4000, 0x4208); }
     if (timerRunning && (currentMillis - timerLastTick >= 1000)) { timerRemaining--; timerLastTick = currentMillis; if (timerRemaining <= 0) { timerRunning = false; timerRemaining = 0; triggerAlarm(); lastSecond = -1; lastTouchTime = currentMillis; showToastColor("Timer abgelaufen! ⏱️", 6000, 0xFD20); } }
 
     static unsigned long lastJiggle = 0; 
-    if (jigglerActive && currentMillis - lastJiggle > 15000) { Mouse.move(2, 2); delay(50); Mouse.move(-2, -2); lastJiggle = currentMillis; }
+    if (jigglerActive && currentMillis - lastJiggle > 15000) { Mouse.move(2, 2); Mouse.move(-2, -2); lastJiggle = currentMillis; }
 
     bool hacksRunning = (jigglerActive || badUsbActive || wifiSpamActive || bleSpamActive || deauthActive || nmapActive || evilActive || wlanActive || probeMonActive || bleScanActive);
 
@@ -549,7 +550,7 @@ void checkBackgroundTasks(unsigned long currentMillis) {
 
     if (currentMillis - lastHistoryTime >= historyInterval || historyCount == 0) {
         lastHistoryTime = currentMillis;
-        uint8_t batVal = getBattery();
+        uint16_t batVal = (uint16_t)getBattery();
         if (isCharging) batVal += 200; 
         else if (hacksRunning) batVal += 100;
         
@@ -560,13 +561,17 @@ void checkBackgroundTasks(unsigned long currentMillis) {
         nvsWriteCounter++;
         if (nvsWriteCounter >= 5) {
             nvsWriteCounter = 0;
-            prefs.begin("clock", false); prefs.putInt("hCount", historyCount); prefs.putBytes("hData", batHistoryPct, MAX_HISTORY); prefs.end();
+            prefs.begin("clock", false);
+            prefs.putInt("hCount", historyCount);
+            prefs.putInt("hFmt", 2);
+            prefs.putBytes("hData", batHistoryPct, MAX_HISTORY * sizeof(uint16_t));
+            prefs.end();
         }
         if (currentPage == 9) lastSecond = -1; 
         
         // Batterie-Warnung bei <15% (nur wenn nicht am Laden)
         static bool lowBatWarned = false;
-        bool isCharging2 = pmu.isVbusIn() || pmu.isCharging();
+        bool isCharging2 = isChargingCached(false);
         uint8_t rawBat = getBattery();
         if (rawBat <= 15 && rawBat > 0 && !isCharging2 && !lowBatWarned) {
             lowBatWarned = true;
@@ -584,18 +589,24 @@ void checkBackgroundTasks(unsigned long currentMillis) {
 void handlePowerManagement(unsigned long currentMillis) {
     if(matrixMode) return; 
     
-    if (pmu.getBattVoltage() == 0) { 
-        Wire.end(); Wire.begin(10, 11); 
-        if (pmu.init(Wire, 10, 11, AXP2101_SLAVE_ADDRESS)) { 
-            pmu.enableBattVoltageMeasure(); 
-            pmu.enableIRQ(XPOWERS_AXP2101_BAT_INSERT_IRQ | XPOWERS_AXP2101_BAT_REMOVE_IRQ | XPOWERS_AXP2101_VBUS_INSERT_IRQ | XPOWERS_AXP2101_VBUS_REMOVE_IRQ | XPOWERS_AXP2101_PKEY_SHORT_IRQ); 
-            pmu.clearIrqStatus(); 
-        } 
+    static unsigned long lastPmuHealthCheck = 0;
+    if (currentMillis - lastPmuHealthCheck > 5000) {
+        lastPmuHealthCheck = currentMillis;
+        if (getBatteryVoltageCached(true) <= 0.01f) {
+            Wire.end(); Wire.begin(10, 11);
+            if (pmu.init(Wire, 10, 11, AXP2101_SLAVE_ADDRESS)) {
+                pmu.enableBattVoltageMeasure();
+                pmu.enableIRQ(XPOWERS_AXP2101_BAT_INSERT_IRQ | XPOWERS_AXP2101_BAT_REMOVE_IRQ | XPOWERS_AXP2101_VBUS_INSERT_IRQ | XPOWERS_AXP2101_VBUS_REMOVE_IRQ | XPOWERS_AXP2101_PKEY_SHORT_IRQ);
+                pmu.clearIrqStatus();
+                refreshPowerTelemetry(true);
+            }
+        }
     }
 
     unsigned long elapsed = currentMillis - lastTouchTime; 
     static int lastPowerState = 1; 
-    bool isCharging = pmu.isVbusIn() || pmu.isCharging();
+    refreshPowerTelemetry(false);
+    bool isCharging = isChargingCached(false);
     bool hacksRunning = (jigglerActive || badUsbActive || wifiSpamActive || bleSpamActive || deauthActive || nmapActive || evilActive || wlanActive || probeMonActive || bleScanActive);
     
     // Basis-Einstufung nach Zeit

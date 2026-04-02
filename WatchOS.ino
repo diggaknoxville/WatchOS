@@ -59,7 +59,7 @@ bool matrixMode = false; int matrixY[24] = {0}; bool micActive = false; double d
 unsigned long swStartTime = 0, swElapsed = 0, timerLastTick = 0; bool swRunning = false, timerRunning = false; long timerRemaining = 0; int t1 = 3, t2 = 5, t3 = 10; 
 long swLaps[MAX_LAPS] = {0}; int swLapCount = 0;
 String toastMsg = ""; unsigned long toastEndTime = 0; uint16_t toastColor = 0x2945;
-uint8_t batHistoryPct[MAX_HISTORY]; int historyCount = 0; unsigned long lastHistoryTime = 0; const unsigned long historyInterval = 600000; 
+uint16_t batHistoryPct[MAX_HISTORY]; int historyCount = 0; unsigned long lastHistoryTime = 0; const unsigned long historyInterval = 600000; 
 unsigned long lastTouchTime = 0, lastTapTime = 0; int16_t startX = -1, startY = -1, lastX = -1, lastY = -1;
 bool isSwiping = false, wasCharging = false, bleInitDone = false; int powerState = 1; 
 

@@ -301,13 +301,13 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
         spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Dezibel-Meter", 120, 0, 2); int db = getDecibels(); spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_WHITE); spr->drawString(String(db) + " dB", 120, 50, 6); spr->setTextColor(cBatBG); spr->drawString("RMS: " + String(debug_rms, 1), 120, 85, 2); int barH = db; if(barH > 120) barH = 120; uint16_t bCol = (db >= 90) ? TFT_RED : ((db >= 65) ? TFT_YELLOW : TFT_GREEN); spr->fillRect(60, 195 - barH, 120, barH, bCol); spr->drawRect(59, 74, 122, 122, TFT_WHITE);
     }
     else if (page == 10) {
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Akku Details", 120, 0, 2); spr->drawString(String(getBattery()) + "%    " + String(pmu.getBattVoltage() / 1000.0, 2) + " V", 120, 20, 4); String estStr = "Laufzeit: Berechne..."; bool isCharging = pmu.isVbusIn() || pmu.isCharging();
+        spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Akku Details", 120, 0, 2); spr->drawString(String(getBattery()) + "%    " + String(getBatteryVoltageCached(false), 2) + " V", 120, 20, 4); String estStr = "Laufzeit: Berechne..."; bool isCharging = isChargingCached(false);
         if (isCharging) estStr = "Wird geladen"; else if (historyCount >= 2) { int drop = (batHistoryPct[0]%100) - (batHistoryPct[historyCount-1]%100); if (drop > 0) { int elapsedMins = (historyCount - 1) * (historyInterval / 60000); float dropPerMin = (float)drop / elapsedMins; float remainingMins = getBattery() / dropPerMin; estStr = "Noch ca. " + String((int)(remainingMins / 60)) + "h " + String((int)remainingMins % 60) + "m"; } else estStr = "Noch ca. >24h"; } spr->setTextColor(cAcc1); spr->drawString(estStr, 120, 45, 2);
         int gX = 20, gY = 70, gW = 200, gH = 70; spr->drawRect(gX, gY, gW, gH, cBatBG);
         if (historyCount > 1) { 
-            float stepX = (float)gW / (MAX_HISTORY - 1); 
+            float stepX = (float)gW / max(1, historyCount - 1); 
             for (int i = 0; i < historyCount - 1; i++) { 
-                uint8_t raw1 = batHistoryPct[i]; uint8_t raw2 = batHistoryPct[i+1];
+                uint16_t raw1 = batHistoryPct[i]; uint16_t raw2 = batHistoryPct[i+1];
                 int p1 = raw1 % 100; int p2 = raw2 % 100;
                 int px1 = gX + (i * stepX); int px2 = gX + ((i + 1) * stepX); 
                 int py1 = gY + gH - (p1 * gH / 100); int py2 = gY + gH - (p2 * gH / 100); 
@@ -481,7 +481,7 @@ void slideToPage(int newPage, int dx, int dy) {
 }
 
 void renderUI(unsigned long currentMillis) {
-    time_t jetzt; time(&jetzt); struct tm *aktuell = localtime(&jetzt); bool isCharging = pmu.isVbusIn() || pmu.isCharging(); static unsigned long lastFrame = 0;
+    time_t jetzt; time(&jetzt); struct tm *aktuell = localtime(&jetzt); bool isCharging = isChargingCached(false); static unsigned long lastFrame = 0;
 
     bool fastRefresh = (currentPage == 1 || currentPage == 7 || currentPage == 9 || currentPage == 25); bool forceRender = (aktuell->tm_sec != lastSecond) || (fastRefresh && (currentMillis - lastFrame > 50)) || (currentMillis < toastEndTime) || (currentPage >= 13 && currentPage <= 25);
     if (forceRender) { 
@@ -495,7 +495,7 @@ void renderUI(unsigned long currentMillis) {
 
 void renderAOD() {
     time_t jetzt; time(&jetzt); struct tm *aktuell = localtime(&jetzt);
-    bool isCharging = pmu.isVbusIn() || pmu.isCharging();
+    bool isCharging = isChargingCached(false);
     int batPct = getBattery();
 
     // --- Static state for burn-in offset (changes every 10 minutes) ---

@@ -83,8 +83,19 @@ void handleApiStatus() {
     float dailyNet = (netSalary * 12.0) / 365.0; float fraction = (millis() % 1000) / 1000.0; 
     long secToday = aktuell->tm_hour * 3600 + aktuell->tm_min * 60 + aktuell->tm_sec; 
     float earnedToday = dailyNet * ((secToday + fraction) / 86400.0);
+
+    static unsigned long lastSensorSampleMs = 0;
+    static float cachedCpuTemp = 0.0f;
+    static int cachedRssi = -127;
+    unsigned long nowMs = millis();
+    if (lastSensorSampleMs == 0 || (nowMs - lastSensorSampleMs) > 1500) {
+        lastSensorSampleMs = nowMs;
+        cachedCpuTemp = temperatureRead();
+        cachedRssi = WiFi.RSSI();
+    }
     
-    bool isCharging = pmu.isVbusIn() || pmu.isCharging();
+    refreshPowerTelemetry(false);
+    bool isCharging = isChargingCached(false);
     String currentSSID = ""; String currentIP = "";
     if (wlanActive) { if (wlanClientMode) { currentSSID = userSSID; currentIP = wlanIP; } else { currentSSID = apSSID; currentIP = "192.168.4.1"; } } 
     else if (nmapActive) { currentSSID = targetSSIDs[currentTargetNmap]; currentIP = WiFi.localIP().toString(); } 
@@ -92,20 +103,20 @@ void handleApiStatus() {
     else if (deauthActive || wifiSpamActive) { currentSSID = "Hacking..."; currentIP = "RAW TX"; }
     
     // RSSI zu Prozent Umrechnung (-100dBm = 0%, -50dBm = 100%)
-    int rssi = WiFi.RSSI();
+    int rssi = cachedRssi;
     int rssi_pct = 0;
     if (rssi <= -100) rssi_pct = 0;
     else if (rssi >= -50) rssi_pct = 100;
     else rssi_pct = 2 * (rssi + 100);
     
-    int battPct = getBattery();
+    int battPct = getBatteryCached(false);
     int etaMin = estimateBatteryEtaMinutes(isCharging, battPct);
     const char* etaMode = "unknown";
     if (etaMin >= 0) etaMode = isCharging ? "charge" : "discharge";
 
     char json[1024];
     snprintf(json, sizeof(json), "{\"akku\":%d,\"volt\":\"%.2f\",\"cpu\":\"%.1f\",\"ram_free\":%d,\"ram_tot\":%d,\"geld\":\"%.4f\",\"wifi\":%s,\"charging\":%s,\"bt\":%s,\"ssid\":\"%s\",\"ip\":\"%s\",\"cpufreq\":%d,\"uptime\":%lu,\"rssi\":%d,\"rssi_pct\":%d,\"eta_min\":%d,\"eta_mode\":\"%s\"}", 
-             battPct, pmu.getBattVoltage()/1000.0, temperatureRead(), 
+             battPct, getBatteryVoltageCached(false), cachedCpuTemp, 
              (int)(ESP.getFreeHeap() / 1024), (int)(ESP.getHeapSize() / 1024), earnedToday, 
              (WiFi.status() == WL_CONNECTED || wlanActive || evilActive || wifiSpamActive || deauthActive || nmapActive) ? "true" : "false",
              isCharging ? "true" : "false", btActive ? "true" : "false", currentSSID.c_str(), currentIP.c_str(),
@@ -127,6 +138,8 @@ String getBatteryHtml() {
     const char* tNormal = tr(sysLang, "Normal", "Normal", "Normal");
     const char* tHack = tr(sysLang, "Hacking", "Hacking", "Hacking");
     const char* tCharge = tr(sysLang, "Laden", "Charging", "Charge");
+    const char* tResetHist = tr(sysLang, "Verlauf loeschen", "Reset history", "Reinitialiser l'historique");
+    const char* tResetConfirm = tr(sysLang, "Akku-Verlauf wirklich loeschen?", "Really reset battery history?", "Reinitialiser l'historique batterie ?");
 
     s += F(R"rawliteral(<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1'>
     <style>
@@ -168,7 +181,10 @@ String getBatteryHtml() {
     s += "<div class='leg-item'><div class='dot' style='background:#ff9800;'></div>" + String(tr(sysLang, "Flaeche: 25-49%", "Area: 25-49%", "Surface: 25-49%")) + "</div>";
     s += "<div class='leg-item'><div class='dot' style='background:#e53935;'></div>" + String(tr(sysLang, "Flaeche: 0-24%", "Area: 0-24%", "Surface: 0-24%")) + "</div>";
     s += F("</div></div>");
+    s += "<div style='display:flex; gap:10px; justify-content:center; flex-wrap:wrap;'>";
     s += "<a href='/' class='btn'>&#8592; " + String(tBack) + "</a>";
+    s += "<form method='POST' action='/battery/reset' onsubmit='return confirm(\"" + String(tResetConfirm) + "\")' style='margin:0;'>";
+    s += "<button type='submit' class='btn' style='background:#a33;'>" + String(tResetHist) + "</button></form></div>";
     s += F("<script>");
 
     s += F("var rawData = [");
@@ -1478,6 +1494,19 @@ void setupServerRoutes() {
     server.on("/settime", HTTP_POST, handleSetTime);
     server.on("/clearlog", HTTP_POST, []() { evilLog = ""; server.sendHeader("Location", "/", true); server.send(302, "text/plain", ""); }); 
     server.on("/battery", HTTP_GET, []() { server.send(200, "text/html", getBatteryHtml()); });
+    server.on("/battery/reset", HTTP_POST, []() {
+        historyCount = 0;
+        lastHistoryTime = 0;
+        for (int i = 0; i < MAX_HISTORY; i++) batHistoryPct[i] = 0;
+        prefs.begin("clock", false);
+        prefs.putInt("hCount", 0);
+        prefs.putInt("hFmt", 2);
+        uint16_t emptyHist[MAX_HISTORY] = {0};
+        prefs.putBytes("hData", emptyHist, MAX_HISTORY * sizeof(uint16_t));
+        prefs.end();
+        server.sendHeader("Location", "/battery", true);
+        server.send(303, "text/plain", "");
+    });
     
     server.on("/wifiscan", HTTP_GET, []() {
         int n = WiFi.scanNetworks(); String json = "[";

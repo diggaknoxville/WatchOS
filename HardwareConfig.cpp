@@ -103,11 +103,80 @@ float wfLineScale = 1.0, wfSecArcScale = 1.0, wfWeekdayScale = 1.0;
 String hexAodFG = "#ffffff", hexAodAcc = "#ffea00";
 uint16_t cAodFG = 0xFFFF, cAodAcc = 0xFFE0;
 
-int getBattery() {
+static int gCachedBatteryPct = 0;
+static float gCachedBatteryVolt = 0.0f;
+static bool gCachedCharging = false;
+static unsigned long gPowerCacheMs = 0;
+static bool gChargingCandidate = false;
+static uint8_t gChargingStableCount = 0;
+
+static int estimatePctFromVoltageMv(int mv) {
+    if (mv <= 3300) return 0;
+    if (mv >= 4200) return 100;
+    int pct = (mv - 3300) * 100 / 900;
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    return pct;
+}
+
+void refreshPowerTelemetry(bool forceRefresh) {
+    unsigned long now = millis();
+    if (!forceRefresh && (now - gPowerCacheMs) < 750) return;
+
+    bool vbusIn = pmu.isVbusIn();
+    bool hwCharging = pmu.isCharging();
+    bool sampleCharging = vbusIn || hwCharging;
+
+    if (sampleCharging == gCachedCharging) {
+        gChargingStableCount = 0;
+    } else {
+        if (sampleCharging == gChargingCandidate) {
+            if (gChargingStableCount < 255) gChargingStableCount++;
+        } else {
+            gChargingCandidate = sampleCharging;
+            gChargingStableCount = 1;
+        }
+        if (gChargingStableCount >= 2) {
+            gCachedCharging = gChargingCandidate;
+            gChargingStableCount = 0;
+        }
+    }
+
+    int mv = pmu.getBattVoltage();
     int p = pmu.getBatteryPercent();
-    if (p <= 0) return (pmu.getBattVoltage() > 4100) ? 100 : 0;
-    if (p > 100) return 100;
-    return p;
+    if (p <= 0 || p > 100) p = estimatePctFromVoltageMv(mv);
+
+    // Limit sudden jumps from PMU read glitches.
+    if (gPowerCacheMs != 0) {
+        int d = p - gCachedBatteryPct;
+        if (d > 3) p = gCachedBatteryPct + 3;
+        else if (d < -3) p = gCachedBatteryPct - 3;
+    }
+
+    if (p < 0) p = 0;
+    if (p > 100) p = 100;
+    gCachedBatteryPct = p;
+    gCachedBatteryVolt = (float)mv / 1000.0f;
+    gPowerCacheMs = now;
+}
+
+int getBattery() {
+    return getBatteryCached(false);
+}
+
+int getBatteryCached(bool forceRefresh) {
+    refreshPowerTelemetry(forceRefresh);
+    return gCachedBatteryPct;
+}
+
+bool isChargingCached(bool forceRefresh) {
+    refreshPowerTelemetry(forceRefresh);
+    return gCachedCharging;
+}
+
+float getBatteryVoltageCached(bool forceRefresh) {
+    refreshPowerTelemetry(forceRefresh);
+    return gCachedBatteryVolt;
 }
 
 String readFileFromFS(String path, String fallback) {
@@ -154,7 +223,21 @@ void loadPreferences() {
     enP0 = prefs.getBool("enP0", true); enP1 = prefs.getBool("enP1", true); enP2 = prefs.getBool("enP2", true); enP3 = prefs.getBool("enP3", true);
     timerAlarmMode = prefs.getInt("tAlarm", 0);
     t1 = prefs.getInt("t1", t1); t2 = prefs.getInt("t2", t2); t3 = prefs.getInt("t3", t3);
-    historyCount = prefs.getInt("hCount", 0); if (historyCount > 0 && historyCount <= MAX_HISTORY) prefs.getBytes("hData", batHistoryPct, MAX_HISTORY); else historyCount = 0;
+    historyCount = prefs.getInt("hCount", 0);
+    if (historyCount > 0 && historyCount <= MAX_HISTORY) {
+        size_t hLen = prefs.getBytesLength("hData");
+        if (hLen == (size_t)(MAX_HISTORY * sizeof(uint16_t))) {
+            prefs.getBytes("hData", batHistoryPct, MAX_HISTORY * sizeof(uint16_t));
+        } else if (hLen == (size_t)MAX_HISTORY) {
+            uint8_t oldHist[MAX_HISTORY];
+            prefs.getBytes("hData", oldHist, MAX_HISTORY);
+            for (int i = 0; i < MAX_HISTORY; i++) batHistoryPct[i] = oldHist[i];
+        } else {
+            historyCount = 0;
+        }
+    } else {
+        historyCount = 0;
+    }
     
     evilSSID = prefs.getString("evSsid", evilSSID); evilHTML = prefs.getString("evHtml", evilHTML); if(evilHTML.length() < 100) evilHTML = defaultEvilHTML; 
     

@@ -67,7 +67,7 @@ extern String toastMsg;
 extern unsigned long toastEndTime;
 extern uint16_t toastColor; // Toast-Hintergrundfarbe
 
-extern uint8_t batHistoryPct[MAX_HISTORY];
+extern uint16_t batHistoryPct[MAX_HISTORY];
 extern int historyCount;
 extern unsigned long lastHistoryTime;
 extern const unsigned long historyInterval; 
