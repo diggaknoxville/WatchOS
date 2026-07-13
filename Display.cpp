@@ -313,9 +313,12 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
                 int py1 = gY + gH - (p1 * gH / 100); int py2 = gY + gH - (p2 * gH / 100); 
                 uint16_t col = TFT_GREEN; 
                 if (raw1 >= 200) col = TFT_BLUE; else if (raw1 >= 100) col = TFT_RED; else if(p1 < 20) col = TFT_RED; else if(p1 < 40) col = TFT_ORANGE; else if(p1 < 60) col = TFT_YELLOW; else if(p1 < 80) col = tft.color565(173, 255, 47); 
-                spr->fillTriangle(px1, gY+gH-1, px2, gY+gH-1, px1, py1, col); spr->fillTriangle(px1, py1, px2, py2, px2, gY+gH-1, col); spr->drawLine(px1, py1, px2, py2, TFT_WHITE); 
-            } 
-        } 
+                spr->fillTriangle(px1, gY+gH-1, px2, gY+gH-1, px1, py1, col); spr->fillTriangle(px1, py1, px2, py2, px2, gY+gH-1, col); spr->drawLine(px1, py1, px2, py2, TFT_WHITE);
+            }
+        }
+        // Schrittzähler (BMA423, Software-Pedometer)
+        spr->setTextDatum(TC_DATUM); spr->setTextColor(cBatBG); spr->drawString("Schritte heute", 120, 150, 2);
+        spr->setTextColor(cAcc2); spr->drawString(String(stepCount), 120, 170, 6);
     }
     else if (page == 11) { spr->fillSprite(TFT_WHITE); }
     else if (page == 12) { showEvilPortal(spr); } 
@@ -505,8 +508,8 @@ void renderAOD() {
     int curSlot = aktuell->tm_min / 10; // 0..5  (changes every 10 min)
     if (curSlot != lastOffsetMin) {
         lastOffsetMin = curSlot;
-        aodX = 120 + (random(0, 10) - 5);
-        aodY = 110 + (random(0, 10) - 5);
+        aodX = 120 + random(-5, 6); // symmetrischer Burn-in-Versatz -5..+5
+        aodY = 110 + random(-5, 6);
     }
 
     // --- Detect content changes (time, charge, battery %) ---
@@ -591,7 +594,7 @@ void renderAOD() {
         if (wfShowSteps) {
             int px = wfStepsX + offX, py = wfStepsY + offY;
             tft.setTextDatum(MC_DATUM); tft.setTextColor(cAodAcc, TFT_BLACK);
-            tft.drawString("Schritte: --", px, py, 2);
+            tft.drawString("Schritte: " + String(stepCount), px, py, 2);
         }
 
         // === Wortuhr ===

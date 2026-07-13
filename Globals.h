@@ -154,6 +154,9 @@ extern int diceType;       // 0=d4, 1=d6, 2=d8, 3=d10, 4=d12, 5=d20, 6=d100, 7=M
 extern int diceResult;
 extern bool diceRolling;
 
+// Bewegungssensor (BMA423): Schrittzähler + Handgelenk-Wake
+extern long stepCount;     // Schritte seit Tagesbeginn
+
 // Wasserwaage App (Page 25)
 // (nutzt BMA423 Accelerometer - keine Extra-Globals nötig)
 

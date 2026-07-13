@@ -140,6 +140,7 @@ void setup() {
         Serial.printf("FFat: OK (total=%d, used=%d)\n", FFat.totalBytes(), FFat.usedBytes());
     }
     loadPreferences();
+    loadMotionPrefs(); // gespeicherten Schrittzähler-Stand laden
     Serial.printf("Nach loadPreferences: heap=%d cBG=%s cHBG=%s bootM=%d\n", ESP.getFreeHeap(), hexBG.c_str(), hexHeadBG.c_str(), bootMode);
     Serial.printf("[WIFI-DBG] apSSID='%s' apPWD='%s' userSSID='%s'\n", apSSID.c_str(), apPWD.c_str(), userSSID.c_str());
     initHardware();
@@ -170,6 +171,7 @@ void loop() {
     }
     
     if (wlanActive || evilActive) { dnsServer.processNextRequest(); server.handleClient(); }
+    handleWlanIdleTimeout(); // ungenutzten Hotspot automatisch abschalten (Akku)
     checkBackgroundTasks(currentMillis);
     handlePowerManagement(currentMillis);
     if (powerState != 4) { handleTouchInput(); }

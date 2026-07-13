@@ -78,6 +78,26 @@ static int estimateBatteryEtaMinutes(bool chargingNow, int currentPct) {
     return eta;
 }
 
+// Escaped einen String JSON-sicher. Ohne das zerlegt eine SSID/AP-Name mit
+// Anführungszeichen oder Backslash das JSON und das Live-Dashboard bricht ab.
+static String jsonEscape(const String &in) {
+    String out; out.reserve(in.length() + 8);
+    for (size_t i = 0; i < in.length(); i++) {
+        char c = in[i];
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if ((uint8_t)c < 0x20) { char b[8]; snprintf(b, sizeof(b), "\\u%04x", c); out += b; }
+                else out += c;
+        }
+    }
+    return out;
+}
+
 void handleApiStatus() {
     time_t jetzt; time(&jetzt); struct tm *aktuell = localtime(&jetzt);
     float dailyNet = (netSalary * 12.0) / 365.0; float fraction = (millis() % 1000) / 1000.0; 
@@ -115,12 +135,12 @@ void handleApiStatus() {
     if (etaMin >= 0) etaMode = isCharging ? "charge" : "discharge";
 
     char json[1024];
-    snprintf(json, sizeof(json), "{\"akku\":%d,\"volt\":\"%.2f\",\"cpu\":\"%.1f\",\"ram_free\":%d,\"ram_tot\":%d,\"geld\":\"%.4f\",\"wifi\":%s,\"charging\":%s,\"bt\":%s,\"ssid\":\"%s\",\"ip\":\"%s\",\"cpufreq\":%d,\"uptime\":%lu,\"rssi\":%d,\"rssi_pct\":%d,\"eta_min\":%d,\"eta_mode\":\"%s\"}", 
-             battPct, getBatteryVoltageCached(false), cachedCpuTemp, 
-             (int)(ESP.getFreeHeap() / 1024), (int)(ESP.getHeapSize() / 1024), earnedToday, 
+    snprintf(json, sizeof(json), "{\"akku\":%d,\"volt\":\"%.2f\",\"cpu\":\"%.1f\",\"ram_free\":%d,\"ram_tot\":%d,\"geld\":\"%.4f\",\"wifi\":%s,\"charging\":%s,\"bt\":%s,\"ssid\":\"%s\",\"ip\":\"%s\",\"cpufreq\":%d,\"uptime\":%lu,\"rssi\":%d,\"rssi_pct\":%d,\"eta_min\":%d,\"eta_mode\":\"%s\",\"steps\":%ld}",
+             battPct, getBatteryVoltageCached(false), cachedCpuTemp,
+             (int)(ESP.getFreeHeap() / 1024), (int)(ESP.getHeapSize() / 1024), earnedToday,
              (WiFi.status() == WL_CONNECTED || wlanActive || evilActive || wifiSpamActive || deauthActive || nmapActive) ? "true" : "false",
-             isCharging ? "true" : "false", btActive ? "true" : "false", currentSSID.c_str(), currentIP.c_str(),
-             ESP.getCpuFreqMHz(), millis() / 1000, rssi, rssi_pct, etaMin, etaMode);
+             isCharging ? "true" : "false", btActive ? "true" : "false", jsonEscape(currentSSID).c_str(), jsonEscape(currentIP).c_str(),
+             ESP.getCpuFreqMHz(), millis() / 1000, rssi, rssi_pct, etaMin, etaMode, stepCount);
     server.send(200, "application/json", json);
 }
 
@@ -1687,7 +1707,34 @@ void toggleWLAN() {
         }
     } 
     else {
-        wlanActive = false; wlanClientMode = false; dnsServer.stop(); server.stop(); WiFi.disconnect(true); WiFi.softAPdisconnect(true); WiFi.mode(WIFI_OFF); 
+        wlanActive = false; wlanClientMode = false; dnsServer.stop(); server.stop(); WiFi.disconnect(true); WiFi.softAPdisconnect(true); WiFi.mode(WIFI_OFF);
         wlanIP = ""; showToast("WLAN Aus", 2000);
+    }
+}
+
+// Schaltet den Hotspot automatisch ab, wenn er länger ungenutzt offen bleibt.
+// Spart Akku, falls man das WLAN vergisst. Betrifft nur den reinen AP-Modus
+// (Client-Modus und Evil Portal bleiben unberührt). Solange ein Gerät verbunden
+// ist, läuft der Timer nicht.
+#define WLAN_AP_IDLE_TIMEOUT_MS (10UL * 60UL * 1000UL) // 10 Minuten
+void handleWlanIdleTimeout() {
+    static unsigned long apIdleSince = 0;
+    static unsigned long lastCheck = 0;
+
+    if (!wlanActive || wlanClientMode || evilActive) { apIdleSince = 0; return; }
+
+    unsigned long now = millis();
+    if (now - lastCheck < 5000) return; // alle 5s prüfen reicht
+    lastCheck = now;
+
+    if (WiFi.softAPgetStationNum() > 0) { apIdleSince = now; return; } // Client da -> Timer zurück
+    if (apIdleSince == 0) { apIdleSince = now; return; }               // Leerlauf beginnt jetzt
+
+    if (now - apIdleSince >= WLAN_AP_IDLE_TIMEOUT_MS) {
+        wlanActive = false; wlanClientMode = false;
+        dnsServer.stop(); server.stop(); WiFi.softAPdisconnect(true); WiFi.mode(WIFI_OFF);
+        wlanIP = ""; apIdleSince = 0;
+        showToastColor("Hotspot aus (inaktiv)", 4000, 0x4208);
+        lastSecond = -1;
     }
 }

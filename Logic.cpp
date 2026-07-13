@@ -292,8 +292,13 @@ void executeDeauth() {
 
 void executeNmap() {
     if (!nmapActive) { nmapState = 0; return; }
-    
+
+    // Port-Liste als Funktions-Static, damit ein neuer Scan sie neu parsen kann.
+    // Vorher blieb bei mittendrin abgebrochenem Scan die alte Liste stehen.
+    static int ports[10]; static int portCount = 0;
+
     if (nmapState == 0) {
+        portCount = 0; // Bei jedem frischen Scan die Ports neu einlesen
         nmapLog = "Verbinde mit " + targetSSIDs[currentTargetNmap] + "...\n";
         WiFi.mode(WIFI_STA);
         WiFi.begin(targetSSIDs[currentTargetNmap].c_str(), targetPWDs[currentTargetNmap].c_str());
@@ -318,8 +323,7 @@ void executeNmap() {
         if(millis() - lastTick < 50) return; 
         lastTick = millis();
 
-        // Parse ports from nmapPorts string
-        static int ports[10]; static int portCount = 0;
+        // Parse ports from nmapPorts string (portCount wurde in State 0 genullt)
         if (portCount == 0) {
             String tmp = nmapPorts; int pi = 0;
             while (tmp.length() > 0 && pi < 10) {
@@ -512,6 +516,12 @@ void stopBleScan() {
 
 void checkBackgroundTasks(unsigned long currentMillis) {
     if (probeMonActive) processProbeRing(); // drain ISR ring buffer safely
+    // Mikrofon (I2S RX) an die Dezibel-Seite koppeln. Vorher wurde es beim
+    // normalen Zurückwischen nicht gestoppt -> unnötiger Strom-/CPU-Verbrauch.
+    // Deklarativ: Seite 9 aktiv -> Mic an, sonst aus. Robust für alle Wege.
+    if (currentPage == 9) { if (!micActive) startMic(); }
+    else if (micActive) { stopMic(); }
+    updateMotion(currentMillis); // Schrittzähler + Handgelenk-Wake (BMA423)
     refreshPowerTelemetry(false);
     bool isCharging = isChargingCached(false);
     if (isCharging && !wasCharging) { wasCharging = true; showToastColor("Wird geladen ⚡", 4000, 0x07E0); } else if (!isCharging && wasCharging) { wasCharging = false; showToastColor("Akku-Modus 🔋", 4000, 0x4208); }
@@ -650,9 +660,14 @@ void handlePowerManagement(unsigned long currentMillis) {
     static bool wasAwake = true;
     
     // CPU Taktung für Hacks und AOD
-    int desiredFreq = 80; 
-    if (powerState == 1 || hacksRunning) { desiredFreq = 240; } 
-    else if (powerState == 2 || powerState == 3) { desiredFreq = 160; }
+    // State 1 (aktiv) / Hacks: volle Leistung. State 2 (dimmen): mittel.
+    // State 3 (AOD) zeichnet nur ~1x/Minute -> 80 MHz spart spürbar Strom.
+    // hacksRunning erzwingt oben bereits 240 MHz, AOD-80 greift also nur im
+    // wirklich untätigen Zustand (kein WLAN/BLE/Angriff aktiv).
+    int desiredFreq = 80;
+    if (powerState == 1 || hacksRunning) { desiredFreq = 240; }
+    else if (powerState == 2) { desiredFreq = 160; }
+    else if (powerState == 3) { desiredFreq = 80; }
     if (ESP.getCpuFreqMHz() != desiredFreq) { setCpuFrequencyMhz(desiredFreq); }
 
     // Helligkeits-Steuerung

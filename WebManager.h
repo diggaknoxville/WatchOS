@@ -12,3 +12,4 @@ extern const byte DNS_PORT;
 
 void setupServerRoutes(); // NEU: Routen-Weiche
 void toggleWLAN();
+void handleWlanIdleTimeout(); // schaltet ungenutzten Hotspot nach Timeout ab
