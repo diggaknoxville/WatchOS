@@ -512,6 +512,11 @@ void stopBleScan() {
 
 void checkBackgroundTasks(unsigned long currentMillis) {
     if (probeMonActive) processProbeRing(); // drain ISR ring buffer safely
+    // Mikrofon (I2S RX) an die Dezibel-Seite koppeln. Vorher wurde es beim
+    // normalen Zurückwischen nicht gestoppt -> unnötiger Strom-/CPU-Verbrauch.
+    // Deklarativ: Seite 9 aktiv -> Mic an, sonst aus. Robust für alle Wege.
+    if (currentPage == 9) { if (!micActive) startMic(); }
+    else if (micActive) { stopMic(); }
     refreshPowerTelemetry(false);
     bool isCharging = isChargingCached(false);
     if (isCharging && !wasCharging) { wasCharging = true; showToastColor("Wird geladen ⚡", 4000, 0x07E0); } else if (!isCharging && wasCharging) { wasCharging = false; showToastColor("Akku-Modus 🔋", 4000, 0x4208); }

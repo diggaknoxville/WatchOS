@@ -78,6 +78,26 @@ static int estimateBatteryEtaMinutes(bool chargingNow, int currentPct) {
     return eta;
 }
 
+// Escaped einen String JSON-sicher. Ohne das zerlegt eine SSID/AP-Name mit
+// Anführungszeichen oder Backslash das JSON und das Live-Dashboard bricht ab.
+static String jsonEscape(const String &in) {
+    String out; out.reserve(in.length() + 8);
+    for (size_t i = 0; i < in.length(); i++) {
+        char c = in[i];
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if ((uint8_t)c < 0x20) { char b[8]; snprintf(b, sizeof(b), "\\u%04x", c); out += b; }
+                else out += c;
+        }
+    }
+    return out;
+}
+
 void handleApiStatus() {
     time_t jetzt; time(&jetzt); struct tm *aktuell = localtime(&jetzt);
     float dailyNet = (netSalary * 12.0) / 365.0; float fraction = (millis() % 1000) / 1000.0; 
@@ -119,7 +139,7 @@ void handleApiStatus() {
              battPct, getBatteryVoltageCached(false), cachedCpuTemp, 
              (int)(ESP.getFreeHeap() / 1024), (int)(ESP.getHeapSize() / 1024), earnedToday, 
              (WiFi.status() == WL_CONNECTED || wlanActive || evilActive || wifiSpamActive || deauthActive || nmapActive) ? "true" : "false",
-             isCharging ? "true" : "false", btActive ? "true" : "false", currentSSID.c_str(), currentIP.c_str(),
+             isCharging ? "true" : "false", btActive ? "true" : "false", jsonEscape(currentSSID).c_str(), jsonEscape(currentIP).c_str(),
              ESP.getCpuFreqMHz(), millis() / 1000, rssi, rssi_pct, etaMin, etaMode);
     server.send(200, "application/json", json);
 }
