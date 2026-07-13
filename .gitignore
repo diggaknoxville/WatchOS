@@ -1,0 +1,27 @@
+# --- Build output (Arduino CLI / arduino-cli compile --output-dir) ---
+build/
+*.bin
+*.elf
+*.map
+*.hex
+*.a
+*.o
+*.d
+
+# Compile timing / logs produced by build_firmware.ps1
+last_compile.log
+.compile_stats_seconds.txt
+
+# --- Arduino / PlatformIO ---
+.pio/
+.pioenvs/
+.piolibdeps/
+.vscode/
+.cache/
+
+# --- Editor / OS cruft ---
+*.swp
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini

@@ -1,9 +1,0 @@
-{
-  "additionalFiles": "..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..,..\\..",
-  "compiler.optimization_flags": "-Os",
-  "customBuildProperties": "",
-  "fqbn": "esp32:esp32:twatchs3:UploadSpeed=921600,USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,PartitionScheme=app3M_fat9M_16MB,DebugLevel=none,LoopCore=1,EventsCore=1,EraseFlash=none,JTAGAdapter=default,Revision=Radio_SX1262",
-  "hardwareFolders": "C:\\Users\\Herbert\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.7,C:\\Users\\Herbert\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.7",
-  "otherLibrariesFolders": "C:\\Users\\Herbert\\Documents\\Arduino\\libraries",
-  "sketchLocation": "C:\\Users\\Herbert\\Documents\\WatchOS"
-}
