@@ -867,7 +867,8 @@ void handleTouchInput() {
                 } else if (touchY >= 0 && touchY < 60) {
                     if (probeScrollOffset > 0) { probeScrollOffset--; lastSecond = -1; }
                 } else if (touchY >= 100 && touchY < 140) {
-                    if (probeScrollOffset < probeCount - 3) { probeScrollOffset++; lastSecond = -1; }
+                    // Liste zeigt 4 Zeilen -> max. Offset ist probeCount-4 (sonst leere Slots)
+                    if (probeScrollOffset < probeCount - 4) { probeScrollOffset++; lastSecond = -1; }
                 }
             } else if (currentPage == 21) {
                 if (touchY >= 145 && touchY <= 185 && lastX > 40 && lastX < 200) {
@@ -876,7 +877,8 @@ void handleTouchInput() {
                 } else if (touchY >= 0 && touchY < 60) {
                     if (bleScanScrollOffset > 0) { bleScanScrollOffset--; lastSecond = -1; }
                 } else if (touchY >= 100 && touchY < 140) {
-                    if (bleScanScrollOffset < bleScanCount - 3) { bleScanScrollOffset++; lastSecond = -1; }
+                    // Liste zeigt 4 Zeilen -> max. Offset ist bleScanCount-4 (sonst leere Slots)
+                    if (bleScanScrollOffset < bleScanCount - 4) { bleScanScrollOffset++; lastSecond = -1; }
                 }
             } else if (currentPage == 24) { handleDiceTouch(lastX, touchY);
             }

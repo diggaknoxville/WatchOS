@@ -11,7 +11,7 @@
 #include <USBHIDKeyboard.h> 
 
 #define MAX_HISTORY 200
-#define WATCHOS_VERSION "1.0.0"
+#define WATCHOS_VERSION "1.3.0"
 
 extern XPowersAXP2101 pmu;
 extern TouchDrvFT6X36 touch;

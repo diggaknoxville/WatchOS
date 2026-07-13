@@ -8,17 +8,36 @@
 
 unsigned long otaTotalSize = 0;
 
+// Merkt sich, ob der laufende Upload authentifiziert ist. Ohne diese Sperre
+// koennte jeder im Netz neue Firmware flashen, obwohl der Passwortschutz aktiv ist.
+static bool otaAuthorized = false;
+
+static bool otaAuthRequired() {
+    return webAuthEnabled && webPass.length() > 0;
+}
+
 void setupOTARoutes() {
     server.on("/update", HTTP_POST, []() {
+        // Abschluss-Handler: unautorisierte Uploads hier ablehnen (Flash wurde nie geschrieben).
+        if (otaAuthRequired() && !otaAuthorized) {
+            server.send(401, "text/plain", "Unauthorized");
+            return;
+        }
         server.sendHeader("Connection", "close");
         server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
         delay(500);
         ESP.restart(); // Nach erfolgreichem Update neustarten
     }, []() {
         HTTPUpload& upload = server.upload();
-        
+
         // PHASE 1: START DES UPDATES
         if (upload.status == UPLOAD_FILE_START) {
+            // Auth pruefen BEVOR irgendetwas in den Flash geschrieben wird.
+            otaAuthorized = !otaAuthRequired() || server.authenticate(webUser.c_str(), webPass.c_str());
+            if (!otaAuthorized) {
+                Serial.println("[OTA] Abgelehnt: Authentifizierung fehlgeschlagen");
+                return; // Kein Update.begin() -> es wird nichts geflasht
+            }
             // Wir holen uns die echte Dateigröße vom JavaScript, um die Prozente zu berechnen
             if (server.hasArg("size")) {
                 otaTotalSize = server.arg("size").toInt();
@@ -45,6 +64,7 @@ void setupOTARoutes() {
         } 
         // PHASE 2: WÄHREND DES SCHREIBENS (CHUNKS)
         else if (upload.status == UPLOAD_FILE_WRITE) {
+            if (!otaAuthorized) return; // Nicht autorisiert -> Chunks verwerfen
             if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
                 Update.printError(Serial);
             }
@@ -60,6 +80,7 @@ void setupOTARoutes() {
         } 
         // PHASE 3: ENDE
         else if (upload.status == UPLOAD_FILE_END) {
+            if (!otaAuthorized) return; // Nicht autorisiert -> kein Abschluss
             if (Update.end(true)) {
                 tft.setTextColor(TFT_GREEN, TFT_BLACK);
                 tft.drawString("Installation OK!", 120, 160, 4);
