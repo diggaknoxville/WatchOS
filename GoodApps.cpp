@@ -296,6 +296,83 @@ static void bmaReadAccel(float &ax, float &ay, float &az) {
     az = rawZ / 1024.0;
 }
 
+// =====================================================================
+// Bewegungssensor: Schrittzähler (Software-Pedometer) + Handgelenk-Wake
+// =====================================================================
+// Nutzt den bereits verbauten BMA423 (siehe bmaReadAccel oben). Das ist ein
+// Software-Pedometer per Peak-Erkennung — nicht so exakt wie der interne
+// HW-Zähler des BMA423, aber komplett eigenständig und ohne Config-Blob.
+// Wird bei jedem Loop aus checkBackgroundTasks() aufgerufen und intern auf
+// ~12 Hz begrenzt. Fällt der Sensor aus, liefert er (0,0,0) -> zählt einfach
+// nichts (keine Fehlzählungen).
+long stepCount = 0;                  // Schritte seit Tagesbeginn
+static int stepDay = -1;             // tm_yday des aktuellen Zähltags
+static float stepMagAvg = 1.0f;      // gleitender Mittelwert der Beschleunigung (g)
+static bool stepArmed = true;        // bereit für die nächste Aufwärtsflanke
+static unsigned long lastStepMs = 0;
+static unsigned long lastMotionSample = 0;
+static unsigned long lastStepPersistMs = 0;
+static long lastPersistedSteps = -1;
+static float wakeLastAz = 1.0f;
+
+void loadMotionPrefs() {
+    prefs.begin("clock", true);
+    stepCount = prefs.getInt("steps", 0);
+    stepDay   = prefs.getInt("stepDay", -1);
+    prefs.end();
+    lastPersistedSteps = stepCount;
+}
+
+void updateMotion(unsigned long now) {
+    // ~12 Hz reichen für Schritt-/Gestenerkennung und schonen den Akku.
+    if (now - lastMotionSample < 80) return;
+    lastMotionSample = now;
+
+    float ax, ay, az;
+    bmaReadAccel(ax, ay, az);
+    float mag = sqrtf(ax * ax + ay * ay + az * az);
+    if (mag < 0.05f) return; // Sensor liefert nichts -> ignorieren
+
+    // Tageswechsel: Zähler zurücksetzen (nur bei plausibler Uhrzeit).
+    time_t t; time(&t); struct tm *lt = localtime(&t);
+    if (lt->tm_yday != stepDay) {
+        if (lt->tm_year + 1900 > 2020) { stepDay = lt->tm_yday; stepCount = 0; }
+        else if (stepDay == -1) { stepDay = lt->tm_yday; }
+    }
+
+    // --- Schritt-Erkennung: Peak über dynamischem Schwellwert ---
+    stepMagAvg = stepMagAvg * 0.9f + mag * 0.1f; // Schwerkraft / DC nachführen
+    float dyn = mag - stepMagAvg;
+    const float STEP_HI = 0.13f; // g über dem Mittel = Schritt-Impuls
+    const float STEP_LO = 0.04f;
+    if (stepArmed && dyn > STEP_HI && (now - lastStepMs) > 280) {
+        stepCount++; lastStepMs = now; stepArmed = false;
+        if (currentPage == 10) lastSecond = -1; // Statistikseite live halten
+    } else if (!stepArmed && dyn < STEP_LO) {
+        stepArmed = true; // Flanke abgeschlossen -> bereit für nächsten Schritt
+    }
+
+    // --- Handgelenk-Wake: NUR aus dem AOD (State 3), bewusst konservativ ---
+    // Klare Aufwärtsdrehung des Displays (az springt Richtung +1g). Aus dem
+    // echten Tiefschlaf (State 4) wird bewusst NICHT geweckt, um Fehlauslöser
+    // teuer zu vermeiden. Schwellwerte ggf. am Gerät nachjustieren.
+    if (powerState == 3 && wakeLastAz < 0.35f && az > 0.75f) {
+        lastTouchTime = now; // weckt in den aktiven Zustand
+        lastSecond = -1;
+    }
+    wakeLastAz = az;
+
+    // --- Schritte gelegentlich sichern (alle 3 min, nur bei Änderung) ---
+    if (stepCount != lastPersistedSteps && (now - lastStepPersistMs) > 180000UL) {
+        lastStepPersistMs = now;
+        lastPersistedSteps = stepCount;
+        prefs.begin("clock", false);
+        prefs.putInt("steps", (int)stepCount);
+        prefs.putInt("stepDay", stepDay);
+        prefs.end();
+    }
+}
+
 void showLevel(TFT_eSprite *spr) {
     spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Wasserwaage", 120, 0, 2);
     

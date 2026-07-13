@@ -135,12 +135,12 @@ void handleApiStatus() {
     if (etaMin >= 0) etaMode = isCharging ? "charge" : "discharge";
 
     char json[1024];
-    snprintf(json, sizeof(json), "{\"akku\":%d,\"volt\":\"%.2f\",\"cpu\":\"%.1f\",\"ram_free\":%d,\"ram_tot\":%d,\"geld\":\"%.4f\",\"wifi\":%s,\"charging\":%s,\"bt\":%s,\"ssid\":\"%s\",\"ip\":\"%s\",\"cpufreq\":%d,\"uptime\":%lu,\"rssi\":%d,\"rssi_pct\":%d,\"eta_min\":%d,\"eta_mode\":\"%s\"}", 
-             battPct, getBatteryVoltageCached(false), cachedCpuTemp, 
-             (int)(ESP.getFreeHeap() / 1024), (int)(ESP.getHeapSize() / 1024), earnedToday, 
+    snprintf(json, sizeof(json), "{\"akku\":%d,\"volt\":\"%.2f\",\"cpu\":\"%.1f\",\"ram_free\":%d,\"ram_tot\":%d,\"geld\":\"%.4f\",\"wifi\":%s,\"charging\":%s,\"bt\":%s,\"ssid\":\"%s\",\"ip\":\"%s\",\"cpufreq\":%d,\"uptime\":%lu,\"rssi\":%d,\"rssi_pct\":%d,\"eta_min\":%d,\"eta_mode\":\"%s\",\"steps\":%ld}",
+             battPct, getBatteryVoltageCached(false), cachedCpuTemp,
+             (int)(ESP.getFreeHeap() / 1024), (int)(ESP.getHeapSize() / 1024), earnedToday,
              (WiFi.status() == WL_CONNECTED || wlanActive || evilActive || wifiSpamActive || deauthActive || nmapActive) ? "true" : "false",
              isCharging ? "true" : "false", btActive ? "true" : "false", jsonEscape(currentSSID).c_str(), jsonEscape(currentIP).c_str(),
-             ESP.getCpuFreqMHz(), millis() / 1000, rssi, rssi_pct, etaMin, etaMode);
+             ESP.getCpuFreqMHz(), millis() / 1000, rssi, rssi_pct, etaMin, etaMode, stepCount);
     server.send(200, "application/json", json);
 }
 

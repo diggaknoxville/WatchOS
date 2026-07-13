@@ -521,6 +521,7 @@ void checkBackgroundTasks(unsigned long currentMillis) {
     // Deklarativ: Seite 9 aktiv -> Mic an, sonst aus. Robust für alle Wege.
     if (currentPage == 9) { if (!micActive) startMic(); }
     else if (micActive) { stopMic(); }
+    updateMotion(currentMillis); // Schrittzähler + Handgelenk-Wake (BMA423)
     refreshPowerTelemetry(false);
     bool isCharging = isChargingCached(false);
     if (isCharging && !wasCharging) { wasCharging = true; showToastColor("Wird geladen ⚡", 4000, 0x07E0); } else if (!isCharging && wasCharging) { wasCharging = false; showToastColor("Akku-Modus 🔋", 4000, 0x4208); }

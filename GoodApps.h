@@ -22,3 +22,7 @@ void updateDiceAnimation();
 
 // Wasserwaage (Page 25)
 void showLevel(TFT_eSprite *spr);
+
+// Bewegungssensor: Schrittzähler + Handgelenk-Wake (läuft im Hintergrund)
+void updateMotion(unsigned long now);
+void loadMotionPrefs();
