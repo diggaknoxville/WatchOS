@@ -505,8 +505,8 @@ void renderAOD() {
     int curSlot = aktuell->tm_min / 10; // 0..5  (changes every 10 min)
     if (curSlot != lastOffsetMin) {
         lastOffsetMin = curSlot;
-        aodX = 120 + (random(0, 10) - 5);
-        aodY = 110 + (random(0, 10) - 5);
+        aodX = 120 + random(-5, 6); // symmetrischer Burn-in-Versatz -5..+5
+        aodY = 110 + random(-5, 6);
     }
 
     // --- Detect content changes (time, charge, battery %) ---

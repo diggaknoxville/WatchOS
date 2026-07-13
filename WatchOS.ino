@@ -170,6 +170,7 @@ void loop() {
     }
     
     if (wlanActive || evilActive) { dnsServer.processNextRequest(); server.handleClient(); }
+    handleWlanIdleTimeout(); // ungenutzten Hotspot automatisch abschalten (Akku)
     checkBackgroundTasks(currentMillis);
     handlePowerManagement(currentMillis);
     if (powerState != 4) { handleTouchInput(); }

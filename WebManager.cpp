@@ -1707,7 +1707,34 @@ void toggleWLAN() {
         }
     } 
     else {
-        wlanActive = false; wlanClientMode = false; dnsServer.stop(); server.stop(); WiFi.disconnect(true); WiFi.softAPdisconnect(true); WiFi.mode(WIFI_OFF); 
+        wlanActive = false; wlanClientMode = false; dnsServer.stop(); server.stop(); WiFi.disconnect(true); WiFi.softAPdisconnect(true); WiFi.mode(WIFI_OFF);
         wlanIP = ""; showToast("WLAN Aus", 2000);
+    }
+}
+
+// Schaltet den Hotspot automatisch ab, wenn er länger ungenutzt offen bleibt.
+// Spart Akku, falls man das WLAN vergisst. Betrifft nur den reinen AP-Modus
+// (Client-Modus und Evil Portal bleiben unberührt). Solange ein Gerät verbunden
+// ist, läuft der Timer nicht.
+#define WLAN_AP_IDLE_TIMEOUT_MS (10UL * 60UL * 1000UL) // 10 Minuten
+void handleWlanIdleTimeout() {
+    static unsigned long apIdleSince = 0;
+    static unsigned long lastCheck = 0;
+
+    if (!wlanActive || wlanClientMode || evilActive) { apIdleSince = 0; return; }
+
+    unsigned long now = millis();
+    if (now - lastCheck < 5000) return; // alle 5s prüfen reicht
+    lastCheck = now;
+
+    if (WiFi.softAPgetStationNum() > 0) { apIdleSince = now; return; } // Client da -> Timer zurück
+    if (apIdleSince == 0) { apIdleSince = now; return; }               // Leerlauf beginnt jetzt
+
+    if (now - apIdleSince >= WLAN_AP_IDLE_TIMEOUT_MS) {
+        wlanActive = false; wlanClientMode = false;
+        dnsServer.stop(); server.stop(); WiFi.softAPdisconnect(true); WiFi.mode(WIFI_OFF);
+        wlanIP = ""; apIdleSince = 0;
+        showToastColor("Hotspot aus (inaktiv)", 4000, 0x4208);
+        lastSecond = -1;
     }
 }
