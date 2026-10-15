@@ -13,5 +13,6 @@ int getBatteryCached(bool forceRefresh = false);
 bool isChargingCached(bool forceRefresh = false);
 float getBatteryVoltageCached(bool forceRefresh = false);
 void refreshPowerTelemetry(bool forceRefresh = false);
+bool syncNtpTime(int timeoutSeconds = 6);
 String readFileFromFS(String path, String fallback);
 void writeFileToFS(String path, String content);

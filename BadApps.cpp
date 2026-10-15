@@ -9,66 +9,114 @@
 #include "Globals.h"
 #include "Display.h"
 #include "Logic.h"
+#include "AppManager.h"
 
 // =====================================================================
-// Bad Apps Menu (Page 23) — Liste aller "bösen" Apps
+// =====================================================================
+// Security Apps Menu (Page 23) — Modulares Package Menü
 // =====================================================================
 void renderBadMenu(TFT_eSprite *spr) {
-    spr->setTextDatum(TC_DATUM); spr->setTextColor(TFT_RED); spr->drawString("Bad Apps", 120, 2, 2);
+    auto apps = AppManager::getAppsByCategory(CAT_SECURITY, true);
+    int total = (int)apps.size();
+    int perPage = 8;
+    int maxPage = (total > 0) ? ((total - 1) / perPage) : 0;
+    if (AppManager::secMenuPage > maxPage) AppManager::secMenuPage = maxPage;
+    if (AppManager::secMenuPage < 0) AppManager::secMenuPage = 0;
+
+    int curPage = AppManager::secMenuPage;
+    int startIdx = curPage * perPage;
+    int endIdx = min(startIdx + perPage, total);
+
+    spr->setTextDatum(TC_DATUM);
+    spr->setTextColor(TFT_RED);
+    if (maxPage > 0) {
+        char hBuf[32];
+        snprintf(hBuf, sizeof(hBuf), "Security (%d/%d)", curPage + 1, maxPage + 1);
+        spr->drawString(hBuf, 120, 2, 2);
+    } else {
+        spr->drawString("Security", 120, 2, 2);
+    }
     spr->setTextDatum(MC_DATUM);
 
-    struct AppEntry { const char* label; uint16_t color; };
-    AppEntry apps[] = {
-        {"Phishing",  TFT_RED},       // -> Page 12
-        {"Ducky",     TFT_YELLOW},    // -> Page 15
-        {"WiFi Spam", TFT_RED},       // -> Page 16
-        {"BLE Spam",  TFT_MAGENTA},   // -> Page 17
-        {"Nmap",      TFT_GREEN},     // -> Page 18
-        {"Deauth",    TFT_RED},       // -> Page 19
-        {"Probe Mon", TFT_CYAN},      // -> Page 20
-        {"BLE Scan",  TFT_MAGENTA},   // -> Page 21
-    };
-    int count = 8;
-
-    int bW = 100, bH = 38, gapY = 4;
-    int startY = 22;
-    for (int i = 0; i < count; i++) {
-        int col = i % 2;
-        int row = i / 2;
+    int bW = 100, bH = 38, gapY = 4, startY = 22;
+    for (int i = startIdx; i < endIdx; i++) {
+        int slot = i - startIdx;
+        int col = slot % 2;
+        int row = slot / 2;
         int bx = (col == 0) ? 15 : 125;
         int by = startY + row * (bH + gapY);
+
+        bool isRunning = (apps[i]->statusFn != nullptr) ? apps[i]->statusFn() : false;
+
         spr->fillRoundRect(bx, by, bW, bH, 8, cAppBG);
-        spr->setTextColor(apps[i].color);
-        spr->drawString(apps[i].label, bx + bW / 2, by + bH / 2, 2);
+        uint16_t borderCol = isRunning ? apps[i]->color : cBatBG;
+        spr->drawRoundRect(bx, by, bW, bH, 8, borderCol);
+
+        // Icon Badge
+        if (apps[i]->iconText.length() > 0) {
+            spr->fillRoundRect(bx + 4, by + 9, 20, 20, 4, tft.color565(35, 15, 15));
+            spr->setTextColor(apps[i]->color);
+            spr->setTextDatum(MC_DATUM);
+            spr->drawString(apps[i]->iconText, bx + 14, by + 19, 1);
+        }
+
+        spr->setTextColor(apps[i]->color);
+        spr->setTextDatum(ML_DATUM);
+        spr->drawString(apps[i]->name, bx + 28, by + bH / 2, 2);
+
+        if (isRunning) {
+            spr->fillCircle(bx + bW - 7, by + 8, 3, TFT_RED);
+            spr->fillCircle(bx + bW - 7, by + 8, 1, 0xFFFF);
+        }
     }
-    // Status-Dots für laufende Bad-Apps
-    // Reihenfolge: Phishing(L), Ducky(R), WiFi Spam(L), BLE Spam(R), Nmap(L), Deauth(R), Probe Mon(L), BLE Scan(R)
-    if (evilActive)      spr->fillCircle(15 + bW - 6, startY + 6, 4, TFT_GREEN);
-    if (badUsbActive)    spr->fillCircle(125 + bW - 6, startY + 6, 4, TFT_GREEN);
-    if (wifiSpamActive)  spr->fillCircle(15 + bW - 6, startY + (bH+gapY) + 6, 4, TFT_GREEN);
-    if (bleSpamActive)   spr->fillCircle(125 + bW - 6, startY + (bH+gapY) + 6, 4, TFT_GREEN);
-    if (nmapActive)      spr->fillCircle(15 + bW - 6, startY + 2*(bH+gapY) + 6, 4, TFT_GREEN);
-    if (deauthActive)    spr->fillCircle(125 + bW - 6, startY + 2*(bH+gapY) + 6, 4, TFT_GREEN);
-    if (probeMonActive)  spr->fillCircle(15 + bW - 6, startY + 3*(bH+gapY) + 6, 4, TFT_GREEN);
-    if (bleScanActive)   spr->fillCircle(125 + bW - 6, startY + 3*(bH+gapY) + 6, 4, TFT_GREEN);
+
+    // Paginierungs-Indikator unten
+    if (maxPage > 0) {
+        spr->setTextDatum(MC_DATUM);
+        spr->setTextColor(0x8BD0);
+        spr->drawString("<", 20, 200, 2);
+        spr->drawString(">", 220, 200, 2);
+        for (int p = 0; p <= maxPage; p++) {
+            int dotX = 120 + (p - (float)maxPage / 2.0f) * 14;
+            if (p == curPage) spr->fillCircle(dotX, 200, 3, TFT_RED);
+            else spr->drawCircle(dotX, 200, 3, 0x52AA);
+        }
+    }
 }
 
 void handleBadMenuTouch(int x, int touchY) {
+    auto apps = AppManager::getAppsByCategory(CAT_SECURITY, true);
+    int total = (int)apps.size();
+    int perPage = 8;
+    int maxPage = (total > 0) ? ((total - 1) / perPage) : 0;
+    int curPage = AppManager::secMenuPage;
+
+    // Bottom Navigation Bar Tap (Page < >)
+    if (maxPage > 0 && touchY >= 190) {
+        if (x < 80 && curPage > 0) {
+            AppManager::secMenuPage--;
+            triggerVibration();
+            lastSecond = -1;
+            return;
+        } else if (x > 160 && curPage < maxPage) {
+            AppManager::secMenuPage++;
+            triggerVibration();
+            lastSecond = -1;
+            return;
+        }
+    }
+
     int bH = 38, gapY = 4, startY = 22;
     int row = (touchY - startY) / (bH + gapY);
     int col = (x < 120) ? 0 : 1;
-    int idx = row * 2 + col;
+    int slot = row * 2 + col;
 
     if (row < 0 || row > 3 || touchY < startY) return;
-    if (idx > 7) return;
 
-    // Mapping: idx -> page
-    int pages[] = {12, 15, 16, 17, 18, 19, 20, 21};
-    int targetPage = pages[idx];
+    int idx = curPage * perPage + slot;
+    if (idx >= total) return;
 
-    triggerVibration();
-    killBadApps(); // Auto-kill laufende Bad-App bevor neue gestartet wird
-    slideToPage(targetPage, 0, -1);
+    AppManager::launchApp(apps[idx]->pageId);
 }
 
 // =====================================================================

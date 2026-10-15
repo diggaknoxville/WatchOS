@@ -5,6 +5,9 @@
 #include "GoodApps.h"
 #include "BadApps.h" 
 #include "HardwareConfig.h" 
+#include "NotificationManager.h"
+#include "LoraManager.h"
+#include "AppManager.h"
 #include <esp_sleep.h>
 #include <driver/i2s.h>
 #include <BLEDevice.h>
@@ -19,6 +22,8 @@ extern "C" {
 }
 
 extern void toggleWLAN();
+extern void startHotspotAP();
+extern void stopHotspotAP();
 extern void toggleUsbHid();
 extern void playSynthSound(int type, int duration);
 
@@ -28,8 +33,8 @@ bool bleSpamActive = false;
 
 void showToast(String msg, int duration) { toastMsg = msg; toastEndTime = millis() + duration; toastColor = 0x2945; lastSecond = -1; }
 void showToastColor(String msg, int duration, uint16_t col) { toastMsg = msg; toastEndTime = millis() + duration; toastColor = col; lastSecond = -1; }
-void triggerVibration() { if (vibActive) { drv.selectLibrary(1); drv.setMode(0); drv.setWaveform(0, hapticWaveform); drv.setWaveform(1, 0); drv.run(); } }
-void triggerAlarm() { for(int i=0; i<4; i++) { if(timerAlarmMode == 0 || timerAlarmMode == 2) { drv.selectLibrary(1); drv.setMode(0); drv.setWaveform(0, 47); drv.setWaveform(1, 0); drv.run(); } if(timerAlarmMode == 1 || timerAlarmMode == 2) { playSynthSound(6, 200); } delay(400); } }
+void triggerVibration() { if (vibActive) { drv.selectLibrary(1); drv.setMode(HapticMode::INTERNAL_TRIGGER); drv.setWaveform(0, hapticWaveform); drv.setWaveform(1, 0); drv.run(); } }
+void triggerAlarm() { for(int i=0; i<4; i++) { if(timerAlarmMode == 0 || timerAlarmMode == 2) { drv.selectLibrary(1); drv.setMode(HapticMode::INTERNAL_TRIGGER); drv.setWaveform(0, 47); drv.setWaveform(1, 0); drv.run(); } if(timerAlarmMode == 1 || timerAlarmMode == 2) { playSynthSound(6, 200); } delay(400); } }
 
 void killAllApps() { 
     swRunning = false; swElapsed = 0; timerRunning = false; timerRemaining = 0; stopMic(); jigglerActive = false;
@@ -130,59 +135,124 @@ String translateForLayout(String text, int layout) {
     return res;
 }
 
+static int duckyIdx = 0;
+static unsigned long duckyDelayUntil = 0;
+static int duckyCurrentScript = -1;
+
 void executeBadUSB() {
-    if(!badUsbActive) return;
-    String scriptToRun = badUsbScripts[currentBadUsbScript];
-    int idx = 0;
-    while(idx < scriptToRun.length() && badUsbActive) {
-        int nextLine = scriptToRun.indexOf('\n', idx);
-        if(nextLine == -1) nextLine = scriptToRun.length();
-        String line = scriptToRun.substring(idx, nextLine);
-        line.trim();
-        
-        if (line.startsWith("DELAY ")) { int d = line.substring(6).toInt(); delay(d); } 
-        else if (line.startsWith("STRING ")) { String payload = line.substring(7); payload = translateForLayout(payload, badUsbLayout); Keyboard.print(payload); delay(50); } 
-        else if (line.startsWith("GUI ")) { Keyboard.press(KEY_LEFT_GUI); if(line.length() > 4) Keyboard.press(line[4]); delay(100); Keyboard.releaseAll(); } 
-        else if (line == "ENTER") { Keyboard.write(KEY_RETURN); }
-        else if (line == "TAB") { Keyboard.write(KEY_TAB); }
-        else if (line == "ESCAPE" || line == "ESC") { Keyboard.write(KEY_ESC); }
-        else if (line == "BACKSPACE") { Keyboard.write(KEY_BACKSPACE); }
-        else if (line == "DELETE") { Keyboard.write(KEY_DELETE); }
-        else if (line == "INSERT") { Keyboard.write(KEY_INSERT); }
-        else if (line == "HOME") { Keyboard.write(KEY_HOME); }
-        else if (line == "END") { Keyboard.write(KEY_END); }
-        else if (line == "PAGEUP") { Keyboard.write(KEY_PAGE_UP); }
-        else if (line == "PAGEDOWN") { Keyboard.write(KEY_PAGE_DOWN); }
-        else if (line == "UPARROW" || line == "UP") { Keyboard.write(KEY_UP_ARROW); }
-        else if (line == "DOWNARROW" || line == "DOWN") { Keyboard.write(KEY_DOWN_ARROW); }
-        else if (line == "LEFTARROW" || line == "LEFT") { Keyboard.write(KEY_LEFT_ARROW); }
-        else if (line == "RIGHTARROW" || line == "RIGHT") { Keyboard.write(KEY_RIGHT_ARROW); }
-        else if (line == "SPACE") { Keyboard.write(' '); }
-        else if (line == "PRINTSCREEN") { Keyboard.write(KEY_PRINT_SCREEN); }
-        else if (line == "CAPSLOCK") { Keyboard.write(KEY_CAPS_LOCK); }
-        else if (line.startsWith("F") && line.length() <= 3 && line.substring(1).toInt() >= 1 && line.substring(1).toInt() <= 12) {
-            int fn = line.substring(1).toInt();
-            Keyboard.write(KEY_F1 + fn - 1);
-        }
-        else if (line.startsWith("ALT ")) { Keyboard.press(KEY_LEFT_ALT); if(line.length() > 4) Keyboard.press(line[4]); delay(100); Keyboard.releaseAll(); }
-        else if (line.startsWith("CTRL ") || line.startsWith("CONTROL ")) { 
-            int sp = line.indexOf(' '); String rest = line.substring(sp + 1); rest.trim();
-            Keyboard.press(KEY_LEFT_CTRL); 
-            if (rest.length() == 1) Keyboard.press(rest[0]); 
-            delay(100); Keyboard.releaseAll(); 
-        }
-        else if (line.startsWith("SHIFT ")) { Keyboard.press(KEY_LEFT_SHIFT); if(line.length() > 6) Keyboard.press(line[6]); delay(100); Keyboard.releaseAll(); }
-        else if (line.startsWith("ALT+TAB")) { Keyboard.press(KEY_LEFT_ALT); Keyboard.press(KEY_TAB); delay(100); Keyboard.releaseAll(); }
-        else if (line.startsWith("CTRL+ALT ")) { 
-            Keyboard.press(KEY_LEFT_CTRL); Keyboard.press(KEY_LEFT_ALT);
-            if(line.length() > 9) Keyboard.press(line[9]); 
-            delay(100); Keyboard.releaseAll(); 
-        }
-        
-        idx = nextLine + 1;
-        yield();
+    if(!badUsbActive) {
+        duckyIdx = 0;
+        duckyDelayUntil = 0;
+        duckyCurrentScript = -1;
+        return;
     }
-    badUsbActive = false; lastSecond = -1;
+
+    if (millis() < duckyDelayUntil) {
+        return;
+    }
+
+    if (duckyCurrentScript != currentBadUsbScript) {
+        duckyCurrentScript = currentBadUsbScript;
+        duckyIdx = 0;
+        duckyDelayUntil = 0;
+    }
+
+    String scriptToRun = badUsbScripts[currentBadUsbScript];
+    if (duckyIdx >= scriptToRun.length()) {
+        badUsbActive = false;
+        duckyIdx = 0;
+        duckyDelayUntil = 0;
+        duckyCurrentScript = -1;
+        showToast("Ducky fertig!", 2500);
+        lastSecond = -1;
+        return;
+    }
+
+    int nextLine = scriptToRun.indexOf('\n', duckyIdx);
+    if(nextLine == -1) nextLine = scriptToRun.length();
+    String line = scriptToRun.substring(duckyIdx, nextLine);
+    line.trim();
+    duckyIdx = nextLine + 1;
+
+    if (line.length() == 0) return; // Leere Zeile überspringen
+
+    if (line.startsWith("DELAY ")) {
+        int d = line.substring(6).toInt();
+        duckyDelayUntil = millis() + d;
+        return;
+    }
+    else if (line.startsWith("STRING ")) {
+        String payload = line.substring(7);
+        payload = translateForLayout(payload, badUsbLayout);
+        Keyboard.print(payload);
+        duckyDelayUntil = millis() + 40;
+    }
+    else if (line.startsWith("GUI ")) {
+        Keyboard.press(KEY_LEFT_GUI);
+        if(line.length() > 4) Keyboard.press(line[4]);
+        delay(20);
+        Keyboard.releaseAll();
+        duckyDelayUntil = millis() + 60;
+    }
+    else if (line == "ENTER") { Keyboard.write(KEY_RETURN); duckyDelayUntil = millis() + 40; }
+    else if (line == "TAB") { Keyboard.write(KEY_TAB); duckyDelayUntil = millis() + 30; }
+    else if (line == "ESCAPE" || line == "ESC") { Keyboard.write(KEY_ESC); duckyDelayUntil = millis() + 30; }
+    else if (line == "BACKSPACE") { Keyboard.write(KEY_BACKSPACE); duckyDelayUntil = millis() + 30; }
+    else if (line == "DELETE") { Keyboard.write(KEY_DELETE); duckyDelayUntil = millis() + 30; }
+    else if (line == "INSERT") { Keyboard.write(KEY_INSERT); duckyDelayUntil = millis() + 30; }
+    else if (line == "HOME") { Keyboard.write(KEY_HOME); duckyDelayUntil = millis() + 30; }
+    else if (line == "END") { Keyboard.write(KEY_END); duckyDelayUntil = millis() + 30; }
+    else if (line == "PAGEUP") { Keyboard.write(KEY_PAGE_UP); duckyDelayUntil = millis() + 30; }
+    else if (line == "PAGEDOWN") { Keyboard.write(KEY_PAGE_DOWN); duckyDelayUntil = millis() + 30; }
+    else if (line == "UPARROW" || line == "UP") { Keyboard.write(KEY_UP_ARROW); duckyDelayUntil = millis() + 30; }
+    else if (line == "DOWNARROW" || line == "DOWN") { Keyboard.write(KEY_DOWN_ARROW); duckyDelayUntil = millis() + 30; }
+    else if (line == "LEFTARROW" || line == "LEFT") { Keyboard.write(KEY_LEFT_ARROW); duckyDelayUntil = millis() + 30; }
+    else if (line == "RIGHTARROW" || line == "RIGHT") { Keyboard.write(KEY_RIGHT_ARROW); duckyDelayUntil = millis() + 30; }
+    else if (line == "SPACE") { Keyboard.write(' '); duckyDelayUntil = millis() + 30; }
+    else if (line == "PRINTSCREEN") { Keyboard.write(KEY_PRINT_SCREEN); duckyDelayUntil = millis() + 30; }
+    else if (line == "CAPSLOCK") { Keyboard.write(KEY_CAPS_LOCK); duckyDelayUntil = millis() + 30; }
+    else if (line.startsWith("F") && line.length() <= 3 && line.substring(1).toInt() >= 1 && line.substring(1).toInt() <= 12) {
+        int fn = line.substring(1).toInt();
+        Keyboard.write(KEY_F1 + fn - 1);
+        duckyDelayUntil = millis() + 40;
+    }
+    else if (line.startsWith("ALT ")) {
+        Keyboard.press(KEY_LEFT_ALT);
+        if(line.length() > 4) Keyboard.press(line[4]);
+        delay(20);
+        Keyboard.releaseAll();
+        duckyDelayUntil = millis() + 60;
+    }
+    else if (line.startsWith("CTRL ") || line.startsWith("CONTROL ")) { 
+        int sp = line.indexOf(' '); String rest = line.substring(sp + 1); rest.trim();
+        Keyboard.press(KEY_LEFT_CTRL); 
+        if (rest.length() == 1) Keyboard.press(rest[0]); 
+        delay(20);
+        Keyboard.releaseAll();
+        duckyDelayUntil = millis() + 60;
+    }
+    else if (line.startsWith("SHIFT ")) {
+        Keyboard.press(KEY_LEFT_SHIFT);
+        if(line.length() > 6) Keyboard.press(line[6]);
+        delay(20);
+        Keyboard.releaseAll();
+        duckyDelayUntil = millis() + 60;
+    }
+    else if (line.startsWith("ALT+TAB")) {
+        Keyboard.press(KEY_LEFT_ALT);
+        Keyboard.press(KEY_TAB);
+        delay(20);
+        Keyboard.releaseAll();
+        duckyDelayUntil = millis() + 60;
+    }
+    else if (line.startsWith("CTRL+ALT ")) { 
+        Keyboard.press(KEY_LEFT_CTRL);
+        Keyboard.press(KEY_LEFT_ALT);
+        if(line.length() > 9) Keyboard.press(line[9]); 
+        delay(20);
+        Keyboard.releaseAll();
+        duckyDelayUntil = millis() + 60;
+    }
 }
 
 void spamBeacons() {
@@ -518,13 +588,44 @@ void checkBackgroundTasks(unsigned long currentMillis) {
     if (probeMonActive) processProbeRing(); // drain ISR ring buffer safely
     // Mikrofon (I2S RX) an die Dezibel-Seite koppeln. Vorher wurde es beim
     // normalen Zurückwischen nicht gestoppt -> unnötiger Strom-/CPU-Verbrauch.
-    // Deklarativ: Seite 9 aktiv -> Mic an, sonst aus. Robust für alle Wege.
-    if (currentPage == 9) { if (!micActive) startMic(); }
+    AppPackage* curApp = AppManager::getAppByPage(currentPage);
+    String curTid = curApp ? (curApp->driver.length() > 0 ? curApp->driver : curApp->id) : "";
+    if (curTid == "mic") { if (!micActive) startMic(); }
     else if (micActive) { stopMic(); }
     updateMotion(currentMillis); // Schrittzähler + Handgelenk-Wake (BMA423)
     refreshPowerTelemetry(false);
+
+    // Automatischer Hintergrund-NTP-Sync, wenn mit einem Heim-WLAN verbunden
+    static unsigned long lastNtpAutoSync = 0;
+    if (wlanActive && wlanClientMode && WiFi.status() == WL_CONNECTED) {
+        if (lastNtpAutoSync == 0 || (currentMillis - lastNtpAutoSync > 1800000UL)) {
+            lastNtpAutoSync = currentMillis;
+            syncNtpTime(6);
+        }
+    } else {
+        lastNtpAutoSync = 0;
+    }
+
     bool isCharging = isChargingCached(false);
-    if (isCharging && !wasCharging) { wasCharging = true; showToastColor("Wird geladen ⚡", 4000, 0x07E0); } else if (!isCharging && wasCharging) { wasCharging = false; showToastColor("Akku-Modus 🔋", 4000, 0x4208); }
+    if (isCharging && !wasCharging) { 
+        wasCharging = true; 
+        showToastColor("Wird geladen ⚡", 3500, 0x07E0); 
+        if (!wlanActive && !evilActive) {
+            startHotspotAP();
+        }
+        if (hotspotPromptActive) {
+            hotspotPromptActive = false; // Zurueck am Strom -> Abfrage beenden
+        }
+    } else if (!isCharging && wasCharging) { 
+        wasCharging = false; 
+        showToastColor("Akku-Modus 🔋", 3000, 0x07E0);
+        lastSecond = -1;
+    }
+
+    // Am Strom sicherstellen, dass Hotspot dauerhaft laeuft
+    if (isCharging && !wlanActive && !evilActive) {
+        startHotspotAP();
+    }
     if (timerRunning && (currentMillis - timerLastTick >= 1000)) { timerRemaining--; timerLastTick = currentMillis; if (timerRemaining <= 0) { timerRunning = false; timerRemaining = 0; triggerAlarm(); lastSecond = -1; lastTouchTime = currentMillis; showToastColor("Timer abgelaufen! ⏱️", 6000, 0xFD20); } }
 
     static unsigned long lastJiggle = 0; 
@@ -559,13 +660,47 @@ void checkBackgroundTasks(unsigned long currentMillis) {
     }
 
     if (currentMillis - lastHistoryTime >= historyInterval || historyCount == 0) {
+        bool hadPrevSample = historyCount > 0;
+        uint16_t prevRaw = hadPrevSample ? batHistoryPct[historyCount - 1] : 0;
+
         lastHistoryTime = currentMillis;
         uint16_t batVal = (uint16_t)getBattery();
-        if (isCharging) batVal += 200; 
+        if (isCharging) batVal += 200;
         else if (hacksRunning) batVal += 100;
-        
-        if (historyCount < MAX_HISTORY) { batHistoryPct[historyCount] = batVal; historyCount++; } 
+
+        if (historyCount < MAX_HISTORY) { batHistoryPct[historyCount] = batVal; historyCount++; }
         else { for(int i = 1; i < MAX_HISTORY; i++) batHistoryPct[i-1] = batHistoryPct[i]; batHistoryPct[MAX_HISTORY-1] = batVal; }
+
+        // Adaptive Restdauer-Schaetzung: bleibt der Modus ueber ein Sample-Intervall gleich,
+        // fliesst die beobachtete %/h-Rate per EMA in den gelernten Erfahrungswert dieses Modus ein.
+        static int battLearnWriteCounter = 0;
+        bool learnedThisTick = false;
+        if (hadPrevSample) {
+            int prevMode = battRawMode(prevRaw), curMode = battRawMode(batVal);
+            if (prevMode == curMode) {
+                int prevPct = battRawPct(prevRaw), curPct = battRawPct(batVal);
+                int delta = curMode == 2 ? (curPct - prevPct) : (prevPct - curPct); // Laden=Gewinn, sonst Verlust
+                if (delta > 0 && delta <= 25) { // Ausreisser durch Messfehler ignorieren
+                    float ratePerHour = (float)delta * (3600000.0f / (float)historyInterval);
+                    const float alpha = 0.15f;
+                    if (curMode == 2) { battRateCharging += alpha * (ratePerHour - battRateCharging); if (battSamplesCharging < 60000) battSamplesCharging++; }
+                    else if (curMode == 1) { battRateHacking += alpha * (ratePerHour - battRateHacking); if (battSamplesHacking < 60000) battSamplesHacking++; }
+                    else { battRateNormal += alpha * (ratePerHour - battRateNormal); if (battSamplesNormal < 60000) battSamplesNormal++; }
+                    learnedThisTick = true;
+                }
+            }
+        }
+        if (learnedThisTick) {
+            battLearnWriteCounter++;
+            if (battLearnWriteCounter >= 5) { // wie bei hData: seltener schreiben, NVS schonen
+                battLearnWriteCounter = 0;
+                prefs.begin("clock", false);
+                prefs.putFloat("bRateN", battRateNormal); prefs.putFloat("bRateH", battRateHacking); prefs.putFloat("bRateC", battRateCharging);
+                prefs.putUShort("bSampN", battSamplesNormal); prefs.putUShort("bSampH", battSamplesHacking); prefs.putUShort("bSampC", battSamplesCharging);
+                prefs.end();
+            }
+        }
+
         // NVS-Schreiben nur jede 5. Messung (= alle 50min statt alle 10min) um NVS-Verschleiß zu reduzieren
         static int nvsWriteCounter = 0;
         nvsWriteCounter++;
@@ -577,7 +712,9 @@ void checkBackgroundTasks(unsigned long currentMillis) {
             prefs.putBytes("hData", batHistoryPct, MAX_HISTORY * sizeof(uint16_t));
             prefs.end();
         }
-        if (currentPage == 9) lastSecond = -1; 
+        AppPackage* curApp = AppManager::getAppByPage(currentPage);
+        String curTid = curApp ? (curApp->driver.length() > 0 ? curApp->driver : curApp->id) : "";
+        if (curTid == "mic") lastSecond = -1;
         
         // Batterie-Warnung bei <15% (nur wenn nicht am Laden)
         static bool lowBatWarned = false;
@@ -585,10 +722,25 @@ void checkBackgroundTasks(unsigned long currentMillis) {
         uint8_t rawBat = getBattery();
         if (rawBat <= 15 && rawBat > 0 && !isCharging2 && !lowBatWarned) {
             lowBatWarned = true;
+            saveMotionPrefs(); // Notfall-Sicherung der Schritte vor eventuellem Abschalten
             triggerVibration(); delay(200); triggerVibration();
             showToastColor("Akku niedrig! " + String(rawBat) + "%", 5000, TFT_RED);
         } else if (rawBat > 20 || isCharging2) {
             lowBatWarned = false;
+        }
+    }
+
+    // System-Verlauf (CPU-Takt/-Temperatur) fuers Web-Dashboard: eigener, groeberer Sample-Takt
+    // (15min) rein im RAM - kein NVS-Schreiben noetig, da nur fuer die Live-Ansicht gedacht.
+    const unsigned long sysHistInterval = 900000; // 15 Minuten
+    if (currentMillis - lastSysHistTime >= sysHistInterval || (lastSysHistTime == 0 && sysHistCount == 0)) {
+        lastSysHistTime = currentMillis;
+        float f = ESP.getCpuFreqMHz();
+        float t = temperatureRead();
+        if (sysHistCount < SYS_HIST_MAX) { sysHistFreq[sysHistCount] = f; sysHistTemp[sysHistCount] = t; sysHistCount++; }
+        else {
+            for (int i = 1; i < SYS_HIST_MAX; i++) { sysHistFreq[i - 1] = sysHistFreq[i]; sysHistTemp[i - 1] = sysHistTemp[i]; }
+            sysHistFreq[SYS_HIST_MAX - 1] = f; sysHistTemp[SYS_HIST_MAX - 1] = t;
         }
     }
 }
@@ -610,6 +762,8 @@ void handlePowerManagement(unsigned long currentMillis) {
                 pmu.clearIrqStatus();
                 refreshPowerTelemetry(true);
             }
+            drv.begin(Wire, 10, 11);
+            bmaInvalidate();
         }
     }
 
@@ -619,8 +773,11 @@ void handlePowerManagement(unsigned long currentMillis) {
     bool isCharging = isChargingCached(false);
     bool hacksRunning = (jigglerActive || badUsbActive || wifiSpamActive || bleSpamActive || deauthActive || nmapActive || evilActive || wlanActive || probeMonActive || bleScanActive);
     
+    AppPackage* curApp = AppManager::getAppByPage(currentPage);
+    String curTid = curApp ? (curApp->driver.length() > 0 ? curApp->driver : curApp->id) : "";
+
     // Basis-Einstufung nach Zeit
-    if (currentPage == 10) powerState = 1; 
+    if (curTid == "flashlight" || curTid == "battery") powerState = 1; 
     else if (elapsed < time_dim_start) powerState = 1;      // State 1: Aktiv (Hell)
     else if (elapsed < time_aod_start) powerState = 2;      // State 2: Dimmen
     else if (elapsed < time_sleep_start) powerState = 3;    // State 3: AOD (Immer hier bleiben wenn am Strom!)
@@ -639,9 +796,14 @@ void handlePowerManagement(unsigned long currentMillis) {
     
     if (pekPressed) {
         triggerVibration(); 
-        if (currentPage == 10) { currentPage = 5; } 
-        // Krone spult die Zeit exakt auf den Beginn der AOD Phase (State 3) vor oder zurück!
-        lastTouchTime = currentMillis - time_aod_start - 10; 
+        if (curTid == "flashlight" || curTid == "battery") { currentPage = 5; } 
+        if (powerState >= 3) {
+            // Aus AOD/Sleep aufwecken: elapsed = 0 → powerState = 1 (volle Helligkeit)
+            lastTouchTime = currentMillis;
+        } else {
+            // Aus Aktiv/Dim: direkt in AOD springen
+            lastTouchTime = currentMillis - time_aod_start - 10;
+        }
         lastSecond = -1;
         return; 
     }
@@ -684,6 +846,12 @@ void handlePowerManagement(unsigned long currentMillis) {
     else if (powerState == 4 || powerState == 5) {
         setBrightness(0);
     }
+
+    // Mikrofon automatisch ausschalten wenn Bildschirm zu AOD/Sleep übergeht
+    // (Page 9 / Dezibel wird nicht mehr gerendert – I2S wäre aktiv aber nutzlos)
+    if (micActive && powerState >= 3) {
+        stopMic();
+    }
     
     // Screen Blanking
     if (isAwake != wasAwake) { 
@@ -694,7 +862,7 @@ void handlePowerManagement(unsigned long currentMillis) {
 
     // Echter Hardware Tiefschlaf (Nur in State 4 erlaubt!)
     if (powerState == 4) {
-        esp_sleep_enable_timer_wakeup(100000); 
+        esp_sleep_enable_timer_wakeup(1000000); // 1 Sekunde (Touch-Wakeup reicht als primäre Quelle)
         esp_sleep_enable_ext0_wakeup((gpio_num_t)TOUCH_INT, 0); // Display-Touch weckt CPU auf!
         esp_light_sleep_start(); 
     }
@@ -702,11 +870,196 @@ void handlePowerManagement(unsigned long currentMillis) {
 
 bool isPageEnabled(int p) { if(p==0) return enP0; if(p==1) return enP1; if(p==2) return enP2; if(p==3) return enP3; return false; }
 
-void handleTouchInput() {
+static void handleAppTouch(AppPackage* app, int lastX, int touchY) {
+    if (!app) return;
+    String target = (app->driver.length() > 0) ? app->driver : app->id;
+    if (app->isCustom && target.length() == 0) {
+        AppManager::handleDynamicAppTouch(app, lastX, touchY);
+        return;
+    }
+    if (target == "stopwatch") {
+        if (touchY >= 150) {
+            if (lastX < 80) {
+                // Start/Stop
+                swRunning = !swRunning; triggerVibration();
+                if(swRunning) swStartTime = millis(); else swElapsed += (millis() - swStartTime);
+            } else if (lastX < 160 && swRunning && swLapCount < MAX_LAPS) {
+                // Runde
+                long lapMs = swElapsed + (millis() - swStartTime);
+                swLaps[swLapCount++] = lapMs;
+                triggerVibration();
+            } else if (lastX >= 160) {
+                // Reset
+                swRunning = false; swElapsed = 0; swLapCount = 0;
+                triggerVibration();
+            }
+            lastSecond = -1; delay(200);
+        }
+    }
+    else if (target == "timer") {
+        if (!timerRunning) {
+            if (touchY >= 80 && touchY <= 130) {
+                if (lastX < 80) timerRemaining = t1 * 60;
+                else if (lastX < 160) timerRemaining = t2 * 60;
+                else timerRemaining = t3 * 60;
+                timerRunning = true; timerLastTick = millis(); triggerVibration(); lastSecond = -1; delay(200);
+            }
+        } else {
+            if (touchY >= 150) {
+                timerRunning = false; timerRemaining = 0; triggerVibration(); lastSecond = -1; delay(200);
+            }
+        }
+    }
+    else if (target == "phishing") {
+        handleEvilTouch(lastX, touchY);
+    }
+    else if (target == "calc") {
+        handleRechnerTouch(lastX, touchY);
+    }
+    else if (target == "jiggler") {
+        handleJigglerTouch(lastX, touchY);
+    }
+    else if (target == "badusb") {
+        if (touchY >= 25 && touchY <= 75) {
+            if (lastX > 10 && lastX < 70) { currentBadUsbScript--; if(currentBadUsbScript < 0) currentBadUsbScript = 2; triggerVibration(); lastSecond = -1; delay(200); }
+            else if (lastX > 170 && lastX < 230) { currentBadUsbScript++; if(currentBadUsbScript > 2) currentBadUsbScript = 0; triggerVibration(); lastSecond = -1; delay(200); }
+        }
+        else if (touchY >= 85 && touchY <= 135 && lastX > 50 && lastX < 190) {
+            badUsbActive = !badUsbActive; triggerVibration(); lastSecond = -1; delay(200);
+        }
+    }
+    else if (target == "wifispam") {
+        if (touchY >= 80 && touchY <= 130 && lastX > 55 && lastX < 185) {
+            wifiSpamActive = !wifiSpamActive; triggerVibration(); lastSecond = -1; delay(200);
+            if(wifiSpamActive) { WiFi.mode(WIFI_AP); esp_wifi_set_promiscuous(true); } 
+            else { esp_wifi_set_promiscuous(false); WiFi.mode(WIFI_OFF); }
+        }
+    }
+    else if (target == "blespam") {
+        if (touchY >= 80 && touchY <= 130 && lastX > 55 && lastX < 185) {
+            bleSpamActive = !bleSpamActive; triggerVibration(); lastSecond = -1; delay(200);
+            if (!bleSpamActive && bleInitDone && !btActive) { BLEDevice::deinit(true); bleInitDone = false; }
+        }
+    }
+    else if (target == "nmap") {
+        if (touchY >= 25 && touchY <= 75) {
+            if (lastX > 10 && lastX < 70) { currentTargetNmap--; if(currentTargetNmap < 0) currentTargetNmap = 2; triggerVibration(); lastSecond = -1; delay(200); }
+            else if (lastX > 170 && lastX < 230) { currentTargetNmap++; if(currentTargetNmap > 2) currentTargetNmap = 0; triggerVibration(); lastSecond = -1; delay(200); }
+        }
+        else if (touchY >= 85 && touchY <= 125 && lastX > 50 && lastX < 190) {
+            if (targetSSIDs[currentTargetNmap].length() > 0) {
+                nmapActive = !nmapActive; 
+                if(nmapActive) { nmapState = 0; } else { WiFi.disconnect(true); WiFi.mode(WIFI_OFF); }
+                triggerVibration(); lastSecond = -1; delay(200);
+            }
+        }
+    }
+    else if (target == "deauth") {
+        if (touchY >= 25 && touchY <= 75) {
+            if (lastX > 10 && lastX < 70) { currentDeauthTarget--; if(currentDeauthTarget < 0) currentDeauthTarget = numScannedNetworks > 0 ? numScannedNetworks - 1 : 0; triggerVibration(); lastSecond = -1; delay(200); }
+            else if (lastX > 170 && lastX < 230) { currentDeauthTarget++; if(currentDeauthTarget >= numScannedNetworks) currentDeauthTarget = 0; triggerVibration(); lastSecond = -1; delay(200); }
+        }
+        else if (touchY >= 75 && touchY <= 110 && lastX > 50 && lastX < 190) {
+            if (numScannedNetworks > 0) {
+                deauthActive = !deauthActive; 
+                if(deauthActive) { deauthState = 0; } else { esp_wifi_set_promiscuous(false); WiFi.mode(WIFI_OFF); }
+                triggerVibration(); lastSecond = -1; delay(200);
+            }
+        }
+        else if (touchY >= 125 && touchY <= 155 && lastX > 60 && lastX < 180) {
+            isScanningAir = true; triggerVibration(); lastSecond = -1; delay(200);
+        }
+    }
+    else if (target == "probemon") {
+        if (touchY >= 145 && touchY <= 185 && lastX > 40 && lastX < 200) {
+            if (probeMonActive) stopProbeMonitor(); else startProbeMonitor();
+            triggerVibration(); lastSecond = -1; delay(200);
+        } else if (touchY >= 0 && touchY < 60) {
+            if (probeScrollOffset > 0) { probeScrollOffset--; lastSecond = -1; }
+        } else if (touchY >= 100 && touchY < 140) {
+            if (probeScrollOffset < probeCount - 4) { probeScrollOffset++; lastSecond = -1; }
+        }
+    }
+    else if (target == "blescan") {
+        if (touchY >= 145 && touchY <= 185 && lastX > 40 && lastX < 200) {
+            if (bleScanActive) stopBleScan(); else startBleScan();
+            triggerVibration(); lastSecond = -1; delay(200);
+        } else if (touchY >= 0 && touchY < 60) {
+            if (bleScanScrollOffset > 0) { bleScanScrollOffset--; lastSecond = -1; }
+        } else if (touchY >= 100 && touchY < 140) {
+            if (bleScanScrollOffset < bleScanCount - 4) { bleScanScrollOffset++; lastSecond = -1; }
+        }
+    }
+    else if (target == "dice") {
+        handleDiceTouch(lastX, touchY);
+    }
+    else if (target == "totp") {
+        handleTotpTouch(lastX, touchY);
+    }
+    else if (target == "notif") {
+        handleNotificationTouch(lastX, touchY);
+    }
+    else if (target == "lora") {
+        if (touchY >= 24 && touchY <= 50) {
+            loraTabMode = (lastX < 120) ? 0 : 1;
+            triggerVibration();
+            lastSecond = -1;
+            return;
+        }
+        if (loraTabMode == 0) {
+            if (touchY >= 160) {
+                static const char* presets[] = {"Hallo!", "OK", "Ping?", "Hilfe!"};
+                int pIdx = (lastX - 10) / 56;
+                if (pIdx >= 0 && pIdx < 4) {
+                    LoraManager::sendMessage(presets[pIdx]);
+                    lastSecond = -1;
+                    return;
+                }
+            }
+        } else {
+            if (touchY >= 150) {
+                LoraManager::setBeacon(!LoraManager::isBeaconActive(), 5);
+                triggerVibration();
+                lastSecond = -1;
+                return;
+            }
+        }
+    }
+    else {
+        AppManager::handleDynamicAppTouch(app, lastX, touchY);
+    }
+}void handleTouchInput() {
     if(matrixMode) return;
     int16_t x[2], y[2]; 
     bool isTouched = (touch.getPoint(x, y, 1) > 0); 
-    bool isApp = (currentPage >= 7 && currentPage <= 25); 
+
+    // --- HOTSPOT DISCONNECT DIALOG TOUCH INTERCEPTION ---
+    if (hotspotPromptActive) {
+        if (isTouched) {
+            int tx = x[0];
+            int ty = y[0];
+            lastTouchTime = millis();
+            // Dialog Buttons befinden sich bei Y = 130 bis 215
+            if (ty >= 130 && ty <= 215) {
+                if (tx <= 120) {
+                    hotspotPromptActive = false;
+                    triggerVibration();
+                    showToastColor("Hotspot bleibt an", 2500, TFT_GREEN);
+                    lastSecond = -1;
+                } else {
+                    hotspotPromptActive = false;
+                    stopHotspotAP();
+                    triggerVibration();
+                    showToastColor("Hotspot aus", 2500, 0x4208);
+                    lastSecond = -1;
+                }
+            }
+        }
+        return; // Verhindert Klicks auf darunterliegende Pages
+    }
+
+    AppPackage* curApp = AppManager::getAppByPage(currentPage);
+    bool isApp = (curApp != nullptr); 
 
     if (isTouched) {
         // Doppel-Tipp weckt aus AOD (State 3), Sleep (State 4) und Stealth (State 5)
@@ -717,7 +1070,18 @@ void handleTouchInput() {
             return; 
         } 
         else {
-            int touchY = y[0] - 34; if (currentPage == 11) touchY = y[0]; 
+            int touchY = y[0] - 34; if (curApp && (curApp->id == "battery" || curApp->id == "flashlight")) touchY = y[0]; 
+
+            // Live-Helligkeits-Slider im Control Center (Page 5) mit direktem Feedback
+            if (currentPage == 5 && touchY >= 24 && touchY <= 64 && x[0] >= 28 && x[0] <= 212) {
+                int bVal = map(x[0], 32, 208, 10, 255);
+                bVal = constrain(bVal, 10, 255);
+                if (abs(bVal - maxBright) > 3) {
+                    maxBright = bVal;
+                    setBrightness(maxBright);
+                    lastSecond = -1;
+                }
+            }
 
             if (isApp) {
                 // Alle App-Pages inkl. Menü 22/23: Nur Position tracken, Tap wird erst beim Loslassen ausgewertet
@@ -727,11 +1091,11 @@ void handleTouchInput() {
         }
     } else if (isSwiping) {
         isSwiping = false; int dx = lastX - startX; int dy = lastY - startY;
-        bool isGoodApp = (currentPage == 7 || currentPage == 8 || currentPage == 9 || currentPage == 13 || currentPage == 14 || currentPage == 24 || currentPage == 25);
-        bool isBadApp  = (currentPage == 12 || (currentPage >= 15 && currentPage <= 21));
-        bool isQSApp   = (currentPage == 10 || currentPage == 11);
+        bool isGoodApp = (curApp && curApp->category == CAT_PRODUCTIVITY && curApp->id != "battery" && curApp->id != "flashlight");
+        bool isBadApp  = (curApp && curApp->category == CAT_SECURITY);
+        bool isQSApp   = (curApp && (curApp->id == "battery" || curApp->id == "flashlight"));
         
-        // --- Swipe UP to kill (in App-Pages 7-21) ---
+        // --- Swipe UP to kill (in App-Pages) ---
         if (dy < -60 && abs(dy) > abs(dx) && isApp) {
             // Trash-Icon Animation direkt auf TFT
             tft.fillRect(80, 0, 80, 40, TFT_RED);
@@ -754,10 +1118,38 @@ void handleTouchInput() {
             if (isGoodApp && dx < 0) { triggerVibration(); slideToPage(22, -1, 0); lastTouchTime = millis(); return; }
             if (isBadApp && dx > 0) { triggerVibration(); slideToPage(23, 1, 0); lastTouchTime = millis(); return; }
             if (isQSApp) { triggerVibration(); slideToPage(5, (dx > 0) ? 1 : -1, 0); lastTouchTime = millis(); return; }
-            // Good Menu (22) -> Übersicht (6): nach links wischen (dx < 0)
-            if (currentPage == 22 && dx < 0) { triggerVibration(); slideToPage(6, -1, 0); lastTouchTime = millis(); return; }
-            // Bad Menu (23) -> Übersicht (6): nach rechts wischen (dx > 0)
-            if (currentPage == 23 && dx > 0) { triggerVibration(); slideToPage(6, 1, 0); lastTouchTime = millis(); return; }
+            // Productivity Menu (22) -> Paging oder Uebersicht (6)
+            if (currentPage == 22) {
+                int totalG = AppManager::getAppCount(CAT_PRODUCTIVITY, true);
+                int maxP = (totalG > 0) ? ((totalG - 1) / 8) : 0;
+                if (dx < -40) {
+                    if (AppManager::prodMenuPage < maxP) {
+                        AppManager::prodMenuPage++;
+                        triggerVibration(); lastSecond = -1; lastTouchTime = millis(); return;
+                    } else {
+                        triggerVibration(); slideToPage(6, -1, 0); lastTouchTime = millis(); return;
+                    }
+                } else if (dx > 40 && AppManager::prodMenuPage > 0) {
+                    AppManager::prodMenuPage--;
+                    triggerVibration(); lastSecond = -1; lastTouchTime = millis(); return;
+                }
+            }
+            // Security Menu (23) -> Paging oder Uebersicht (6)
+            if (currentPage == 23) {
+                int totalB = AppManager::getAppCount(CAT_SECURITY, true);
+                int maxP = (totalB > 0) ? ((totalB - 1) / 8) : 0;
+                if (dx > 40) {
+                    if (AppManager::secMenuPage < maxP) {
+                        AppManager::secMenuPage++;
+                        triggerVibration(); lastSecond = -1; lastTouchTime = millis(); return;
+                    } else {
+                        triggerVibration(); slideToPage(6, 1, 0); lastTouchTime = millis(); return;
+                    }
+                } else if (dx < -40 && AppManager::secMenuPage > 0) {
+                    AppManager::secMenuPage--;
+                    triggerVibration(); lastSecond = -1; lastTouchTime = millis(); return;
+                }
+            }
         }
         // --- Swipe UP to kill from Menu Pages 22/23 ---
         else if (dy < -60 && abs(dy) > abs(dx) && (currentPage == 22 || currentPage == 23)) {
@@ -775,24 +1167,130 @@ void handleTouchInput() {
                 int nextP = currentPage; int checks = 0;
                 if (dx > 0) { do { nextP--; if(nextP < 0) nextP = 3; checks++; } while(nextP != currentPage && !isPageEnabled(nextP) && checks < 4); } 
                 else { do { nextP++; if(nextP > 3) nextP = 0; checks++; } while(nextP != currentPage && !isPageEnabled(nextP) && checks < 4); }
-                if(nextP != currentPage && isPageEnabled(nextP)) { slideToPage(nextP, (dx > 0) ? 1 : -1, 0); mainPage = currentPage; } 
+                if(nextP != currentPage && isPageEnabled(nextP)) { triggerVibration(); slideToPage(nextP, (dx > 0) ? 1 : -1, 0); mainPage = currentPage; } 
             }
         } 
         else if (dy > 40 && abs(dy) > abs(dx)) { 
             Serial.printf("[TOUCH] Swipe DOWN page=%d -> ziel: %s\n", currentPage, (currentPage >= 0 && currentPage <= 3) ? "5" : (currentPage == 6) ? "main" : "?");
-            if (currentPage >= 0 && currentPage <= 3) { slideToPage(5, 0, 1); } else if (currentPage == 6) { slideToPage(mainPage, 0, 1); } 
+            if (currentPage >= 0 && currentPage <= 3) { triggerVibration(); slideToPage(5, 0, 1); } else if (currentPage == 6) { triggerVibration(); slideToPage(mainPage, 0, 1); } 
         } 
         else if (dy < -40 && abs(dy) > abs(dx)) { 
             Serial.printf("[TOUCH] Swipe UP page=%d -> ziel: %s\n", currentPage, (currentPage >= 0 && currentPage <= 3) ? "6" : (currentPage == 5) ? "main" : "?");
-            if (currentPage >= 0 && currentPage <= 3) { slideToPage(6, 0, -1); } else if (currentPage == 5) { slideToPage(mainPage, 0, -1); } 
+            if (currentPage >= 0 && currentPage <= 3) { triggerVibration(); slideToPage(6, 0, -1); } else if (currentPage == 5) { triggerVibration(); slideToPage(mainPage, 0, -1); } 
         }
         else if (abs(dx) < 25 && abs(dy) < 25) { 
             int touchY = lastY - 34; 
-            if (currentPage == 5) { 
-                if (touchY >= 25 && touchY < 65) { if (lastX < 120) { toggleWLAN(); triggerVibration(); lastSecond = -1; } else { toggleBT(); triggerVibration(); lastSecond = -1; } } 
-                else if (touchY >= 70 && touchY < 110) { if (lastX < 120) { toggleVibra(); lastSecond = -1; } else { aodActive = !aodActive; prefs.begin("clock",false); prefs.putBool("aod", aodActive); prefs.end(); triggerVibration(); lastSecond = -1; } } 
-                else if (touchY >= 115 && touchY < 155) { if (lastX < 120) slideToPage(10, 0, -1); else slideToPage(11, 0, -1); }
-                else if (touchY >= 162) { if (lastX < 120) { killAllApps(); triggerVibration(); showToast("Alle Apps gestoppt"); lastSecond = -1; } else { toggleUsbHid(); triggerVibration(); lastSecond = -1; } }
+            if (currentPage == 0) {
+                triggerVibration();
+                if (touchY <= 25 && lastX >= 80 && lastX <= 160 && NotificationManager::getUnreadCount() > 0) {
+                    NotificationManager::markAllRead();
+                    AppManager::launchAppById("notif");
+                    lastSecond = -1;
+                    return;
+                }
+                if (watchfaceMode == 0) {
+                    if (touchY >= 116 && touchY <= 155 && lastX >= 98) {
+                        AppManager::launchAppById("battery");
+                        lastSecond = -1;
+                        return;
+                    }
+                    if (touchY >= 74 && touchY <= 112 && lastX >= 98) {
+                        showToastColor("Schritte: " + String(stepCount) + " / " + String(stepGoal), 2500, 0x07E0);
+                        lastSecond = -1;
+                        return;
+                    }
+                } else if (watchfaceMode == 1) { // Chronograph Sub-Dials
+                    // Battery Sub-dial (Right: x=145..198, y=75..130)
+                    if (touchY >= 75 && touchY <= 130 && lastX >= 145 && lastX <= 198) {
+                        AppManager::launchAppById("battery");
+                        lastSecond = -1;
+                        return;
+                    }
+                    // Steps Sub-dial (Left: x=42..95, y=75..130)
+                    if (touchY >= 75 && touchY <= 130 && lastX >= 42 && lastX <= 95) {
+                        showToastColor("Schritte: " + String(stepCount) + " / " + String(stepGoal), 2500, 0x07E0);
+                        lastSecond = -1;
+                        return;
+                    }
+                } else if (watchfaceMode == 2) { // Retro Casio Bottom Complications
+                    // Battery Meter (Bottom Left: y>=115, x<=115)
+                    if (touchY >= 115 && lastX <= 115) {
+                        AppManager::launchAppById("battery");
+                        lastSecond = -1;
+                        return;
+                    }
+                    // Steps Odometer (Bottom Right: y>=115, x>115)
+                    if (touchY >= 115 && lastX > 115) {
+                        showToastColor("Schritte: " + String(stepCount) + " / " + String(stepGoal), 2500, 0x07E0);
+                        lastSecond = -1;
+                        return;
+                    }
+                }
+                // Watchfaces werden gezielt im WebDashboard ausgewaehlt (kein versehentliches Verstellen)
+                triggerVibration();
+                lastSecond = -1;
+            }
+            else if (currentPage == 5) { 
+                // 1. Grab Handle / Top Bar: Swipe back up or tap to dismiss to Watchface
+                if (touchY <= 24) {
+                    triggerVibration();
+                    slideToPage(mainPage, 0, -1);
+                    lastSecond = -1;
+                    return;
+                }
+                // 2. Brightness Slider Tap: Set brightness
+                if (touchY >= 24 && touchY <= 64) {
+                    int bVal = map(lastX, 32, 208, 10, 255);
+                    bVal = constrain(bVal, 10, 255);
+                    maxBright = bVal;
+                    setBrightness(maxBright);
+                    triggerVibration();
+                    lastSecond = -1;
+                    return;
+                }
+                // 3. Row 0: Hotspot (Left) and Stummschaltung / DND (Right)
+                if (touchY >= 66 && touchY <= 110) {
+                    if (lastX < 120) {
+                        triggerVibration();
+                        toggleWLAN();
+                        lastSecond = -1;
+                        return;
+                    } else {
+                        triggerVibration();
+                        toggleVibra();
+                        lastSecond = -1;
+                        return;
+                    }
+                }
+                // 4. Row 1: Taschenlampe (Left) and USB-Modus (Right)
+                if (touchY >= 112 && touchY <= 156) {
+                    if (lastX < 120) {
+                        triggerVibration();
+                        AppManager::launchAppById("flashlight");
+                        lastSecond = -1;
+                        return;
+                    } else {
+                        triggerVibration();
+                        toggleUsbHid();
+                        lastSecond = -1;
+                        return;
+                    }
+                }
+                // 5. Row 2: LoRa Funk (Left) and Stop Apps (Right)
+                if (touchY >= 158) {
+                    if (lastX < 120) {
+                        triggerVibration();
+                        AppManager::launchAppById("lora");
+                        lastSecond = -1;
+                        return;
+                    } else {
+                        triggerVibration();
+                        killAllApps();
+                        showToast("Alle Apps gestoppt");
+                        lastSecond = -1;
+                        return;
+                    }
+                }
             } 
             else if (currentPage == 6) { 
                 if (touchY >= 30 && touchY <= 195) {
@@ -806,96 +1304,9 @@ void handleTouchInput() {
             // === Menu-Page Taps (erst beim Loslassen, damit Swipe-Back funktioniert) ===
             else if (currentPage == 22) { handleGoodMenuTouch(lastX, touchY); }
             else if (currentPage == 23) { handleBadMenuTouch(lastX, touchY); }
-            // === App-Page Taps (nur bei echtem Tap, nicht bei Swipe) ===
-            else if (currentPage == 7) { 
-                if (touchY >= 150) {
-                    if (lastX < 80) {
-                        // Start/Stop
-                        swRunning = !swRunning; triggerVibration();
-                        if(swRunning) swStartTime = millis(); else swElapsed += (millis() - swStartTime);
-                    } else if (lastX < 160 && swRunning && swLapCount < MAX_LAPS) {
-                        // Runde
-                        long lapMs = swElapsed + (millis() - swStartTime);
-                        swLaps[swLapCount++] = lapMs;
-                        triggerVibration();
-                    } else if (lastX >= 160) {
-                        // Reset
-                        swRunning = false; swElapsed = 0; swLapCount = 0;
-                        triggerVibration();
-                    }
-                    lastSecond = -1; delay(200);
-                }
-            } else if (currentPage == 8) { 
-                if (!timerRunning) { if (touchY >= 80 && touchY <= 130) { if (lastX < 80) timerRemaining = t1 * 60; else if (lastX < 160) timerRemaining = t2 * 60; else timerRemaining = t3 * 60; timerRunning = true; timerLastTick = millis(); triggerVibration(); lastSecond = -1; delay(200); } } 
-                else { if (touchY >= 150) { timerRunning = false; timerRemaining = 0; triggerVibration(); lastSecond = -1; delay(200); } }
-            } else if (currentPage == 12) { handleEvilTouch(lastX, touchY);
-            } else if (currentPage == 13) { handleRechnerTouch(lastX, touchY);
-            } else if (currentPage == 14) { handleJigglerTouch(lastX, touchY);
-            } else if (currentPage == 15) { 
-                if (touchY >= 25 && touchY <= 75) {
-                    if (lastX > 10 && lastX < 70) { currentBadUsbScript--; if(currentBadUsbScript < 0) currentBadUsbScript = 2; triggerVibration(); lastSecond = -1; delay(200); }
-                    else if (lastX > 170 && lastX < 230) { currentBadUsbScript++; if(currentBadUsbScript > 2) currentBadUsbScript = 0; triggerVibration(); lastSecond = -1; delay(200); }
-                }
-                else if (touchY >= 85 && touchY <= 135 && lastX > 50 && lastX < 190) { badUsbActive = !badUsbActive; triggerVibration(); lastSecond = -1; delay(200); }
-            } else if (currentPage == 16) { 
-                if (touchY >= 80 && touchY <= 130 && lastX > 55 && lastX < 185) {
-                    wifiSpamActive = !wifiSpamActive; triggerVibration(); lastSecond = -1; delay(200);
-                    if(wifiSpamActive) { WiFi.mode(WIFI_AP); esp_wifi_set_promiscuous(true); } 
-                    else { esp_wifi_set_promiscuous(false); WiFi.mode(WIFI_OFF); }
-                }
-            } else if (currentPage == 17) { 
-                if (touchY >= 80 && touchY <= 130 && lastX > 55 && lastX < 185) {
-                    bleSpamActive = !bleSpamActive; triggerVibration(); lastSecond = -1; delay(200);
-                    if (!bleSpamActive && bleInitDone && !btActive) { BLEDevice::deinit(true); bleInitDone = false; }
-                }
-            } else if (currentPage == 18) { 
-                if (touchY >= 25 && touchY <= 75) {
-                    if (lastX > 10 && lastX < 70) { currentTargetNmap--; if(currentTargetNmap < 0) currentTargetNmap = 2; triggerVibration(); lastSecond = -1; delay(200); }
-                    else if (lastX > 170 && lastX < 230) { currentTargetNmap++; if(currentTargetNmap > 2) currentTargetNmap = 0; triggerVibration(); lastSecond = -1; delay(200); }
-                }
-                else if (touchY >= 85 && touchY <= 125 && lastX > 50 && lastX < 190) {
-                    if (targetSSIDs[currentTargetNmap].length() > 0) {
-                        nmapActive = !nmapActive; 
-                        if(nmapActive) { nmapState = 0; } else { WiFi.disconnect(true); WiFi.mode(WIFI_OFF); }
-                        triggerVibration(); lastSecond = -1; delay(200);
-                    }
-                }
-            } else if (currentPage == 19) { 
-                if (touchY >= 25 && touchY <= 75) {
-                    if (lastX > 10 && lastX < 70) { currentDeauthTarget--; if(currentDeauthTarget < 0) currentDeauthTarget = numScannedNetworks > 0 ? numScannedNetworks - 1 : 0; triggerVibration(); lastSecond = -1; delay(200); }
-                    else if (lastX > 170 && lastX < 230) { currentDeauthTarget++; if(currentDeauthTarget >= numScannedNetworks) currentDeauthTarget = 0; triggerVibration(); lastSecond = -1; delay(200); }
-                }
-                else if (touchY >= 75 && touchY <= 110 && lastX > 50 && lastX < 190) {
-                    if (numScannedNetworks > 0) {
-                        deauthActive = !deauthActive; 
-                        if(deauthActive) { deauthState = 0; } else { esp_wifi_set_promiscuous(false); WiFi.mode(WIFI_OFF); }
-                        triggerVibration(); lastSecond = -1; delay(200);
-                    }
-                }
-                else if (touchY >= 125 && touchY <= 155 && lastX > 60 && lastX < 180) {
-                    isScanningAir = true; triggerVibration(); lastSecond = -1; delay(200);
-                }
-            } else if (currentPage == 20) {
-                if (touchY >= 145 && touchY <= 185 && lastX > 40 && lastX < 200) {
-                    if (probeMonActive) stopProbeMonitor(); else startProbeMonitor();
-                    triggerVibration(); lastSecond = -1; delay(200);
-                } else if (touchY >= 0 && touchY < 60) {
-                    if (probeScrollOffset > 0) { probeScrollOffset--; lastSecond = -1; }
-                } else if (touchY >= 100 && touchY < 140) {
-                    // Liste zeigt 4 Zeilen -> max. Offset ist probeCount-4 (sonst leere Slots)
-                    if (probeScrollOffset < probeCount - 4) { probeScrollOffset++; lastSecond = -1; }
-                }
-            } else if (currentPage == 21) {
-                if (touchY >= 145 && touchY <= 185 && lastX > 40 && lastX < 200) {
-                    if (bleScanActive) stopBleScan(); else startBleScan();
-                    triggerVibration(); lastSecond = -1; delay(200);
-                } else if (touchY >= 0 && touchY < 60) {
-                    if (bleScanScrollOffset > 0) { bleScanScrollOffset--; lastSecond = -1; }
-                } else if (touchY >= 100 && touchY < 140) {
-                    // Liste zeigt 4 Zeilen -> max. Offset ist bleScanCount-4 (sonst leere Slots)
-                    if (bleScanScrollOffset < bleScanCount - 4) { bleScanScrollOffset++; lastSecond = -1; }
-                }
-            } else if (currentPage == 24) { handleDiceTouch(lastX, touchY);
+            // === Dynamische App-Page Taps (nur bei echtem Tap, nicht bei Swipe) ===
+            else if (curApp) {
+                handleAppTouch(curApp, lastX, touchY);
             }
             lastTouchTime = millis();
         }

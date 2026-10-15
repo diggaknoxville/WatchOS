@@ -1,5 +1,6 @@
 # --- Build output (Arduino CLI / arduino-cli compile --output-dir) ---
 build/
+build_output/
 *.bin
 *.elf
 *.map
@@ -20,6 +21,7 @@ last_compile.log
 .cache/
 
 # --- Editor / OS cruft ---
+.claude/
 *.swp
 *~
 .DS_Store

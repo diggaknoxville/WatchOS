@@ -23,6 +23,16 @@ void updateDiceAnimation();
 // Wasserwaage (Page 25)
 void showLevel(TFT_eSprite *spr);
 
+// 2FA Authenticator (Page 26)
+void showTotpAuth(TFT_eSprite *spr);
+void handleTotpTouch(int x, int y);
+
+// Notification Center (Page 27)
+void showNotificationCenter(TFT_eSprite *spr);
+void handleNotificationTouch(int x, int y);
+
 // Bewegungssensor: Schrittzähler + Handgelenk-Wake (läuft im Hintergrund)
 void updateMotion(unsigned long now);
 void loadMotionPrefs();
+void saveMotionPrefs();
+void bmaInvalidate();

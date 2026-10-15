@@ -3,7 +3,30 @@ $ErrorActionPreference = 'Stop'
 $fqbn = 'esp32:esp32:twatchs3:UploadSpeed=921600,USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,PartitionScheme=app3M_fat9M_16MB,DebugLevel=none,LoopCore=1,EventsCore=1,EraseFlash=none,JTAGAdapter=default,Revision=Radio_SX1262'
 $outputDir = 'build/esp32.esp32.twatchs3'
 $projectDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$cli = 'C:\Users\Herbert\AppData\Local\Programs\Arduino IDE\resources\app\lib\backend\resources\arduino-cli.exe'
+$cli = $null
+$pathCmd = Get-Command arduino-cli -ErrorAction SilentlyContinue
+if ($pathCmd) {
+    $cli = $pathCmd.Source
+} else {
+    $candidates = @(
+        'C:\Users\Herbert\AppData\Local\Programs\Arduino IDE\resources\app\lib\backend\resources\arduino-cli.exe',
+        "$env:LOCALAPPDATA\Programs\Arduino IDE\resources\app\lib\backend\resources\arduino-cli.exe",
+        "$env:ProgramFiles\Arduino IDE\resources\app\lib\backend\resources\arduino-cli.exe",
+        'C:\Program Files\Arduino IDE\resources\app\lib\backend\resources\arduino-cli.exe'
+    )
+    foreach ($cand in $candidates) {
+        if ($cand -and (Test-Path $cand)) {
+            $cli = $cand
+            break
+        }
+    }
+}
+
+if (-not $cli -or -not (Test-Path $cli)) {
+    Write-Error "arduino-cli nicht gefunden! Bitte stellen Sie sicher, dass arduino-cli im PATH liegt oder Arduino IDE 2.x installiert ist."
+    exit 2
+}
+
 $statsFile = Join-Path $projectDir 'build/.compile_stats_seconds.txt'
 
 function Format-Duration([int]$seconds) {
@@ -38,11 +61,6 @@ function Save-Compile-Seconds([string]$path, [int]$seconds) {
         $updated = $updated[($updated.Count - 12)..($updated.Count - 1)]
     }
     $updated | Set-Content $path
-}
-
-if (-not (Test-Path $cli)) {
-    Write-Error "arduino-cli not found at: $cli"
-    exit 2
 }
 
 Push-Location $projectDir

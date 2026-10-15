@@ -3,60 +3,121 @@
 #include "Globals.h"
 #include "Display.h"
 #include "Logic.h"
+#include "TotpAuth.h"
+#include "NotificationManager.h"
+#include "HardwareConfig.h"
+#include "AppManager.h"
 #include <Wire.h>
 #include <math.h>
+#include <time.h>
 
 // =====================================================================
-// Good Apps Menu (Page 22) — Liste aller "guten" Apps
+// =====================================================================
+// Productivity Apps Menu (Page 22) — Modulares Package Menü
 // =====================================================================
 void renderGoodMenu(TFT_eSprite *spr) {
-    spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Good Apps", 120, 2, 2);
+    auto apps = AppManager::getAppsByCategory(CAT_PRODUCTIVITY, true);
+    int total = (int)apps.size();
+    int perPage = 8;
+    int maxPage = (total > 0) ? ((total - 1) / perPage) : 0;
+    if (AppManager::prodMenuPage > maxPage) AppManager::prodMenuPage = maxPage;
+    if (AppManager::prodMenuPage < 0) AppManager::prodMenuPage = 0;
+
+    int curPage = AppManager::prodMenuPage;
+    int startIdx = curPage * perPage;
+    int endIdx = min(startIdx + perPage, total);
+
+    // Header mit dynamischer Seitenzahl falls > 1 Seite
+    spr->setTextDatum(TC_DATUM);
+    spr->setTextColor(0x07E0);
+    if (maxPage > 0) {
+        char hBuf[32];
+        snprintf(hBuf, sizeof(hBuf), "Productivity (%d/%d)", curPage + 1, maxPage + 1);
+        spr->drawString(hBuf, 120, 2, 2);
+    } else {
+        spr->drawString("Productivity", 120, 2, 2);
+    }
     spr->setTextDatum(MC_DATUM);
 
-    struct AppEntry { const char* label; uint16_t color; };
-    AppEntry apps[] = {
-        {"Stoppuhr",  cAcc1},       // -> Page 7
-        {"Timer",     cAcc2},       // -> Page 8
-        {"Dezibel",   TFT_GREEN},   // -> Page 9
-        {"Rechner",   cFG},         // -> Page 13
-        {"Jiggler",   TFT_CYAN},    // -> Page 14
-        {"Wuerfel",   TFT_YELLOW},  // -> Page 24
-        {"Waage",     TFT_ORANGE},  // -> Page 25
-    };
-    int count = 7;
-
-    int bW = 100, bH = 38, gapX = 10, gapY = 4;
-    int startY = 22;
-    for (int i = 0; i < count; i++) {
-        int col = i % 2;
-        int row = i / 2;
+    int bW = 100, bH = 38, gapY = 4, startY = 22;
+    for (int i = startIdx; i < endIdx; i++) {
+        int slot = i - startIdx;
+        int col = slot % 2;
+        int row = slot / 2;
         int bx = (col == 0) ? 15 : 125;
         int by = startY + row * (bH + gapY);
+
+        bool isRunning = (apps[i]->statusFn != nullptr) ? apps[i]->statusFn() : false;
+
         spr->fillRoundRect(bx, by, bW, bH, 8, cAppBG);
-        spr->setTextColor(apps[i].color);
-        spr->drawString(apps[i].label, bx + bW / 2, by + bH / 2, 2);
+        uint16_t borderCol = isRunning ? apps[i]->color : cBatBG;
+        spr->drawRoundRect(bx, by, bW, bH, 8, borderCol);
+
+        // Icon Badge
+        if (apps[i]->iconText.length() > 0) {
+            spr->fillRoundRect(bx + 4, by + 9, 20, 20, 4, tft.color565(15, 30, 20));
+            spr->setTextColor(apps[i]->color);
+            spr->setTextDatum(MC_DATUM);
+            spr->drawString(apps[i]->iconText, bx + 14, by + 19, 1);
+        }
+
+        spr->setTextColor(apps[i]->color);
+        spr->setTextDatum(ML_DATUM);
+        spr->drawString(apps[i]->name, bx + 28, by + bH / 2, 2);
+
+        if (isRunning) {
+            spr->fillCircle(bx + bW - 7, by + 8, 3, TFT_GREEN);
+            spr->fillCircle(bx + bW - 7, by + 8, 1, 0xFFFF);
+        }
     }
-    // Status-Dots für laufende Apps
-    if (swRunning)       spr->fillCircle(15 + bW - 6, startY + 6, 4, TFT_GREEN);
-    if (timerRunning)    spr->fillCircle(125 + bW - 6, startY + 6, 4, TFT_GREEN);
-    if (jigglerActive)   spr->fillCircle(125 + bW - 6, startY + 2*(bH+gapY) + 6, 4, TFT_GREEN);
+
+    // Paginierungs-Indikator unten
+    if (maxPage > 0) {
+        spr->setTextDatum(MC_DATUM);
+        spr->setTextColor(0x8BD0);
+        spr->drawString("<", 20, 200, 2);
+        spr->drawString(">", 220, 200, 2);
+        for (int p = 0; p <= maxPage; p++) {
+            int dotX = 120 + (p - (float)maxPage / 2.0f) * 14;
+            if (p == curPage) spr->fillCircle(dotX, 200, 3, 0x07E0);
+            else spr->drawCircle(dotX, 200, 3, 0x52AA);
+        }
+    }
 }
 
 void handleGoodMenuTouch(int x, int touchY) {
+    auto apps = AppManager::getAppsByCategory(CAT_PRODUCTIVITY, true);
+    int total = (int)apps.size();
+    int perPage = 8;
+    int maxPage = (total > 0) ? ((total - 1) / perPage) : 0;
+    int curPage = AppManager::prodMenuPage;
+
+    // Bottom Navigation Bar Tap (Page < >)
+    if (maxPage > 0 && touchY >= 190) {
+        if (x < 80 && curPage > 0) {
+            AppManager::prodMenuPage--;
+            triggerVibration();
+            lastSecond = -1;
+            return;
+        } else if (x > 160 && curPage < maxPage) {
+            AppManager::prodMenuPage++;
+            triggerVibration();
+            lastSecond = -1;
+            return;
+        }
+    }
+
     int bH = 38, gapY = 4, startY = 22;
     int row = (touchY - startY) / (bH + gapY);
     int col = (x < 120) ? 0 : 1;
-    int idx = row * 2 + col;
+    int slot = row * 2 + col;
 
     if (row < 0 || row > 3 || touchY < startY) return;
-    if (idx > 6) return;
 
-    int pages[] = {7, 8, 9, 13, 14, 24, 25};
-    int targetPage = pages[idx];
+    int idx = curPage * perPage + slot;
+    if (idx >= total) return;
 
-    triggerVibration();
-    if (targetPage == 9) startMic();
-    slideToPage(targetPage, 0, -1);
+    AppManager::launchApp(apps[idx]->pageId);
 }
 
 // =====================================================================
@@ -296,17 +357,22 @@ static void bmaReadAccel(float &ax, float &ay, float &az) {
     az = rawZ / 1024.0;
 }
 
+void bmaInvalidate() {
+    bmaOK = false;
+}
+
 // =====================================================================
 // Bewegungssensor: Schrittzähler (Software-Pedometer) + Handgelenk-Wake
 // =====================================================================
-// Nutzt den bereits verbauten BMA423 (siehe bmaReadAccel oben). Das ist ein
-// Software-Pedometer per Peak-Erkennung — nicht so exakt wie der interne
-// HW-Zähler des BMA423, aber komplett eigenständig und ohne Config-Blob.
-// Wird bei jedem Loop aus checkBackgroundTasks() aufgerufen und intern auf
-// ~12 Hz begrenzt. Fällt der Sensor aus, liefert er (0,0,0) -> zählt einfach
-// nichts (keine Fehlzählungen).
-long stepCount = 0;                  // Schritte seit Tagesbeginn
-static int stepDay = -1;             // tm_yday des aktuellen Zähltags
+// Nutzt den bereits verbauten BMA423 (siehe bmaReadAccel oben).
+// Schritte und Historie werden im batteriegepufferten RTC-RAM gesichert
+// (RTC_DATA_ATTR). Dadurch überstehen sie Resets und Sleep-Phasen, ohne
+// den Flash-Speicher durch ständiges NVS-Schreiben zu verschleißen.
+RTC_DATA_ATTR long stepCount = 0;                  // Schritte seit Tagesbeginn
+RTC_DATA_ATTR int stepHourly[24] = {0};            // Schritte je Stunde des laufenden Tages (fuers Web-Dashboard)
+RTC_DATA_ATTR int stepDay = -1;                     // tm_yday des aktuellen Zähltags
+RTC_DATA_ATTR bool stepRtcInitialized = false;
+
 static float stepMagAvg = 1.0f;      // gleitender Mittelwert der Beschleunigung (g)
 static bool stepArmed = true;        // bereit für die nächste Aufwärtsflanke
 static unsigned long lastStepMs = 0;
@@ -315,11 +381,23 @@ static unsigned long lastStepPersistMs = 0;
 static long lastPersistedSteps = -1;
 static float wakeLastAz = 1.0f;
 
-void loadMotionPrefs() {
-    prefs.begin("clock", true);
-    stepCount = prefs.getInt("steps", 0);
-    stepDay   = prefs.getInt("stepDay", -1);
+void saveMotionPrefs() {
+    lastPersistedSteps = stepCount;
+    prefs.begin("clock", false);
+    prefs.putInt("steps", (int)stepCount);
+    prefs.putInt("stepDay", stepDay);
     prefs.end();
+}
+
+void loadMotionPrefs() {
+    // Nur bei Kaltstart (RTC-RAM uninitialisiert) aus dem NVS-Flash nachladen
+    if (!stepRtcInitialized || stepDay == -1) {
+        prefs.begin("clock", true);
+        stepCount = prefs.getInt("steps", 0);
+        stepDay   = prefs.getInt("stepDay", -1);
+        prefs.end();
+        stepRtcInitialized = true;
+    }
     lastPersistedSteps = stepCount;
 }
 
@@ -336,7 +414,13 @@ void updateMotion(unsigned long now) {
     // Tageswechsel: Zähler zurücksetzen (nur bei plausibler Uhrzeit).
     time_t t; time(&t); struct tm *lt = localtime(&t);
     if (lt->tm_yday != stepDay) {
-        if (lt->tm_year + 1900 > 2020) { stepDay = lt->tm_yday; stepCount = 0; }
+        if (lt->tm_year + 1900 > 2020) {
+            saveMotionPrefs(); // Vorigen Tag sichern
+            stepDay = lt->tm_yday;
+            stepCount = 0;
+            for (int i = 0; i < 24; i++) stepHourly[i] = 0;
+            saveMotionPrefs();
+        }
         else if (stepDay == -1) { stepDay = lt->tm_yday; }
     }
 
@@ -346,32 +430,31 @@ void updateMotion(unsigned long now) {
     const float STEP_HI = 0.13f; // g über dem Mittel = Schritt-Impuls
     const float STEP_LO = 0.04f;
     if (stepArmed && dyn > STEP_HI && (now - lastStepMs) > 280) {
-        stepCount++; lastStepMs = now; stepArmed = false;
+        stepCount++; stepHourly[lt->tm_hour]++; lastStepMs = now; stepArmed = false;
         if (currentPage == 10) lastSecond = -1; // Statistikseite live halten
     } else if (!stepArmed && dyn < STEP_LO) {
         stepArmed = true; // Flanke abgeschlossen -> bereit für nächsten Schritt
     }
 
-    // --- Handgelenk-Wake: NUR aus dem AOD (State 3), bewusst konservativ ---
-    // Klare Aufwärtsdrehung des Displays (az springt Richtung +1g). Aus dem
-    // echten Tiefschlaf (State 4) wird bewusst NICHT geweckt, um Fehlauslöser
-    // teuer zu vermeiden. Schwellwerte ggf. am Gerät nachjustieren.
-    if (powerState == 3 && wakeLastAz < 0.35f && az > 0.75f) {
+    // --- Handgelenk-Wake: aus dem AOD (State 3) und Dim (State 2) ---
+    // Klare Aufwärtsdrehung des Displays (az springt Richtung +1g).
+    if ((powerState == 3 || powerState == 2) && wakeLastAz < 0.35f && az > 0.75f) {
         lastTouchTime = now; // weckt in den aktiven Zustand
+        powerState = 1;
+        setBrightness(maxBright);
+        triggerVibration();
         lastSecond = -1;
     }
     wakeLastAz = az;
 
-    // --- Schritte gelegentlich sichern (alle 3 min, nur bei Änderung) ---
-    if (stepCount != lastPersistedSteps && (now - lastStepPersistMs) > 180000UL) {
+    // --- Schritte schonend im Flash sichern (nur alle 60 min statt alle 3 min) ---
+    // RTC-RAM hält den Stand sicher im laufenden Betrieb und im Deep-Sleep.
+    if (stepCount != lastPersistedSteps && (now - lastStepPersistMs) > 3600000UL) {
         lastStepPersistMs = now;
-        lastPersistedSteps = stepCount;
-        prefs.begin("clock", false);
-        prefs.putInt("steps", (int)stepCount);
-        prefs.putInt("stepDay", stepDay);
-        prefs.end();
+        saveMotionPrefs();
     }
 }
+
 
 void showLevel(TFT_eSprite *spr) {
     spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Wasserwaage", 120, 0, 2);
@@ -422,5 +505,163 @@ void showLevel(TFT_eSprite *spr) {
     // Level-Indikator Text
     if (totalAngle < 2.0) {
         spr->setTextColor(TFT_GREEN); spr->drawString("EBEN", 120, 195, 2);
+    }
+}
+
+// =====================================================================
+// 2FA Authenticator (Page 26)
+// =====================================================================
+void showTotpAuth(TFT_eSprite *spr) {
+    spr->setTextDatum(TC_DATUM);
+    spr->setTextColor(0x07FF);
+    spr->drawString("2FA Authenticator", 120, 2, 2);
+
+    int count = TotpAuth::getAccountCount();
+    if (count == 0) {
+        spr->setTextDatum(MC_DATUM);
+        spr->setTextColor(cBatBG);
+        spr->drawString("Keine Konten", 120, 90, 4);
+        spr->drawString("Im Web-Dashboard", 120, 125, 2);
+        spr->drawString("anlegen & verwalten", 120, 145, 2);
+        return;
+    }
+
+    if (currentTotpIdx >= count) currentTotpIdx = 0;
+    if (currentTotpIdx < 0) currentTotpIdx = count - 1;
+
+    TotpAccount acc;
+    TotpAuth::getAccount(currentTotpIdx, acc);
+
+    time_t jetzt;
+    time(&jetzt);
+    uint32_t code = TotpAuth::generateCode(currentTotpIdx, jetzt);
+    int remSec = TotpAuth::getRemainingSeconds(jetzt);
+
+    // Account-Titel mit Index-Indikator
+    spr->setTextDatum(TC_DATUM);
+    spr->setTextColor(TFT_WHITE);
+    char accTitle[40];
+    snprintf(accTitle, sizeof(accTitle), "< %s (%d/%d) >", acc.name, currentTotpIdx + 1, count);
+    spr->drawString(accTitle, 120, 26, 2);
+
+    // 3D Glassmorphic Code Card
+    drawGlassCard(spr, 15, 52, 210, 85, 12, 0x07FF, 0x1463, 0x0A22);
+
+    // 6-stelliger Code mit Leerzeichen (z. B. "123 456")
+    char codeBuf[16];
+    snprintf(codeBuf, sizeof(codeBuf), "%03u %03u", (unsigned int)(code / 1000), (unsigned int)(code % 1000));
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(0x07FF);
+    spr->drawString(codeBuf, 120, 94, 6);
+
+    // Animierter 30s Countdown-Fortschrittsbalken
+    int barX = 25, barY = 148, barW = 190, barH = 10;
+    spr->fillRoundRect(barX, barY, barW, barH, 4, 0x18C3);
+    int fillW = (remSec * barW) / 30;
+    uint16_t barCol = (remSec > 12) ? TFT_GREEN : (remSec > 5) ? TFT_YELLOW : TFT_RED;
+    if (fillW > 0) {
+        spr->fillRoundRect(barX, barY, fillW, barH, 4, barCol);
+    }
+    spr->drawRoundRect(barX, barY, barW, barH, 4, 0x39E7);
+
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(barCol);
+    spr->drawString(String(remSec) + "s verbleibend", 120, 170, 2);
+
+    // Hinweis
+    spr->setTextColor(0x8BD0);
+    spr->drawString("Tap = Naechstes Konto", 120, 192, 1);
+}
+
+void handleTotpTouch(int x, int y) {
+    int count = TotpAuth::getAccountCount();
+    if (count <= 1) return;
+    triggerVibration();
+    currentTotpIdx = (currentTotpIdx + 1) % count;
+    lastSecond = -1;
+}
+
+// =====================================================================
+// Notification Center (Page 27)
+// =====================================================================
+void showNotificationCenter(TFT_eSprite *spr) {
+    spr->setTextDatum(TC_DATUM);
+    spr->setTextColor(TFT_CYAN);
+    int total = NotificationManager::getCount();
+    spr->drawString("Mitteilungen (" + String(total) + ")", 120, 2, 2);
+
+    if (total == 0) {
+        spr->setTextDatum(MC_DATUM);
+        spr->setTextColor(cBatBG);
+        spr->drawString("Keine neuen", 120, 90, 4);
+        spr->drawString("Mitteilungen", 120, 125, 4);
+        spr->setTextColor(0x8BD0);
+        spr->drawString("API: POST /api/notify", 120, 160, 2);
+        return;
+    }
+
+    // Zeige bis zu 2 Benachrichtigungen gleichzeitig
+    int startIdx = notifScrollOffset;
+    if (startIdx >= total) startIdx = total - 1;
+    if (startIdx < 0) startIdx = 0;
+
+    int y = 24;
+    for (int i = 0; i < 2 && (startIdx + i) < total; i++) {
+        WatchNotification n;
+        if (NotificationManager::get(startIdx + i, n)) {
+            uint16_t border = n.read ? 0x2945 : TFT_CYAN;
+            drawGlassCard(spr, 10, y, 220, 68, 8, border, 0x1423, 0x0C12);
+
+            // Title & Timestamp
+            spr->setTextDatum(TL_DATUM);
+            spr->setTextColor(n.read ? 0xCE79 : TFT_WHITE);
+            spr->drawString(n.title, 18, y + 6, 2);
+
+            struct tm *tmInfo = localtime(&n.timestamp);
+            char tBuf[10];
+            snprintf(tBuf, sizeof(tBuf), "%02d:%02d", tmInfo->tm_hour, tmInfo->tm_min);
+            spr->setTextDatum(TR_DATUM);
+            spr->setTextColor(0x8BD0);
+            spr->drawString(tBuf, 220, y + 6, 1);
+
+            // Message Body
+            spr->setTextDatum(TL_DATUM);
+            spr->setTextColor(0x8BD0);
+            String m = String(n.message);
+            if (m.length() > 28) {
+                spr->drawString(m.substring(0, 28), 18, y + 26, 1);
+                spr->drawString(m.substring(28, 56), 18, y + 38, 1);
+            } else {
+                spr->drawString(m, 18, y + 26, 2);
+            }
+            y += 74;
+        }
+    }
+
+    // Button: "Alle löschen"
+    spr->setTextDatum(MC_DATUM);
+    spr->fillRoundRect(40, 175, 160, 30, 8, 0x6186);
+    spr->drawRoundRect(40, 175, 160, 30, 8, TFT_RED);
+    spr->setTextColor(TFT_WHITE);
+    spr->drawString("Alle loeschen", 120, 190, 2);
+}
+
+void handleNotificationTouch(int x, int y) {
+    int total = NotificationManager::getCount();
+    if (total == 0) return;
+
+    if (y >= 170 && y <= 215) {
+        triggerVibration();
+        NotificationManager::clear();
+        showToastColor("Mitteilungen geloescht", 2000, 0x4208);
+        lastSecond = -1;
+        return;
+    }
+
+    // Scrollen durch Antippen der Karten
+    if (total > 2) {
+        triggerVibration();
+        notifScrollOffset = (notifScrollOffset + 2) % total;
+        lastSecond = -1;
     }
 }

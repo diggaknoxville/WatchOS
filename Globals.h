@@ -31,7 +31,14 @@ extern int partTimePct, vacationDays, sickDays, workDaysYear;
 extern String child1Name, child1Date, child1Time;
 extern String child2Name, child2Date, child2Time;
 extern String child3Name, child3Date, child3Time;
-extern String parentName, parentDate, parentTime;
+extern String parentName, parentDate, parentTime; // Mama
+extern String papaName, papaDate, papaTime;
+extern String brandName;
+
+#define SYS_HIST_MAX 288
+extern float sysHistFreq[SYS_HIST_MAX], sysHistTemp[SYS_HIST_MAX];
+extern int sysHistCount;
+extern unsigned long lastSysHistTime;
 
 extern String hexBG, hexFG, hexAcc1, hexAcc2, hexBat, hexHeadBG, hexHeadFG, hexAppBG, hexWarn;
 extern uint16_t cBG, cFG, cAcc1, cAcc2, cBatBG, cHeadBG, cHeadFG, cAppBG, cWarn;
@@ -47,6 +54,42 @@ extern int timerAlarmMode;
 extern struct tm zielZeit;
 extern int currentPage, mainPage, lastSecond;
 extern const char* wochentage[];
+
+// Semantische Seiten-IDs (vermeidet fehleranfällige Magic Numbers)
+namespace Pages {
+    constexpr int LifeGoal      = 0;
+    constexpr int Opportunity   = 1;
+    constexpr int Children      = 2;
+    constexpr int Parents       = 3;
+    constexpr int QuickSettings = 5;
+    constexpr int AppLauncher   = 6;
+    constexpr int Stopwatch     = 7;
+    constexpr int Timer         = 8;
+    constexpr int Decibel       = 9;
+    constexpr int BatteryStats  = 10;
+    constexpr int Flashlight    = 11;
+    constexpr int EvilPortal    = 12;
+    constexpr int Calculator    = 13;
+    constexpr int MouseJiggler  = 14;
+    constexpr int BadUSB        = 15;
+    constexpr int WifiSpam      = 16;
+    constexpr int BleSpam       = 17;
+    constexpr int Nmap          = 18;
+    constexpr int Deauth        = 19;
+    constexpr int ProbeMonitor  = 20;
+    constexpr int BleScanner    = 21;
+    constexpr int GoodAppsMenu  = 22;
+    constexpr int BadAppsMenu   = 23;
+    constexpr int Dice          = 24;
+    constexpr int Level         = 25;
+    constexpr int TotpAuth      = 26;
+    constexpr int NotificationCenter = 27;
+    constexpr int LoraMessenger = 28;
+}
+
+extern int currentTotpIdx;
+extern int notifScrollOffset;
+extern int loraTabMode;
 
 extern bool matrixMode;
 extern int matrixY[24]; 
@@ -70,8 +113,34 @@ extern uint16_t toastColor; // Toast-Hintergrundfarbe
 extern uint16_t batHistoryPct[MAX_HISTORY];
 extern int historyCount;
 extern unsigned long lastHistoryTime;
-extern const unsigned long historyInterval; 
+extern const unsigned long historyInterval;
 extern bool wasCharging;
+extern bool hotspotPromptActive;
+extern unsigned long hotspotPromptStart;
+extern int watchfaceMode;
+extern String phoneMac;
+extern String phoneName;
+extern bool phoneConnected;
+
+// Adaptive Akku-Restdauer: gelernte %/h-Raten je Modus (EMA), persistiert in NVS.
+// battRateCharging ist eine Ladegeschwindigkeit (Gewinn), die anderen beiden Entladeraten (Verlust).
+extern float battRateNormal, battRateHacking, battRateCharging;
+extern uint16_t battSamplesNormal, battSamplesHacking, battSamplesCharging;
+extern int stepGoal;
+
+// Dekodiert Modus/Prozent aus einem batHistoryPct-Rohwert (0-99=Normal,100-199=Hacking,200+=Laden).
+static inline int battRawMode(uint16_t raw) { return raw >= 200 ? 2 : (raw >= 100 ? 1 : 0); }
+static inline int battRawPct(uint16_t raw) {
+    int pct = raw % 100;
+    if (raw >= 200 && pct == 0 && raw != 200) pct = 100;
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    return pct;
+}
+static inline int battLearnConfidencePct(uint16_t samples) {
+    int c = 20 + (int)samples * 3;
+    return c > 97 ? 97 : c;
+}
 
 extern unsigned long lastTouchTime, lastTapTime;
 extern int16_t startX, startY, lastX, lastY;
@@ -156,6 +225,7 @@ extern bool diceRolling;
 
 // Bewegungssensor (BMA423): Schrittzähler + Handgelenk-Wake
 extern long stepCount;     // Schritte seit Tagesbeginn
+extern int stepHourly[24]; // Schritte je Stunde des laufenden Tages (fuers Web-Dashboard)
 
 // Wasserwaage App (Page 25)
 // (nutzt BMA423 Accelerometer - keine Extra-Globals nötig)
@@ -183,3 +253,22 @@ extern float wfLineScale, wfSecArcScale, wfWeekdayScale;
 // AOD-eigene Farben (unabhängig vom Watchface-Farbschema)
 extern String hexAodFG, hexAodAcc;
 extern uint16_t cAodFG, cAodAcc;
+
+// Escaped einen String JSON-sicher.
+inline String jsonEscape(const String &in) {
+    String out; out.reserve(in.length() + 8);
+    for (size_t i = 0; i < in.length(); i++) {
+        char c = in[i];
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:
+                if ((uint8_t)c < 0x20) { char b[8]; snprintf(b, sizeof(b), "\\u%04x", c); out += b; }
+                else out += c;
+        }
+    }
+    return out;
+}

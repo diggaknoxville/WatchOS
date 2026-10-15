@@ -3,6 +3,7 @@
 #include "Globals.h"
 #include "Display.h"
 #include "Logic.h"
+#include "GoodApps.h"
 #include <Wire.h>
 #include <WiFi.h>
 #include <driver/i2s.h>
@@ -110,13 +111,43 @@ static unsigned long gPowerCacheMs = 0;
 static bool gChargingCandidate = false;
 static uint8_t gChargingStableCount = 0;
 
+struct BattCurvePoint {
+    int mv;
+    int pct;
+};
+
+static const BattCurvePoint kLipoDischargeCurve[] = {
+    { 4200, 100 },
+    { 4120,  90 },
+    { 4020,  80 },
+    { 3920,  70 },
+    { 3840,  60 },
+    { 3790,  50 },
+    { 3750,  40 },
+    { 3710,  30 },
+    { 3660,  20 },
+    { 3580,  10 },
+    { 3450,   5 },
+    { 3300,   0 }
+};
+
 static int estimatePctFromVoltageMv(int mv) {
-    if (mv <= 3300) return 0;
-    if (mv >= 4200) return 100;
-    int pct = (mv - 3300) * 100 / 900;
-    if (pct < 0) pct = 0;
-    if (pct > 100) pct = 100;
-    return pct;
+    if (mv >= kLipoDischargeCurve[0].mv) return 100;
+    const int numPoints = sizeof(kLipoDischargeCurve) / sizeof(kLipoDischargeCurve[0]);
+    if (mv <= kLipoDischargeCurve[numPoints - 1].mv) return 0;
+
+    for (int i = 0; i < numPoints - 1; i++) {
+        if (mv <= kLipoDischargeCurve[i].mv && mv >= kLipoDischargeCurve[i + 1].mv) {
+            int spanMv = kLipoDischargeCurve[i].mv - kLipoDischargeCurve[i + 1].mv;
+            int spanPct = kLipoDischargeCurve[i].pct - kLipoDischargeCurve[i + 1].pct;
+            int offsetMv = mv - kLipoDischargeCurve[i + 1].mv;
+            int pct = kLipoDischargeCurve[i + 1].pct + (offsetMv * spanPct) / spanMv;
+            if (pct < 0) pct = 0;
+            if (pct > 100) pct = 100;
+            return pct;
+        }
+    }
+    return 50;
 }
 
 void refreshPowerTelemetry(bool forceRefresh) {
@@ -143,8 +174,7 @@ void refreshPowerTelemetry(bool forceRefresh) {
     }
 
     int mv = pmu.getBattVoltage();
-    int p = pmu.getBatteryPercent();
-    if (p <= 0 || p > 100) p = estimatePctFromVoltageMv(mv);
+    int p = estimatePctFromVoltageMv(mv);
 
     // Limit sudden jumps from PMU read glitches.
     if (gPowerCacheMs != 0) {
@@ -179,6 +209,29 @@ float getBatteryVoltageCached(bool forceRefresh) {
     return gCachedBatteryVolt;
 }
 
+bool syncNtpTime(int timeoutSeconds) {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[NTP] Sync abgebrochen: Kein WLAN-Client verbunden.");
+        return false;
+    }
+    Serial.printf("[NTP] Synchronisiere mit '%s' (+ Fallbacks Google, Cloudflare)...\n", ntpServer.c_str());
+    configTzTime(ntpZone.c_str(), ntpServer.c_str(), "time.google.com", "time.cloudflare.com");
+    struct tm timeinfo;
+    unsigned long start = millis();
+    while (!getLocalTime(&timeinfo, 400)) {
+        if ((millis() - start) > (unsigned long)(timeoutSeconds * 1000)) {
+            Serial.println("[NTP] Timeout beim Warten auf Zeitserver.");
+            return false;
+        }
+        delay(100);
+    }
+    Serial.printf("[NTP] OK! Neue Uhrzeit: %02d:%02d:%02d (%02d.%02d.%04d)\n",
+        timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec,
+        timeinfo.tm_mday, timeinfo.tm_mon + 1, timeinfo.tm_year + 1900);
+    lastSecond = -1;
+    return true;
+}
+
 String readFileFromFS(String path, String fallback) {
     if (!littleFsReady) return fallback;
     fs::File f = FFat.open(path, "r");
@@ -206,13 +259,18 @@ void loadPreferences() {
     }
     Serial.printf("[NVS] freeEntries=%d\n", prefs.freeEntries());
     userSSID = prefs.getString("ssid", userSSID); userPWD = prefs.getString("pwd", userPWD); ntpZone = prefs.getString("ntpZ", ntpZone);
+    if (ntpZone.length() == 0) ntpZone = "CET-1CEST,M3.5.0,M10.5.0/3";
+    setenv("TZ", ntpZone.c_str(), 1);
+    tzset();
     apSSID = prefs.getString("apS", apSSID); apPWD = prefs.getString("apP", apPWD);
     gTag = prefs.getInt("tag", gTag); gMonat = prefs.getInt("monat", gMonat); gJahr = prefs.getInt("jahr", gJahr); gStunde = prefs.getInt("std", gStunde); gMinute = prefs.getInt("min", gMinute); zielAlter = prefs.getInt("alter", zielAlter);
     
     bootMode = prefs.getInt("bootM", bootMode); aodMode = prefs.getInt("aodM", aodMode);
     time_dim_start = prefs.getULong("tDim", time_dim_start); time_aod_start = prefs.getULong("tAod", time_aod_start); time_sleep_start = prefs.getULong("tSlp", time_sleep_start);
     aodActive = prefs.getBool("aod", aodActive); vibActive = prefs.getBool("vib", vibActive);
-    maxBright = prefs.getInt("maxB", maxBright); minBright = prefs.getInt("minB", minBright);
+    watchfaceMode = prefs.getInt("wfMode", watchfaceMode);
+    phoneMac = prefs.getString("phoneMac", phoneMac);
+    phoneName = prefs.getString("phoneName", phoneName);
     
     hexBG = prefs.getString("cBG", hexBG); hexFG = prefs.getString("cFG", hexFG); hexAcc1 = prefs.getString("cAcc1", hexAcc1); hexAcc2 = prefs.getString("cAcc2", hexAcc2); hexBat = prefs.getString("cBat", hexBat);
     // FIX: Neue Farben & Sprache aus Speicher laden
@@ -223,6 +281,11 @@ void loadPreferences() {
     enP0 = prefs.getBool("enP0", true); enP1 = prefs.getBool("enP1", true); enP2 = prefs.getBool("enP2", true); enP3 = prefs.getBool("enP3", true);
     timerAlarmMode = prefs.getInt("tAlarm", 0);
     t1 = prefs.getInt("t1", t1); t2 = prefs.getInt("t2", t2); t3 = prefs.getInt("t3", t3);
+
+    battRateNormal = prefs.getFloat("bRateN", battRateNormal); battRateHacking = prefs.getFloat("bRateH", battRateHacking); battRateCharging = prefs.getFloat("bRateC", battRateCharging);
+    battSamplesNormal = prefs.getUShort("bSampN", 0); battSamplesHacking = prefs.getUShort("bSampH", 0); battSamplesCharging = prefs.getUShort("bSampC", 0);
+    stepGoal = prefs.getInt("stepGoal", stepGoal);
+
     historyCount = prefs.getInt("hCount", 0);
     if (historyCount > 0 && historyCount <= MAX_HISTORY) {
         size_t hLen = prefs.getBytesLength("hData");
@@ -301,6 +364,8 @@ void loadPreferences() {
     netSalary = prefs.getFloat("netS", netSalary); partTimePct = prefs.getInt("pt", partTimePct); vacationDays = prefs.getInt("vac", vacationDays); sickDays = prefs.getInt("sick", sickDays); workHoursPerDay = prefs.getFloat("wh", workHoursPerDay); workDaysYear = prefs.getInt("wd", workDaysYear);
     child1Name = prefs.getString("c1n", child1Name); child1Date = prefs.getString("c1d", child1Date); child1Time = prefs.getString("c1t", child1Time); child2Name = prefs.getString("c2n", child2Name); child2Date = prefs.getString("c2d", child2Date); child2Time = prefs.getString("c2t", child2Time); child3Name = prefs.getString("c3n", child3Name); child3Date = prefs.getString("c3d", child3Date); child3Time = prefs.getString("c3t", child3Time);
     parentName = prefs.getString("pN", parentName); parentDate = prefs.getString("pD", parentDate); parentTime = prefs.getString("pT", parentTime);
+    papaName = prefs.getString("ppN", papaName); papaDate = prefs.getString("ppD", papaDate); papaTime = prefs.getString("ppT", papaTime);
+    brandName = prefs.getString("brandName", brandName);
     Serial.printf("[NVS] loadPreferences fertig. freeEntries=%d\n", prefs.freeEntries());
     prefs.end();
     
@@ -321,7 +386,7 @@ void initHardware() {
     tft.init(); tft.setRotation(2); tft.fillScreen(TFT_BLACK); ledcAttach(TFT_BL, 5000, 8); setBrightness(255);
     Wire.begin(IIC_SDA_PMU, IIC_SCL_PMU);
     if (pmu.init(Wire, IIC_SDA_PMU, IIC_SCL_PMU, AXP2101_SLAVE_ADDRESS)) { pmu.clearIrqStatus(); pmu.enableBattVoltageMeasure(); pmu.enableVbusVoltageMeasure(); pmu.setALDO1Voltage(3300); pmu.enableALDO1(); pmu.setALDO2Voltage(3300); pmu.enableALDO2(); pmu.setALDO3Voltage(3300); pmu.enableALDO3(); pmu.setALDO4Voltage(3300); pmu.enableALDO4(); pmu.setBLDO1Voltage(3300); pmu.enableBLDO1(); pmu.setBLDO2Voltage(3300); pmu.enableBLDO2(); pmu.disableIRQ(XPOWERS_AXP2101_ALL_IRQ); pmu.enableIRQ(XPOWERS_AXP2101_BAT_INSERT_IRQ | XPOWERS_AXP2101_BAT_REMOVE_IRQ | XPOWERS_AXP2101_VBUS_INSERT_IRQ | XPOWERS_AXP2101_VBUS_REMOVE_IRQ | XPOWERS_AXP2101_PKEY_SHORT_IRQ); pmu.clearIrqStatus(); } 
-    delay(100); if (drv.begin(Wire, IIC_SDA_PMU, IIC_SCL_PMU)) { drv.selectLibrary(1); drv.setMode(0); }
+    delay(100); if (drv.begin(Wire, IIC_SDA_PMU, IIC_SCL_PMU)) { drv.selectLibrary(1); drv.setMode(HapticMode::INTERNAL_TRIGGER); }
     Wire1.begin(IIC_SDA_TOUCH, IIC_SCL_TOUCH); touch.setPins(-1, TOUCH_INT); touch.begin(Wire1, 0x38, IIC_SDA_TOUCH, IIC_SCL_TOUCH);
     // USB-Policy:
     // - USB-Stack immer starten (CDC/COM bleibt verfuegbar)
@@ -355,6 +420,7 @@ void toggleUsbHid() {
     }
 
     showToast(usbHidActive ? "USB HID an (Neustart)" : "USB Serial (Neustart)", 2000);
+    saveMotionPrefs();
     delay(800);
     ESP.restart();
 }
@@ -420,7 +486,7 @@ void playSynthSound(int type, int duration) {
 
 void playBootSound(int type) { 
     if (!vibActive) return; 
-    drv.selectLibrary(1); drv.setMode(0); 
+    drv.selectLibrary(1); drv.setMode(HapticMode::INTERNAL_TRIGGER); 
     if (type == 1) { 
         // Tastatur-Klick
         playSynthSound(1, 20); 
@@ -461,8 +527,8 @@ void showBootSequence() {
     i2s_driver_install(I2S_NUM_0, &i2s_tx_config, 0, NULL); i2s_set_pin(I2S_NUM_0, &tx_pin_config); i2s_zero_dma_buffer(I2S_NUM_0);
 
     if (bootMode == 4) {
-        WiFi.mode(WIFI_STA); WiFi.begin(userSSID.c_str(), userPWD.c_str()); int wifiRetry = 0; while (WiFi.status() != WL_CONNECTED && wifiRetry < 10) { delay(200); wifiRetry++; }
-        if (WiFi.status() == WL_CONNECTED) { configTzTime(ntpZone.c_str(), ntpServer.c_str()); struct tm timeinfo; getLocalTime(&timeinfo, 2000); } WiFi.disconnect(true); WiFi.mode(WIFI_OFF);
+        WiFi.mode(WIFI_STA); WiFi.begin(userSSID.c_str(), userPWD.c_str()); int wifiRetry = 0; while (WiFi.status() != WL_CONNECTED && wifiRetry < 16) { delay(250); wifiRetry++; }
+        if (WiFi.status() == WL_CONNECTED) { syncNtpTime(6); } WiFi.disconnect(true); WiFi.mode(WIFI_OFF);
         i2s_driver_uninstall(I2S_NUM_0); i2s_config_t i2s_rx_config; memset(&i2s_rx_config, 0, sizeof(i2s_rx_config)); i2s_rx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); i2s_rx_config.sample_rate = 16000; i2s_rx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_rx_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT; i2s_rx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_rx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; i2s_rx_config.dma_desc_num = 8; i2s_rx_config.dma_frame_num = 256; i2s_rx_config.use_apll = false; i2s_pin_config_t rx_pin_config; memset(&rx_pin_config, 0, sizeof(rx_pin_config)); rx_pin_config.bck_io_num = -1; rx_pin_config.ws_io_num = I2S_WS_MIC; rx_pin_config.data_out_num = -1; rx_pin_config.data_in_num = I2S_DIN_MIC; rx_pin_config.mck_io_num = -1;
         if(i2s_driver_install(I2S_NUM_0, &i2s_rx_config, 0, NULL) == ESP_OK) { i2s_set_pin(I2S_NUM_0, &rx_pin_config); i2s_stop(I2S_NUM_0); }
         cdSprite.deleteSprite(); 
@@ -560,8 +626,16 @@ void showBootSequence() {
     bootLog("LilyGo BIOS v2.0", "OK", okCol); bootLog("Copyright (C) 2026", "", okCol); bootLog("Michael Strassburger", "", okCol); bootLog("======================="); bootLog("CPU: ESP32-S3", String(ESP.getCpuFreqMHz()) + " MHz", infCol); bootLog("SRAM Base", String(ESP.getHeapSize() / 1024) + " KB", infCol); bootLog("OPI PSRAM", String(ESP.getPsramSize() / 1024) + " KB", infCol); bootLog("Flash ROM", String(ESP.getFlashChipSize() / 1024 / 1024) + " MB", infCol); WiFi.mode(WIFI_STA); bootLog("MAC", WiFi.macAddress(), infCol); bootLog("", ""); bootLog("--- System Init ---"); bootLog("I2C Bus", "OK", okCol); bootLog("PMU AXP2101", "OK", okCol); bootLog(" BATT Volt", String(pmu.getBattVoltage() / 1000.0) + "V", infCol); bootLog("Haptic DRV", "OK", okCol); bootLog("Touch FT6X36", "OK", okCol);
     i2s_driver_uninstall(I2S_NUM_0); i2s_config_t i2s_rx_config; memset(&i2s_rx_config, 0, sizeof(i2s_rx_config)); i2s_rx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); i2s_rx_config.sample_rate = 16000; i2s_rx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_rx_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT; i2s_rx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_rx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; i2s_rx_config.dma_desc_num = 8; i2s_rx_config.dma_frame_num = 256; i2s_rx_config.use_apll = false; i2s_pin_config_t rx_pin_config; memset(&rx_pin_config, 0, sizeof(rx_pin_config)); rx_pin_config.bck_io_num = -1; rx_pin_config.ws_io_num = I2S_WS_MIC; rx_pin_config.data_out_num = -1; rx_pin_config.data_in_num = I2S_DIN_MIC; rx_pin_config.mck_io_num = -1;
     if(i2s_driver_install(I2S_NUM_0, &i2s_rx_config, 0, NULL) == ESP_OK) { i2s_set_pin(I2S_NUM_0, &rx_pin_config); i2s_stop(I2S_NUM_0); bootLog("Audio Mic", "OK", okCol); } else { bootLog("Audio Mic", "FAIL", errCol); }
-    bootLog("EEPROM NVRAM", "OK", okCol); WiFi.begin(userSSID.c_str(), userPWD.c_str()); int wifiRetry = 0; bootLog("WLAN", "Wait", waitCol); while (WiFi.status() != WL_CONNECTED && wifiRetry < 8) { bootUpdateRight(String(wifiRetry+1), waitCol); delay(400); wifiRetry++; }
-    if (WiFi.status() == WL_CONNECTED) { bootUpdateRight("OK", okCol); configTzTime(ntpZone.c_str(), ntpServer.c_str()); struct tm timeinfo; int ntpWait = 0; bootLog("NTP Sync", "Wait", waitCol); while (!getLocalTime(&timeinfo, 1000) && ntpWait < 2) { bootUpdateRight(String(ntpWait+1), waitCol); ntpWait++; } bootUpdateRight("OK", okCol); } else { bootUpdateRight("SKIP", errCol); } WiFi.disconnect(true); WiFi.mode(WIFI_OFF);
+    bootLog("EEPROM NVRAM", "OK", okCol); WiFi.begin(userSSID.c_str(), userPWD.c_str()); int wifiRetry = 0; bootLog("WLAN", "Wait", waitCol); while (WiFi.status() != WL_CONNECTED && wifiRetry < 16) { bootUpdateRight(String(wifiRetry+1), waitCol); delay(300); wifiRetry++; }
+    if (WiFi.status() == WL_CONNECTED) { 
+        bootUpdateRight("OK", okCol); 
+        bootLog("NTP Sync", "Wait", waitCol); 
+        bool ntpOk = syncNtpTime(6); 
+        bootUpdateRight(ntpOk ? "OK" : "SKIP", ntpOk ? okCol : errCol); 
+    } else { 
+        bootUpdateRight("SKIP", errCol); 
+    } 
+    WiFi.disconnect(true); WiFi.mode(WIFI_OFF);
     bootLog("", ""); bootLog("Boot Complete."); delay(800); 
     cdSprite.deleteSprite(); 
     void* sprPtr = cdSprite.createSprite(240, 240 - 34);

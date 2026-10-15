@@ -4,6 +4,7 @@
 #include "Globals.h"
 #include "Display.h"
 #include "Logic.h"
+#include "GoodApps.h"
 #include <Update.h>
 
 unsigned long otaTotalSize = 0;
@@ -46,6 +47,7 @@ void setupOTARoutes() {
             }
             
             // Alle Apps sauber stoppen — RAM & CPU freigeben für OTA
+            saveMotionPrefs();
             killAllApps();
             if (evilActive) { evilActive = false; }
             matrixMode = false;

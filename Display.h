@@ -19,6 +19,11 @@ int get7SegWidth(String text, int h, int w, int spacing);
 void drawXButton(TFT_eSprite &spr);
 void drawBattery(int x, int y, int pct, bool charging);
 void drawHeader(struct tm *aktuell, int akku, bool charging);
+void drawGlassCard(TFT_eSprite *spr, int x, int y, int w, int h, int r, uint16_t borderCol, uint16_t fillTop = 0x1CE7, uint16_t fillBot = 0x10A2);
+void drawChronographWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg);
+void drawRetroCasioWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg);
+void drawControlCenter(TFT_eSprite *spr, struct tm *aktuell);
+void drawLoraMessenger(TFT_eSprite *spr, struct tm *aktuell);
 
 void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell);
 void slideToPage(int newPage, int dx, int dy);
