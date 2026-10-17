@@ -41,6 +41,10 @@ struct AppPackage {
     String uiJson;          // UI-Descriptor für die App
     String logicJson;       // Logik- / Event-Descriptor
     String configJson;      // Optionale Presets / Skripte
+    String jsScript;        // Eingebetteter JavaScript-Code aus .app Datei
+    int tickIntervalMs = 0; // Tick-Intervall für onTick() in ms
+    unsigned long lastTickMs = 0;
+    bool jsInitialized = false;
 };
 
 class AppManager {
@@ -72,7 +76,11 @@ public:
     static void loadInstalledPackages();
     static void resetToDefaults();
 
-    // Dynamische App Ausführung (Rendering & Touch)
+    // Dynamische App & JS Ausführung (Rendering, Touch & Tick)
+    static bool hasJsScript(const AppPackage *app);
+    static void tickDynamicApp(AppPackage *app, unsigned long now);
+    static void tickBackgroundApps(unsigned long now);
+    static void stopAllJsApps();
     static void renderDynamicApp(AppPackage *app, TFT_eSprite *spr);
     static void handleDynamicAppTouch(AppPackage *app, int x, int touchY);
 

@@ -41,6 +41,7 @@ void killAllApps() {
     badUsbActive = false; wifiSpamActive = false; bleSpamActive = false;
     nmapActive = false; deauthActive = false;
     diceRolling = false;
+    AppManager::stopAllJsApps();
     if (probeMonActive) stopProbeMonitor();
     if (bleScanActive) stopBleScan();
     
@@ -631,7 +632,11 @@ void checkBackgroundTasks(unsigned long currentMillis) {
     static unsigned long lastJiggle = 0; 
     if (jigglerActive && currentMillis - lastJiggle > 15000) { Mouse.move(2, 2); Mouse.move(-2, -2); lastJiggle = currentMillis; }
 
-    bool hacksRunning = (jigglerActive || badUsbActive || wifiSpamActive || bleSpamActive || deauthActive || nmapActive || evilActive || wlanActive || probeMonActive || bleScanActive);
+    // Hintergrund-Ticks fuer dynamische JS-Apps (z.B. Timer, Stoppuhr, Jiggler)
+    AppManager::tickBackgroundApps(currentMillis);
+
+    // WICHTIG: Normales WLAN (wlanActive) zaehlt NICHT als Hacking-Modus!
+    bool hacksRunning = (jigglerActive || badUsbActive || wifiSpamActive || bleSpamActive || deauthActive || nmapActive || evilActive || probeMonActive || bleScanActive);
 
     if (badUsbActive) executeBadUSB();
     if (wifiSpamActive) spamBeacons();
@@ -664,9 +669,9 @@ void checkBackgroundTasks(unsigned long currentMillis) {
         uint16_t prevRaw = hadPrevSample ? batHistoryPct[historyCount - 1] : 0;
 
         lastHistoryTime = currentMillis;
-        uint16_t batVal = (uint16_t)getBattery();
-        if (isCharging) batVal += 200;
-        else if (hacksRunning) batVal += 100;
+        uint16_t batVal = (uint16_t)constrain(getBattery(), 0, 100);
+        if (isCharging) batVal = max((uint16_t)1, batVal) + 200;
+        else if (hacksRunning) batVal = max((uint16_t)1, batVal) + 100;
 
         if (historyCount < MAX_HISTORY) { batHistoryPct[historyCount] = batVal; historyCount++; }
         else { for(int i = 1; i < MAX_HISTORY; i++) batHistoryPct[i-1] = batHistoryPct[i]; batHistoryPct[MAX_HISTORY-1] = batVal; }
@@ -771,7 +776,7 @@ void handlePowerManagement(unsigned long currentMillis) {
     static int lastPowerState = 1; 
     refreshPowerTelemetry(false);
     bool isCharging = isChargingCached(false);
-    bool hacksRunning = (jigglerActive || badUsbActive || wifiSpamActive || bleSpamActive || deauthActive || nmapActive || evilActive || wlanActive || probeMonActive || bleScanActive);
+    bool hacksRunning = (jigglerActive || badUsbActive || wifiSpamActive || bleSpamActive || deauthActive || nmapActive || evilActive || probeMonActive || bleScanActive);
     
     AppPackage* curApp = AppManager::getAppByPage(currentPage);
     String curTid = curApp ? (curApp->driver.length() > 0 ? curApp->driver : curApp->id) : "";
@@ -785,9 +790,23 @@ void handlePowerManagement(unsigned long currentMillis) {
 
     // Absolute Overrides für State 4 (Schlafen)
     if (powerState == 4) {
-        if (isCharging) powerState = 3;        // B: Strom -> Dauer-AOD
-        else if (hacksRunning) powerState = 5; // A: Hacks -> Stealth (Bildschirm aus, CPU an)
+        if (isCharging) {
+            powerState = 3;        // B: Strom -> Dauer-AOD
+        } else if (hacksRunning) {
+            powerState = 5;        // A: Hacks -> Stealth (Bildschirm aus, CPU an)
+        } else if (wlanActive) {
+            // Wenn Hotspot ohne verbundenen Client in den Schlaf geht -> Hotspot abschalten,
+            // damit echter Hardware-Light-Sleep (State 4, ~3-5 mA statt ~110 mA) moeglich wird!
+            if (!wlanClientMode && WiFi.softAPgetStationNum() == 0) {
+                stopHotspotAP();
+            } else {
+                powerState = 5;    // Aktive Web-Session oder Client-Modus -> Hintergrund weiterlaufen lassen
+            }
+        }
     }
+
+    // LoRa SX1262 Transceiver im Schlafmodus in den <1 uA Sleep schicken (spart ~12 mA Dauer-RX)
+    LoraManager::setLowPower(powerState >= 4);
 
     // Krone Hardware Button Check (PEK)
     pmu.getIrqStatus(); 
@@ -821,15 +840,14 @@ void handlePowerManagement(unsigned long currentMillis) {
     bool isAwake = (powerState == 1 || powerState == 2 || powerState == 3); 
     static bool wasAwake = true;
     
-    // CPU Taktung für Hacks und AOD
-    // State 1 (aktiv) / Hacks: volle Leistung. State 2 (dimmen): mittel.
-    // State 3 (AOD) zeichnet nur ~1x/Minute -> 80 MHz spart spürbar Strom.
-    // hacksRunning erzwingt oben bereits 240 MHz, AOD-80 greift also nur im
-    // wirklich untätigen Zustand (kein WLAN/BLE/Angriff aktiv).
+    // Effiziente CPU-Taktung zur Senkung des Powerdraws:
+    // - 240 MHz nur bei aktiven RF-Angriffen, Mikrofon oder aktiver Bedienung mit WLAN
+    // - 160 MHz bei normaler UI-Bedienung (State 1 ohne WLAN) oder WLAN im Hintergrund (State 2/3/5)
+    // - 80 MHz in Dim/AOD/Sleep ohne aktives WLAN (spart ~25 mA gegenueber 240 MHz!)
     int desiredFreq = 80;
-    if (powerState == 1 || hacksRunning) { desiredFreq = 240; }
-    else if (powerState == 2) { desiredFreq = 160; }
-    else if (powerState == 3) { desiredFreq = 80; }
+    if (hacksRunning || micActive || (powerState == 1 && wlanActive)) { desiredFreq = 240; }
+    else if (powerState == 1 || wlanActive) { desiredFreq = 160; }
+    else { desiredFreq = 80; }
     if (ESP.getCpuFreqMHz() != desiredFreq) { setCpuFrequencyMhz(desiredFreq); }
 
     // Helligkeits-Steuerung
@@ -873,7 +891,7 @@ bool isPageEnabled(int p) { if(p==0) return enP0; if(p==1) return enP1; if(p==2)
 static void handleAppTouch(AppPackage* app, int lastX, int touchY) {
     if (!app) return;
     String target = (app->driver.length() > 0) ? app->driver : app->id;
-    if (app->isCustom && target.length() == 0) {
+    if (AppManager::hasJsScript(app) || (app->isCustom && target.length() == 0)) {
         AppManager::handleDynamicAppTouch(app, lastX, touchY);
         return;
     }

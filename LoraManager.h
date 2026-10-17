@@ -28,6 +28,7 @@ public:
     static int getRxCount();
     static float getLastRssi();
     static float getLastSnr();
+    static void setLowPower(bool sleep);
     static String getStatusJson();
 };
 

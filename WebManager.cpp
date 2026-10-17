@@ -89,11 +89,7 @@ static int estimateBatteryEtaMinutes(bool chargingNow, int currentPct) {
     int dirCnt = 0;
 
     auto decodePct = [](int raw) {
-        int pct = raw % 100;
-        if (raw >= 200 && pct == 0 && raw != 200) pct = 100;
-        if (pct < 0) pct = 0;
-        if (pct > 100) pct = 100;
-        return pct;
+        return battRawPct((uint16_t)max(0, raw));
     };
 
     int prev = decodePct(batHistoryPct[start]);
@@ -195,7 +191,7 @@ void handleApiStatus() {
     updateConnectionHistory(currentSSID, rssi, wlanClientMode && wlanActive && currentSSID.length() > 0);
 
     int battPct = getBatteryCached(false);
-    bool hacksRunningNow = (jigglerActive || badUsbActive || wifiSpamActive || bleSpamActive || deauthActive || nmapActive || evilActive || wlanActive || probeMonActive || bleScanActive);
+    bool hacksRunningNow = (jigglerActive || badUsbActive || wifiSpamActive || bleSpamActive || deauthActive || nmapActive || evilActive || probeMonActive || bleScanActive);
     BattEtaResult eta = computeBatteryEta(isCharging, hacksRunningNow, battPct);
     const char* etaMode = "unknown";
     if (eta.etaMin >= 0) etaMode = isCharging ? "charge" : "discharge";
@@ -1319,9 +1315,10 @@ body.high-contrast button {
     var curDate = new Date(); curDate.setHours(curH, curM, 0, 0);
     var dataRaw = [];
     for(var i=0; i<rawData.length; i++) {
-        var v = rawData[i]; var pct = v % 100;
-        if(v >= 200 && pct === 0 && v !== 200) pct = 100;
-        var state = (v >= 200) ? 2 : (v >= 100 ? 1 : 0);
+        var v = rawData[i];
+        var state = (v >= 201) ? 2 : (v >= 101 ? 1 : 0);
+        var pct = (v >= 201) ? (v - 200) : (v >= 101 ? (v - 100) : v);
+        if (pct < 0) pct = 0; if (pct > 100) pct = 100;
         var t = new Date(curDate.getTime() - (rawData.length - 1 - i) * intervalMins * 60000);
         dataRaw.push({ pct: pct, state: state, time: t });
     }
@@ -2793,7 +2790,8 @@ function handleAppFileSelect(input) {
             if (catEl) catEl.innerHTML = '<span style="color:' + (isSec ? 'var(--crit)' : '#00ff88') + ';font-weight:600;">' + catName + '</span>';
             if (authorEl) authorEl.innerText = data.author || 'Community';
             if (descEl) descEl.innerText = data.description || 'Keine Beschreibung';
-            if (pageEl) pageEl.innerText = (data.ui ? 'Dynamische UI-App' : 'Natives Paket');
+            var hasJs = (data.logic && data.logic.script) || data.script;
+            if (pageEl) pageEl.innerText = hasJs ? '⚡ JavaScript App (UI + JS-Logik)' : (data.ui ? 'Dynamische UI-App' : 'Natives Paket');
             
             var v = document.getElementById('appInstallVeil');
             if (v) v.classList.add('show');
@@ -2839,6 +2837,106 @@ function confirmAppInstall() {
     });
 }
 
+function openAppEditor(id) {
+    fetch('/api/apps/export?id=' + encodeURIComponent(id))
+    .then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.text();
+    })
+    .then(txt => {
+        var ta = document.getElementById('appEditorCode');
+        var title = document.getElementById('appEditorTitle');
+        if (ta) {
+            try { ta.value = JSON.stringify(JSON.parse(txt), null, 2); }
+            catch(e) { ta.value = txt; }
+        }
+        if (title) title.innerText = '✏️ ' + id + '.app bearbeiten (UI & JavaScript)';
+        var v = document.getElementById('appEditorVeil');
+        if (v) v.classList.add('show');
+    })
+    .catch(err => alert('Fehler beim Laden der .app Datei: ' + err));
+}
+
+function openNewJsAppEditor() {
+    var tpl = {
+        watchos_package: "2.0",
+        id: "counter",
+        name: "Klick-Zaehler",
+        icon: "CNT",
+        category: "productivity",
+        color: "#00e5ff",
+        version: "1.0.0",
+        author: "Custom JS",
+        description: "Eigene JavaScript-App direkt in der .app Datei",
+        ui: {
+            title: "Klick-Zaehler",
+            elements: [
+                { type: "card", x: 15, y: 24, w: 210, h: 66, color: "#142538", border: "#00e5ff" },
+                { type: "7segment", x: 120, y: 35, text: "{count}", size: 28, color: "#00ff88" },
+                { type: "label", x: 120, y: 112, text: "{statusText}", font: 2, color: "#90caf9" },
+                { type: "button", x: 10, y: 145, w: 105, h: 44, label: "+1 Klick", action: "inc()", color: "#00c853", text_color: "#000000" },
+                { type: "button", x: 125, y: 145, w: 105, h: 44, label: "Reset", action: "reset()", color: "#37474f", text_color: "#ffffff" }
+            ]
+        },
+        logic: {
+            lang: "javascript",
+            tick_ms: 0,
+            state: { count: 0, statusText: "Bereit zum Zaehlen" },
+            script: "function inc() {\n  state.count += 1;\n  state.statusText = 'Klicks: ' + state.count;\n  Watch.vibrate();\n}\nfunction reset() {\n  state.count = 0;\n  state.statusText = 'Zurueckgesetzt';\n  Watch.toast('Reset OK', 1500);\n}"
+        }
+    };
+    var ta = document.getElementById('appEditorCode');
+    var title = document.getElementById('appEditorTitle');
+    if (ta) ta.value = JSON.stringify(tpl, null, 2);
+    if (title) title.innerText = '✨ Neue JavaScript-App (.app) erstellen';
+    var v = document.getElementById('appEditorVeil');
+    if (v) v.classList.add('show');
+}
+
+function closeAppEditorModal() {
+    var v = document.getElementById('appEditorVeil');
+    if (v) v.classList.remove('show');
+}
+
+function saveAppEditor() {
+    var ta = document.getElementById('appEditorCode');
+    if (!ta) return;
+    var raw = ta.value;
+    var parsed = null;
+    try {
+        parsed = JSON.parse(raw);
+    } catch(e) {
+        alert('JSON Syntax-Fehler in der .app Datei:\n' + e.message);
+        return;
+    }
+    if (!parsed.id || !parsed.name) {
+        alert("Bitte 'id' und 'name' im JSON angeben.");
+        return;
+    }
+    var btn = document.getElementById('btnSaveAppEditor');
+    if (btn) { btn.disabled = true; btn.innerText = 'Speichere...'; }
+    fetch('/api/apps/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(parsed)
+    })
+    .then(r => r.json())
+    .then(d => {
+        if (btn) { btn.disabled = false; btn.innerText = '💾 Speichern & auf Uhr installieren'; }
+        if (d.status === 'ok') {
+            closeAppEditorModal();
+            showToastMsg('App "' + parsed.name + '" aktualisiert & installiert!');
+            loadPackagesList();
+        } else {
+            alert('Fehler: ' + (d.msg || 'Unbekannter Fehler'));
+        }
+    })
+    .catch(err => {
+        if (btn) { btn.disabled = false; btn.innerText = '💾 Speichern & auf Uhr installieren'; }
+        alert('Netzwerkfehler: ' + err);
+    });
+}
+
 function uninstallPackageApi(id, name) {
     if (!confirm('Moechten Sie die App "' + name + '" wirklich deinstallieren?\n\nDie App wird vollstaendig von der Uhr entfernt. Um sie wieder zu nutzen, muss die .app-Datei erneut hochgeladen werden.')) {
         return;
@@ -2879,18 +2977,21 @@ function loadPackagesList() {
             var isRunning = pkg.running;
             var isEn = pkg.enabled;
             var isCustom = pkg.is_custom;
+            var hasJs = pkg.has_js;
             var badgeCol = pkg.color || '#00e5ff';
             var runBadge = isRunning ? ' <span style="background:var(--good);color:#000;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:700;">LAEUFT</span>' : '';
+            var jsBadge = hasJs ? ' <span style="background:#f7df1e;color:#000;font-size:10px;padding:2px 5px;border-radius:3px;font-weight:800;" title="Fuehrt eingebettete JavaScript-Logik direkt aus der .app-Datei aus">JS</span>' : '';
             var customBadge = isCustom ? ' <span style="background:var(--accent);color:#000;font-size:10px;padding:2px 5px;border-radius:3px;font-weight:700;">CUSTOM</span>' : '';
             
             var row = '<div style="display:flex; justify-content:space-between; align-items:center; background:var(--surface-2); padding:10px 12px; border-radius:6px; border-left:4px solid ' + badgeCol + '; margin-bottom:8px; flex-wrap:wrap; gap:8px;">';
             row += '<div style="display:flex; align-items:center; gap:10px; min-width:200px;">';
             row += '<span style="background:#222; color:' + badgeCol + '; font-family:monospace; font-weight:bold; padding:6px 8px; border-radius:4px; font-size:12px; border:1px solid ' + badgeCol + '44;">' + (pkg.icon || 'APP') + '</span>';
-            row += '<div><b>' + pkg.name + '</b>' + runBadge + customBadge + '<br><span style="font-size:11px;color:var(--muted);">' + pkg.id + ' · v' + (pkg.version || '1.0') + (pkg.is_custom ? ' · Dynamische App' : ' · System') + '</span></div>';
+            row += '<div><b>' + pkg.name + '</b>' + jsBadge + runBadge + customBadge + '<br><span style="font-size:11px;color:var(--muted);">' + pkg.id + '.app · v' + (pkg.version || '1.0') + (hasJs ? ' · JS-Engine' : (pkg.is_custom ? ' · Dynamische App' : ' · Native Engine')) + '</span></div>';
             row += '</div>';
             row += '<div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">';
             
             row += '<button type="button" class="btn ' + (isEn ? 'btn-green' : 'btn-gray') + '" style="margin:0; width:auto; padding:5px 10px; font-size:11px;" onclick="togglePackageApi(\'' + pkg.id + '\', ' + (!isEn) + ')">' + (isEn ? 'Aktiviert ✓' : 'Deaktiviert') + '</button>';
+            row += '<button type="button" class="btn" style="margin:0; width:auto; padding:5px 10px; font-size:11px; background:#f7df1e22; border:1px solid #f7df1e; color:#f7df1e;" onclick="openAppEditor(\'' + pkg.id + '\')" title=".app Datei & JavaScript-Logik im Browser ansehen/bearbeiten">✏️ Code / JS</button>';
             row += '<a href="/api/apps/export?id=' + encodeURIComponent(pkg.id) + '" class="btn btn-blue" style="margin:0; width:auto; padding:5px 10px; font-size:11px; text-decoration:none; display:inline-block;" title="Paketdatei herunterladen">📥 Export</a>';
             row += '<button type="button" class="btn" style="margin:0; width:auto; padding:5px 10px; font-size:11px; background:#ef444422; border:1px solid #ef4444; color:#ef4444;" onclick="uninstallPackageApi(\'' + pkg.id + '\', \'' + pkg.name.replace(/'/g, "\\'") + '\')" title="Vollstaendig deinstallieren">🗑️ Deinstallieren</button>';
             row += '</div>';
@@ -3707,13 +3808,16 @@ function resetPackagesApi() {
     s += F("<div style='background:var(--surface);border:1px dashed var(--accent);border-radius:8px;padding:16px;margin-bottom:16px;'>");
     s += F("<div style='display:flex;align-items:center;gap:12px;margin-bottom:10px;'>");
     s += F("<div style='font-size:24px;'>📦</div><div>");
-    s += F("<h4 style='margin:0;color:var(--accent);'>"); s += tr(sysLang, "App-Paket installieren (.app)", "Install App Package (.app)", "Installer le paquet d'app (.app)"); s += F("</h4>");
-    s += F("<div style='font-size:12px;color:var(--muted);'>"); s += tr(sysLang, "Lade ein App-Paket hoch. Die Watch prueft das Paket und fragt vor der Aktivierung nach Bestaetigung.", "Upload an app package. The watch verifies it and prompts for confirmation.", "Televersez un paquet. La montre le verifie et demande confirmation."); s += F("</div>");
+    s += F("<h4 style='margin:0;color:var(--accent);'>"); s += tr(sysLang, "App-Paket installieren oder JS-App erstellen (.app)", "Install App Package or Create JS App (.app)", "Installer paquet ou creer app JS (.app)"); s += F("</h4>");
+    s += F("<div style='font-size:12px;color:var(--muted);'>"); s += tr(sysLang, "Lade eine .app-Datei hoch oder schreibe UI &amp; JavaScript-Logik direkt im Browser (WatchJS Engine).", "Upload a .app file or write UI &amp; JavaScript logic directly in the browser (WatchJS Engine).", "Televersez un fichier .app ou ecrivez UI &amp; logique JavaScript dans le navigateur."); s += F("</div>");
     s += F("</div></div>");
     s += F("<div style='display:flex;gap:10px;align-items:center;flex-wrap:wrap;'>");
     s += F("<input type='file' id='appFileInput' accept='.app,.json' style='display:none;' onchange='handleAppFileSelect(this)'>");
     s += F("<button type='button' class='btn btn-blue' style='width:auto;margin:0;padding:8px 18px;font-size:13px;' onclick='document.getElementById(\"appFileInput\").click()'>📁 ");
     s += tr(sysLang, "App-Paket (.app) auswaehlen...", "Select App Package (.app)...", "Selectionner paquet (.app)...");
+    s += F("</button>");
+    s += F("<button type='button' class='btn' style='width:auto;margin:0;padding:8px 18px;font-size:13px;background:#f7df1e22;border:1px solid #f7df1e;color:#f7df1e;font-weight:600;' onclick='openNewJsAppEditor()'>✨ ");
+    s += tr(sysLang, "Neue JS-App im Browser erstellen", "Create New JS App in Browser", "Creer une app JS");
     s += F("</button>");
     s += F("</div></div>");
 
@@ -3863,6 +3967,18 @@ function resetPackagesApi() {
     s += F("<div style='display:flex;gap:10px;'>");
     s += F("<button type='button' class='btn btn-gray' style='flex:1;margin:0;' onclick='closeAppInstallModal()'>"); s += tr(sysLang, "✕ Abbrechen", "✕ Cancel", "✕ Annuler"); s += F("</button>");
     s += F("<button type='button' class='btn btn-green' id='btnDoInstall' style='flex:2;margin:0;font-weight:700;' onclick='confirmAppInstall()'>"); s += tr(sysLang, "🚀 Jetzt installieren", "🚀 Install now", "🚀 Installer maintenant"); s += F("</button>");
+    s += F("</div></div></div>");
+
+    // In-Browser .app & JavaScript Code Editor Modal
+    s += F("<div class='veil' id='appEditorVeil'><div class='modal' role='dialog' aria-modal='true' style='max-width:680px;width:95%;'>");
+    s += F("<button type='button' class='close' onclick='closeAppEditorModal()' aria-label='Schließen'>&times;</button>");
+    s += F("<h3 id='appEditorTitle'>✏️ .app Paket &amp; JavaScript-Logik</h3>");
+    s += F("<div class='hint' style='margin-bottom:8px;'>UI-Elemente (<code>ui.elements</code>) und eingebetteter JavaScript-Code (<code>logic.script</code>, <code>logic.state</code>, <code>logic.tick_ms</code>) liegen direkt in dieser <code>.app</code>-Datei und werden live auf der Uhr ausgefuehrt.</div>");
+    s += F("<div style='font-size:11px;color:var(--muted);margin-bottom:6px;font-family:monospace;'>WatchJS API: <code>state.xyz</code> · <code>Watch.millis()</code> · <code>Watch.vibrate()</code> · <code>Watch.alarm()</code> · <code>Watch.toast(msg,ms)</code> · <code>Watch.formatTimeMs(ms)</code> · <code>Watch.formatTimeSec(s)</code> · <code>Watch.random(a,b)</code> · <code>Watch.evalCalc(expr)</code> · <code>Watch.jiggle(dx,dy)</code> · <code>Watch.loraSend(msg)</code></div>");
+    s += F("<textarea id='appEditorCode' spellcheck='false' style='width:100%;height:340px;font-family:monospace;font-size:12px;line-height:1.4;background:#0d1117;color:#e6edf3;border:1px solid #30363d;border-radius:8px;padding:10px;'></textarea>");
+    s += F("<div style='display:flex;gap:10px;margin-top:10px;'>");
+    s += F("<button type='button' class='btn btn-gray' style='flex:1;margin:0;' onclick='closeAppEditorModal()'>✕ Abbrechen</button>");
+    s += F("<button type='button' class='btn btn-green' id='btnSaveAppEditor' style='flex:2;margin:0;font-weight:700;' onclick='saveAppEditor()'>💾 Speichern &amp; auf Uhr installieren</button>");
     s += F("</div></div></div>");
 
     // Matrix-Easter-Egg: Code-Gate (nur bei Eingabe von 6174) + Digital-Rain-Overlay mit Zitaten
@@ -4438,7 +4554,7 @@ void setupServerRoutes() {
     server.on("/api/battery/detail", HTTP_GET, []() {
         if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
         bool isCharging = isChargingCached(false);
-        bool hacksRunningNow = (jigglerActive || badUsbActive || wifiSpamActive || bleSpamActive || deauthActive || nmapActive || evilActive || wlanActive || probeMonActive || bleScanActive);
+        bool hacksRunningNow = (jigglerActive || badUsbActive || wifiSpamActive || bleSpamActive || deauthActive || nmapActive || evilActive || probeMonActive || bleScanActive);
         BattEtaResult eta = computeBatteryEta(isCharging, hacksRunningNow, getBatteryCached(false));
         char json[420];
         snprintf(json, sizeof(json),
@@ -4926,8 +5042,9 @@ void startHotspotAP() {
     if (!wlanActive || wlanClientMode) {
         wlanActive = true; 
         wlanClientMode = false;
-        if (ESP.getCpuFreqMHz() != 240) setCpuFrequencyMhz(240); 
         WiFi.mode(WIFI_AP); 
+        esp_wifi_set_ps(WIFI_PS_MIN_MODEM); // Modem-Sleep spart ~70% Ruhestrom im WLAN-Leerlauf
+        WiFi.setTxPower(WIFI_POWER_15dBm);  // 15 dBm spart ~40 mA Peak-Strom ohne Reichweitenverlust im Raum
         WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0)); 
         WiFi.softAP(apSSID.c_str(), apPWD.c_str()); 
         delay(50); 
@@ -4960,7 +5077,10 @@ void toggleWLAN() {
     } 
     else if (wlanActive && !wlanClientMode) {
         wlanClientMode = true; dnsServer.stop(); server.stop(); WiFi.softAPdisconnect(true); showToast("Verbinde Client...", 2000);
-        WiFi.mode(WIFI_STA); WiFi.begin(userSSID.c_str(), userPWD.c_str());
+        WiFi.mode(WIFI_STA);
+        esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+        WiFi.setTxPower(WIFI_POWER_15dBm);
+        WiFi.begin(userSSID.c_str(), userPWD.c_str());
         int timeout = 0; while (WiFi.status() != WL_CONNECTED && timeout < 16) { delay(500); timeout++; }
         if (WiFi.status() == WL_CONNECTED) {
             server.begin(); MDNS.begin("watchos"); wlanIP = WiFi.localIP().toString(); showToast("IP: " + wlanIP, 4000);
@@ -4979,7 +5099,7 @@ void toggleWLAN() {
 // Spart Akku, falls man das WLAN vergisst. Betrifft nur den reinen AP-Modus
 // (Client-Modus und Evil Portal bleiben unberührt). Solange ein Gerät verbunden
 // ist oder die Uhr am Strom hängt, läuft der Timer nicht.
-#define WLAN_AP_IDLE_TIMEOUT_MS (10UL * 60UL * 1000UL) // 10 Minuten
+#define WLAN_AP_IDLE_TIMEOUT_MS (3UL * 60UL * 1000UL) // 3 Minuten (senkt Akkuverbrauch deutlich)
 void handleWlanIdleTimeout() {
     static unsigned long apIdleSince = 0;
     static unsigned long lastCheck = 0;

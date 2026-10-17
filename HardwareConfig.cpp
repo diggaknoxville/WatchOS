@@ -117,17 +117,17 @@ struct BattCurvePoint {
 };
 
 static const BattCurvePoint kLipoDischargeCurve[] = {
-    { 4200, 100 },
-    { 4120,  90 },
-    { 4020,  80 },
-    { 3920,  70 },
-    { 3840,  60 },
-    { 3790,  50 },
-    { 3750,  40 },
-    { 3710,  30 },
-    { 3660,  20 },
-    { 3580,  10 },
-    { 3450,   5 },
+    { 4140, 100 },
+    { 4080,  95 },
+    { 4020,  88 },
+    { 3950,  78 },
+    { 3880,  66 },
+    { 3820,  53 },
+    { 3770,  40 },
+    { 3730,  30 },
+    { 3680,  20 },
+    { 3600,  10 },
+    { 3480,   5 },
     { 3300,   0 }
 };
 
@@ -174,13 +174,37 @@ void refreshPowerTelemetry(bool forceRefresh) {
     }
 
     int mv = pmu.getBattVoltage();
-    int p = estimatePctFromVoltageMv(mv);
+    int p = 0;
 
-    // Limit sudden jumps from PMU read glitches.
-    if (gPowerCacheMs != 0) {
+    // 1. Wenn USB angeschlossen ist und der Lade-Controller fertig meldet (!hwCharging bei >= 4.05V),
+    //    ist die CV-Ladephase abgeschlossen -> 100%.
+    if (vbusIn && !hwCharging && mv >= 4050) {
+        p = 100;
+    } else if (hwCharging) {
+        // 2. Waehrend aktivem Ladestrom liegt die Klemmenspannung leicht ueber der Ruhespannung (OCV).
+        //    In der CV-Phase (ab ~4160 mV) sinkt der Ladestrom gegen 0 -> erreicht sauber 100%.
+        int compMv = (mv >= 4165) ? mv : (mv - ((4165 - mv) * 30) / 500);
+        p = estimatePctFromVoltageMv(compMv);
+    } else {
+        // 3. Im Akkubetrieb leichten Innenwiderstands-Drop (~15 mV durch Systemlast) kompensieren.
+        p = estimatePctFromVoltageMv(mv + 15);
+    }
+
+    // AXP2101 Hardware Fuel Gauge hinzuziehen, sofern plausibel kalibriert
+    int hwPct = pmu.getBatteryPercent();
+    if (hwPct >= 0 && hwPct <= 100) {
+        if (hwPct == 100 && mv >= 4080) {
+            p = 100;
+        } else if (abs(hwPct - p) <= 12) {
+            p = (p * 7 + hwPct * 3 + 5) / 10;
+        }
+    }
+
+    // Sanfte Glaettung gegen ADC-Sprünge (ausser beim ersten Sample nach Boot)
+    if (gPowerCacheMs != 0 && !forceRefresh) {
         int d = p - gCachedBatteryPct;
-        if (d > 3) p = gCachedBatteryPct + 3;
-        else if (d < -3) p = gCachedBatteryPct - 3;
+        if (d > 2) p = gCachedBatteryPct + 2;
+        else if (d < -2) p = gCachedBatteryPct - 2;
     }
 
     if (p < 0) p = 0;
@@ -385,7 +409,37 @@ void loadPreferences() {
 void initHardware() {
     tft.init(); tft.setRotation(2); tft.fillScreen(TFT_BLACK); ledcAttach(TFT_BL, 5000, 8); setBrightness(255);
     Wire.begin(IIC_SDA_PMU, IIC_SCL_PMU);
-    if (pmu.init(Wire, IIC_SDA_PMU, IIC_SCL_PMU, AXP2101_SLAVE_ADDRESS)) { pmu.clearIrqStatus(); pmu.enableBattVoltageMeasure(); pmu.enableVbusVoltageMeasure(); pmu.setALDO1Voltage(3300); pmu.enableALDO1(); pmu.setALDO2Voltage(3300); pmu.enableALDO2(); pmu.setALDO3Voltage(3300); pmu.enableALDO3(); pmu.setALDO4Voltage(3300); pmu.enableALDO4(); pmu.setBLDO1Voltage(3300); pmu.enableBLDO1(); pmu.setBLDO2Voltage(3300); pmu.enableBLDO2(); pmu.disableIRQ(XPOWERS_AXP2101_ALL_IRQ); pmu.enableIRQ(XPOWERS_AXP2101_BAT_INSERT_IRQ | XPOWERS_AXP2101_BAT_REMOVE_IRQ | XPOWERS_AXP2101_VBUS_INSERT_IRQ | XPOWERS_AXP2101_VBUS_REMOVE_IRQ | XPOWERS_AXP2101_PKEY_SHORT_IRQ); pmu.clearIrqStatus(); } 
+    if (pmu.init(Wire, IIC_SDA_PMU, IIC_SCL_PMU, AXP2101_SLAVE_ADDRESS)) {
+        pmu.clearIrqStatus();
+        // T-Watch S3 hat keinen NTC-Thermistor am TS-Pin: TS-Messung deaktivieren, damit
+        // der Ladevorgang nicht vorzeitig abbricht und zuverlässig 4.20V / 100% erreicht.
+        pmu.disableTSPinMeasure();
+        pmu.enableBattDetection();
+        pmu.enableBattVoltageMeasure();
+        pmu.enableVbusVoltageMeasure();
+        pmu.enableSystemVoltageMeasure();
+
+        // Ladeparameter für den 470 mAh LiPo setzen
+        pmu.setChargeTargetVoltage(XPOWERS_AXP2101_CHG_VOL_4V2);
+        pmu.setPrechargeCurr(XPOWERS_AXP2101_PRECHARGE_50MA);
+        pmu.setChargerConstantCurr(XPOWERS_AXP2101_CHG_CUR_300MA);
+        pmu.setChargerTerminationCurr(XPOWERS_AXP2101_CHG_ITERM_25MA);
+        pmu.enableChargerTerminationLimit();
+
+        // Power-Rails (BLDO1 ungenutzt -> aus, ALDO3 = Audio-Verstärker wird nach Boot abgeschaltet)
+        pmu.setALDO1Voltage(3300); pmu.enableALDO1();
+        pmu.setALDO2Voltage(3300); pmu.enableALDO2();
+        pmu.setALDO3Voltage(3300); pmu.enableALDO3();
+        pmu.setALDO4Voltage(3300); pmu.enableALDO4();
+        pmu.disableBLDO1();
+        pmu.setBLDO2Voltage(3300); pmu.enableBLDO2();
+
+        pmu.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
+        pmu.enableIRQ(XPOWERS_AXP2101_BAT_INSERT_IRQ | XPOWERS_AXP2101_BAT_REMOVE_IRQ |
+                      XPOWERS_AXP2101_VBUS_INSERT_IRQ | XPOWERS_AXP2101_VBUS_REMOVE_IRQ |
+                      XPOWERS_AXP2101_PKEY_SHORT_IRQ | XPOWERS_AXP2101_BAT_CHG_DONE_IRQ);
+        pmu.clearIrqStatus();
+    } 
     delay(100); if (drv.begin(Wire, IIC_SDA_PMU, IIC_SCL_PMU)) { drv.selectLibrary(1); drv.setMode(HapticMode::INTERNAL_TRIGGER); }
     Wire1.begin(IIC_SDA_TOUCH, IIC_SCL_TOUCH); touch.setPins(-1, TOUCH_INT); touch.begin(Wire1, 0x38, IIC_SDA_TOUCH, IIC_SCL_TOUCH);
     // USB-Policy:
@@ -527,6 +581,7 @@ void showBootSequence() {
     i2s_driver_install(I2S_NUM_0, &i2s_tx_config, 0, NULL); i2s_set_pin(I2S_NUM_0, &tx_pin_config); i2s_zero_dma_buffer(I2S_NUM_0);
 
     if (bootMode == 4) {
+        pmu.disableALDO3(); // Audio-Verstärker im Schnellstart direkt abschalten
         WiFi.mode(WIFI_STA); WiFi.begin(userSSID.c_str(), userPWD.c_str()); int wifiRetry = 0; while (WiFi.status() != WL_CONNECTED && wifiRetry < 16) { delay(250); wifiRetry++; }
         if (WiFi.status() == WL_CONNECTED) { syncNtpTime(6); } WiFi.disconnect(true); WiFi.mode(WIFI_OFF);
         i2s_driver_uninstall(I2S_NUM_0); i2s_config_t i2s_rx_config; memset(&i2s_rx_config, 0, sizeof(i2s_rx_config)); i2s_rx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); i2s_rx_config.sample_rate = 16000; i2s_rx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_rx_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT; i2s_rx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_rx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; i2s_rx_config.dma_desc_num = 8; i2s_rx_config.dma_frame_num = 256; i2s_rx_config.use_apll = false; i2s_pin_config_t rx_pin_config; memset(&rx_pin_config, 0, sizeof(rx_pin_config)); rx_pin_config.bck_io_num = -1; rx_pin_config.ws_io_num = I2S_WS_MIC; rx_pin_config.data_out_num = -1; rx_pin_config.data_in_num = I2S_DIN_MIC; rx_pin_config.mck_io_num = -1;
@@ -624,6 +679,7 @@ void showBootSequence() {
 
     uint16_t okCol = (bootMode == 0) ? TFT_WHITE : bFG; uint16_t errCol = (bootMode == 0) ? TFT_WHITE : bFG; uint16_t infCol = (bootMode == 0) ? TFT_WHITE : bFG; uint16_t waitCol = (bootMode == 0) ? TFT_WHITE : bFG;
     bootLog("LilyGo BIOS v2.0", "OK", okCol); bootLog("Copyright (C) 2026", "", okCol); bootLog("Michael Strassburger", "", okCol); bootLog("======================="); bootLog("CPU: ESP32-S3", String(ESP.getCpuFreqMHz()) + " MHz", infCol); bootLog("SRAM Base", String(ESP.getHeapSize() / 1024) + " KB", infCol); bootLog("OPI PSRAM", String(ESP.getPsramSize() / 1024) + " KB", infCol); bootLog("Flash ROM", String(ESP.getFlashChipSize() / 1024 / 1024) + " MB", infCol); WiFi.mode(WIFI_STA); bootLog("MAC", WiFi.macAddress(), infCol); bootLog("", ""); bootLog("--- System Init ---"); bootLog("I2C Bus", "OK", okCol); bootLog("PMU AXP2101", "OK", okCol); bootLog(" BATT Volt", String(pmu.getBattVoltage() / 1000.0) + "V", infCol); bootLog("Haptic DRV", "OK", okCol); bootLog("Touch FT6X36", "OK", okCol);
+    pmu.disableALDO3(); // Audio-Verstärker nach Boot-Sequenz abschalten (spart ~5 mA Ruhestrom)
     i2s_driver_uninstall(I2S_NUM_0); i2s_config_t i2s_rx_config; memset(&i2s_rx_config, 0, sizeof(i2s_rx_config)); i2s_rx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); i2s_rx_config.sample_rate = 16000; i2s_rx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_rx_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT; i2s_rx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_rx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; i2s_rx_config.dma_desc_num = 8; i2s_rx_config.dma_frame_num = 256; i2s_rx_config.use_apll = false; i2s_pin_config_t rx_pin_config; memset(&rx_pin_config, 0, sizeof(rx_pin_config)); rx_pin_config.bck_io_num = -1; rx_pin_config.ws_io_num = I2S_WS_MIC; rx_pin_config.data_out_num = -1; rx_pin_config.data_in_num = I2S_DIN_MIC; rx_pin_config.mck_io_num = -1;
     if(i2s_driver_install(I2S_NUM_0, &i2s_rx_config, 0, NULL) == ESP_OK) { i2s_set_pin(I2S_NUM_0, &rx_pin_config); i2s_stop(I2S_NUM_0); bootLog("Audio Mic", "OK", okCol); } else { bootLog("Audio Mic", "FAIL", errCol); }
     bootLog("EEPROM NVRAM", "OK", okCol); WiFi.begin(userSSID.c_str(), userPWD.c_str()); int wifiRetry = 0; bootLog("WLAN", "Wait", waitCol); while (WiFi.status() != WL_CONNECTED && wifiRetry < 16) { bootUpdateRight(String(wifiRetry+1), waitCol); delay(300); wifiRetry++; }

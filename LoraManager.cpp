@@ -145,6 +145,7 @@ bool LoraManager::sendMessage(const String &text, const String &sender) {
     if (!loraReady) {
         if (!init()) return false;
     }
+    setLowPower(false);
 
     String pSender = sender.length() > 0 ? sender : (phoneName.length() > 0 ? phoneName : "WatchOS");
     String payload = "[" + pSender + "] " + text;
@@ -221,6 +222,25 @@ float LoraManager::getLastRssi() {
 
 float LoraManager::getLastSnr() {
     return lastSnr;
+}
+
+static bool loraSleeping = false;
+
+void LoraManager::setLowPower(bool sleep) {
+    if (!loraReady) return;
+    if (sleep && !beaconActive) {
+        if (!loraSleeping) {
+            loraRadio.sleep(true);
+            loraSleeping = true;
+        }
+    } else {
+        if (loraSleeping) {
+            loraRadio.standby();
+            loraRadio.setPacketReceivedAction(setLoraRxFlag);
+            loraRadio.startReceive();
+            loraSleeping = false;
+        }
+    }
 }
 
 String LoraManager::getStatusJson() {

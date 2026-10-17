@@ -965,7 +965,8 @@ void drawLoraMessenger(TFT_eSprite *spr, struct tm *aktuell) {
 static void renderApp(AppPackage* app, TFT_eSprite *spr, struct tm *aktuell) {
     if (!app || !spr) return;
     String target = (app->driver.length() > 0) ? app->driver : app->id;
-    if (app->isCustom && target.length() == 0) {
+    if (AppManager::hasJsScript(app) || (app->isCustom && target.length() == 0)) {
+        AppManager::tickDynamicApp(app, millis());
         AppManager::renderDynamicApp(app, spr);
         return;
     }
@@ -1023,21 +1024,18 @@ static void renderApp(AppPackage* app, TFT_eSprite *spr, struct tm *aktuell) {
             spr->drawString("🔋 AKKU", 67, 50, 2);
         }
 
-        String estStr = isCharging ? "Voll in ca. 20m" : "Laufzeit: Berechne...";
-        if (!isCharging) {
-            if (historyCount >= 2) {
-                int drop = (batHistoryPct[0] % 100) - (batHistoryPct[historyCount - 1] % 100);
-                if (drop > 0) {
-                    int elapsedMins = (historyCount - 1) * (historyInterval / 60000);
-                    float dropPerMin = (float)drop / (float)max(1, elapsedMins);
-                    float remainingMins = batPct / max(0.001f, dropPerMin);
-                    estStr = "Noch " + String((int)(remainingMins / 60)) + "h " + String((int)remainingMins % 60) + "m";
-                } else {
-                    estStr = "Noch > 24 Std.";
-                }
-            } else {
-                estStr = "Noch > 18 Std.";
+        String estStr = "";
+        if (isCharging) {
+            if (batPct >= 100) estStr = "100% Voll geladen";
+            else {
+                float cRate = (battRateCharging > 1.0f) ? battRateCharging : 45.0f;
+                int remMins = (int)((100.0f - batPct) / cRate * 60.0f);
+                estStr = "Voll in ca. " + String(max(1, remMins)) + "m";
             }
+        } else {
+            float dRate = (battRateNormal > 0.2f) ? battRateNormal : 5.5f;
+            float remHours = (float)batPct / dRate;
+            estStr = "Noch ~" + String((int)remHours) + "h (" + String(dRate, 1) + "%/h)";
         }
         spr->setTextDatum(TR_DATUM);
         spr->setTextColor(0x8BD0);
@@ -1053,12 +1051,15 @@ static void renderApp(AppPackage* app, TFT_eSprite *spr, struct tm *aktuell) {
         spr->drawFastHLine(gx, gy + gh/2, gw, 0x18C3);
 
         if (historyCount > 1) {
+            int p0 = battRawPct(batHistoryPct[0]);
             int prevX = gx;
-            int prevY = gy + gh - (batHistoryPct[0] * gh / 100);
+            int prevY = gy + gh - (p0 * gh / 100);
             for (int i = 1; i < historyCount; i++) {
+                int pi = battRawPct(batHistoryPct[i]);
+                int mi = battRawMode(batHistoryPct[i]);
                 int cx = gx + (i * gw) / (historyCount - 1);
-                int cy = gy + gh - (batHistoryPct[i] * gh / 100);
-                uint16_t lCol = isCharging ? 0x07E0 : ((batHistoryPct[i] < 20) ? 0xF800 : 0x07FF);
+                int cy = gy + gh - (pi * gh / 100);
+                uint16_t lCol = (mi == 2) ? 0x07E0 : ((pi < 20) ? 0xF800 : 0x07FF);
                 spr->drawLine(prevX, prevY, cx, cy, lCol);
                 spr->fillCircle(cx, cy, 2, lCol);
                 prevX = cx; prevY = cy;
@@ -1546,21 +1547,18 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
         }
 
         // Restlaufzeit / ETA
-        String estStr = isCharging ? "Voll in ca. 20m" : "Laufzeit: Berechne...";
-        if (!isCharging) {
-            if (historyCount >= 2) {
-                int drop = (batHistoryPct[0] % 100) - (batHistoryPct[historyCount - 1] % 100);
-                if (drop > 0) {
-                    int elapsedMins = (historyCount - 1) * (historyInterval / 60000);
-                    float dropPerMin = (float)drop / (float)max(1, elapsedMins);
-                    float remainingMins = batPct / max(0.001f, dropPerMin);
-                    estStr = "Noch " + String((int)(remainingMins / 60)) + "h " + String((int)remainingMins % 60) + "m";
-                } else {
-                    estStr = "Noch > 24 Std.";
-                }
-            } else {
-                estStr = "Noch > 18 Std.";
+        String estStr = "";
+        if (isCharging) {
+            if (batPct >= 100) estStr = "100% Voll geladen";
+            else {
+                float cRate = (battRateCharging > 1.0f) ? battRateCharging : 45.0f;
+                int remMins = (int)((100.0f - batPct) / cRate * 60.0f);
+                estStr = "Voll in ca. " + String(max(1, remMins)) + "m";
             }
+        } else {
+            float dRate = (battRateNormal > 0.2f) ? battRateNormal : 5.5f;
+            float remHours = (float)batPct / dRate;
+            estStr = "Noch ~" + String((int)remHours) + "h (" + String(dRate, 1) + "%/h)";
         }
         spr->setTextDatum(TR_DATUM);
         spr->setTextColor(0xFFE0);
@@ -1577,8 +1575,9 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
             float stepX = (float)gW / max(1, historyCount - 1);
             for (int i = 0; i < historyCount - 1; i++) {
                 uint16_t raw1 = batHistoryPct[i]; uint16_t raw2 = batHistoryPct[i + 1];
-                int p1 = raw1 % 100; if (raw1 >= 200 && p1 == 0 && raw1 != 200) p1 = 100;
-                int p2 = raw2 % 100; if (raw2 >= 200 && p2 == 0 && raw2 != 200) p2 = 100;
+                int p1 = battRawPct(raw1);
+                int p2 = battRawPct(raw2);
+                int m1 = battRawMode(raw1);
                 int px1 = gX + (int)(i * stepX);
                 int px2 = gX + (int)((i + 1) * stepX);
                 int py1 = gY + gH - (p1 * gH / 100);
@@ -1586,7 +1585,7 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
                 if (py1 < gY) py1 = gY; if (py1 > gY + gH - 1) py1 = gY + gH - 1;
                 if (py2 < gY) py2 = gY; if (py2 > gY + gH - 1) py2 = gY + gH - 1;
 
-                uint16_t col = (raw1 >= 200) ? 0x07FF : ((p1 >= 50) ? 0x07E0 : (p1 >= 25 ? 0xFD20 : 0xF800));
+                uint16_t col = (m1 == 2) ? 0x07FF : ((p1 >= 50) ? 0x07E0 : (p1 >= 25 ? 0xFD20 : 0xF800));
                 spr->fillTriangle(px1, gY + gH - 1, px2, gY + gH - 1, px1, py1, blendColor565(col, 0x0000, 100));
                 spr->fillTriangle(px1, py1, px2, py2, px2, gY + gH - 1, blendColor565(col, 0x0000, 100));
                 spr->drawLine(px1, py1, px2, py2, col);

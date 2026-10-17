@@ -63,13 +63,15 @@ Umschaltbar per horizontalem Wischen; im Dashboard aktivier- und sortierbar:
 5. **Chronograph:** Modernes analog-inspiriertes Watchface mit Subdials für Batterie, Aktivitätsringe und Sekundenzeiger.
 6. **Retro Casio:** Kultige digitale Retro-Optik mit Wochentag, Datum, Sekunden und Akkuanzeige.
 
-### Modulares App-Management
+### Modulares App-Management & WatchJS Engine
 
-Das neu integrierte `AppManager`-System modularisiert Apps in saubere Pakete (`AppPackage`):
-- **Dynamische Installation & Deinstallation:** App-Pakete können als JSON-Deskriptor über das Dashboard hochgeladen und entfernt werden.
+Das modularisierte `AppManager`-System erlaubt die dynamische Installation und Ausführung von Apps direkt aus dem FFat-Dateisystem:
+- **WatchJS JavaScript-Interpreter:** Apps müssen nicht mehr in C++ fest einkompiliert werden. Ihre gesamte Logik, Zustandsverwaltung (`state`) und Touch-Interaktion kann als portabler JavaScript-Code direkt in der `.app`-JSON-Datei liegen (`"script": "function onTouch(x, y) { ... }"`).
+- **Hardware-APIs für WatchJS:** Zugriff auf Haptik (`Watch.vibrate(dur, eff)`), Audio (`Watch.beep(freq, ms)`), Display-Toasts (`Watch.toast(msg, dur)`), Zeit/Datum (`Watch.time()`), Akku-Telemetrie (`Watch.battery()`), Touch (`Watch.getTouch()`) und USB-HID (`Watch.hidMove(dx, dy)`, `Watch.hidClick()`).
+- **In-Browser JS-Code-Editor:** Apps können direkt im Web-Dashboard per Code-Editor live im Browser bearbeitet, gespeichert und auf der Uhr ausgeführt werden.
+- **Dynamische Installation & Deinstallation:** App-Pakete (`.app`) können als JSON-Deskriptor über das Dashboard hochgeladen, exportiert und entfernt werden.
 - **Kategorien:** Produktivität (`CAT_PRODUCTIVITY`), Security (`CAT_SECURITY`) und System (`CAT_SYSTEM`).
-- **Launcher:** Paginierter App-Launcher mit Schnellzugriff und Icon-Rendering.
-- **API-Export:** Vollständiger Export des App-Bestands via `/api/apps`.
+- **Migrierte Standard-Apps:** Stoppuhr, Timer, Taschenrechner, Mouse-Jiggler und Würfel laufen vollständig autark auf der WatchJS-Engine.
 
 ### Produktivitäts-Apps (Good Apps)
 
@@ -128,9 +130,18 @@ Das Webinterface (`WebManager.cpp`) bietet ein responsives **Glassmorphism Dark 
 
 ### Always-On-Display (AOD) & Power-Management
 
+- **Präzise Akku-Kalibrierung & Telemetrie:**
+  - Kalibrierte LiPo-Entladekurve (4,14V – 4,20V = 100%, 3,40V = 0%) mit Plausibilisierung der AXP2101-Messwerte.
+  - Deaktivierung der TS-Thermistor-Messung (`disableTSPinMeasure()`) gegen Fehlinterpretationen von Temperaturpins ohne angeschlossenen NTC.
+  - Korrigierte 100%-Dekodierung in Statusleiste und 24h-Batteriegrafik.
+- **Aggressive Stromspar-Architektur:**
+  - Abschaltung ungenutzter AXP2101-Spannungsregler (`BLDO1`, Audio-Verstärker `ALDO3`) außerhalb der Audio-Nutzung.
+  - SX1262 LoRa-Funkmodul geht im Watch-Sleep (`powerState >= 4`) automatisch in den Low-Power Sleep.
+  - Entkopplung von WLAN-Verbindung und CPU-Takt: Die CPU taktet bei aktivem WLAN ohne rechenintensive Hacks automatisch auf 160/80 MHz herunter.
+  - WiFi-Modem-Sleep (`WIFI_PS_MIN_MODEM`) aktiviert, um bis zu 70% Ruhestrom im Leerlauf zu sparen.
 - **5-stufiges Power-Management:**
-  1. *Aktiv* (volle Helligkeit, 240 MHz CPU)
-  2. *Dimmen* (reduzierte Helligkeit)
+  1. *Aktiv* (volle Helligkeit, dynamische 160–240 MHz CPU)
+  2. *Dimmen* (reduzierte Helligkeit, 160 MHz CPU)
   3. *AOD* (Display abgedunkelt mit konfigurierbaren Elementen, CPU auf 80 MHz gedrosselt)
   4. *Light-Sleep* (Display aus, Sensoren und Hintergrundtasks aktiv)
   5. *Deep-Sleep / Stealth* (maximaler Energiesparmodus)
@@ -270,8 +281,11 @@ Der unbefugte Betrieb von Deauthern, Signal-Spammern oder Captive Portals verst�
 ---
 
 ## Version & Changelog
-
-- **v1.3.0+ (Aktueller Stand):**
+- **v1.3.1 (Aktueller Stand):**
+  - **WatchJS Engine:** Integrierter, ressourcenschonender JavaScript-Interpreter für dynamische `.app`-Pakete mit Hardware-APIs (`Watch.*`) und In-Browser Live-Editor im Dashboard.
+  - **Portierte JS-Apps:** Stoppuhr, Timer, Rechner, Mouse-Jiggler und Würfel als portable `.app`-Pakete mit nativer JS-Logik implementiert.
+  - **Akku- & Power-Optimierung:** 4,20V Ladekurvenkalibrierung (100% wieder erreichbar), TS-Pin Deaktivierung, LDO1/Audio-LDO Abschaltung, LoRa SX1262 Deep Sleep und dynamische 80/160 MHz CPU-Skalierung.
+  - **Zuverlässiges OTA:** Throttling der Display-Fortschrittsanzeige auf 1%-Schritte zur Vermeidung von TCP-Pufferüberläufen und automatisches `Update.abort()` bei Verbindungsabbruch.
   - **AppManager:** Dynamisches Paket-System für modulare Apps und Dashboard-Paketverwaltung.
   - **2FA TOTP Authenticator:** Lokaler Token-Generator nach RFC 6238.
   - **LoRa Messenger:** SX1262 LoRa-Funkintegration für Textnachrichten und Beacons.

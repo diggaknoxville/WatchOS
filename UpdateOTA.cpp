@@ -17,6 +17,10 @@ static bool otaAuthRequired() {
     return webAuthEnabled && webPass.length() > 0;
 }
 
+#include <esp_wifi.h>
+
+static int lastOtaPct = -1;
+
 void setupOTARoutes() {
     server.on("/update", HTTP_POST, []() {
         // Abschluss-Handler: unautorisierte Uploads hier ablehnen (Flash wurde nie geschrieben).
@@ -39,11 +43,18 @@ void setupOTARoutes() {
                 Serial.println("[OTA] Abgelehnt: Authentifizierung fehlgeschlagen");
                 return; // Kein Update.begin() -> es wird nichts geflasht
             }
+            // Volle CPU-Leistung & kein WiFi-Modem-Sleep waehrend OTA fuer maximale Verbindungsstabilitaet
+            powerState = 1;
+            lastTouchTime = millis();
+            if (ESP.getCpuFreqMHz() != 240) setCpuFrequencyMhz(240);
+            esp_wifi_set_ps(WIFI_PS_NONE);
+            lastOtaPct = -1;
+
             // Wir holen uns die echte Dateigröße vom JavaScript, um die Prozente zu berechnen
             if (server.hasArg("size")) {
                 otaTotalSize = server.arg("size").toInt();
             } else {
-                otaTotalSize = 1500000; // Fallback (ca. 1.5MB)
+                otaTotalSize = 2100000; // Fallback (ca. 2.1MB)
             }
             
             // Alle Apps sauber stoppen — RAM & CPU freigeben für OTA
@@ -53,6 +64,7 @@ void setupOTARoutes() {
             matrixMode = false;
             
             // Uhr-Display übernehmen und Update-Screen vorbereiten
+            tft.writecommand(0x11);
             setBrightness(255);
             tft.fillScreen(TFT_BLACK);
             tft.drawRoundRect(20, 100, 200, 40, 5, TFT_WHITE); // Der leere Rahmen
@@ -60,6 +72,9 @@ void setupOTARoutes() {
             tft.setTextColor(TFT_WHITE, TFT_BLACK);
             tft.drawString("System Update...", 120, 70, 4);
 
+            if (Update.isRunning()) {
+                Update.abort();
+            }
             if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
                 Update.printError(Serial);
             }
@@ -67,16 +82,18 @@ void setupOTARoutes() {
         // PHASE 2: WÄHREND DES SCHREIBENS (CHUNKS)
         else if (upload.status == UPLOAD_FILE_WRITE) {
             if (!otaAuthorized) return; // Nicht autorisiert -> Chunks verwerfen
+            lastTouchTime = millis();
             if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
                 Update.printError(Serial);
             }
             
-            // Fortschrittsbalken auf der Uhr live zeichnen
-            int pct = (upload.totalSize * 100) / otaTotalSize;
-            if(pct > 100) pct = 100; // Absicherung
-            
-            // Füllt den Rahmen (Breite 196px bei 100%) in TFT_GREEN aus
-            tft.fillRoundRect(22, 102, (196 * pct) / 100, 36, 3, TFT_GREEN);
+            // Fortschrittsbalken auf der Uhr nur bei neuem Prozentwert zeichnen (entlastet SPI & TCP massiv)
+            int pct = (upload.totalSize * 100) / max(1UL, otaTotalSize);
+            if (pct > 100) pct = 100;
+            if (pct != lastOtaPct) {
+                lastOtaPct = pct;
+                tft.fillRoundRect(22, 102, (196 * pct) / 100, 36, 3, TFT_GREEN);
+            }
             
             yield(); // Verhindert, dass der Watchdog die Uhr währenddessen killt
         } 
@@ -90,6 +107,13 @@ void setupOTARoutes() {
                 tft.setTextColor(TFT_RED, TFT_BLACK);
                 tft.drawString("FEHLER!", 120, 160, 4);
             }
+        }
+        // PHASE 4: ABBRUCH (Wichtig: Update.abort() aufrufen, damit naechster Versuch sofort klappt!)
+        else if (upload.status == UPLOAD_FILE_ABORTED) {
+            Update.abort();
+            tft.setTextColor(TFT_RED, TFT_BLACK);
+            tft.drawString("Abbruch - Retry...", 120, 160, 2);
+            lastSecond = -1;
         }
     });
 }

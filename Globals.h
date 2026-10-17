@@ -128,11 +128,11 @@ extern float battRateNormal, battRateHacking, battRateCharging;
 extern uint16_t battSamplesNormal, battSamplesHacking, battSamplesCharging;
 extern int stepGoal;
 
-// Dekodiert Modus/Prozent aus einem batHistoryPct-Rohwert (0-99=Normal,100-199=Hacking,200+=Laden).
-static inline int battRawMode(uint16_t raw) { return raw >= 200 ? 2 : (raw >= 100 ? 1 : 0); }
+// Dekodiert Modus/Prozent aus einem batHistoryPct-Rohwert (0-100=Normal, 101-200=Hacking, 201-300=Laden).
+static inline int battRawMode(uint16_t raw) { return raw > 200 ? 2 : (raw > 100 ? 1 : 0); }
 static inline int battRawPct(uint16_t raw) {
-    int pct = raw % 100;
-    if (raw >= 200 && pct == 0 && raw != 200) pct = 100;
+    if (raw == 0) return 0;
+    int pct = (raw > 200) ? ((int)raw - 200) : ((raw > 100) ? ((int)raw - 100) : (int)raw);
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
     return pct;
