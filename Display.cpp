@@ -965,7 +965,7 @@ void drawLoraMessenger(TFT_eSprite *spr, struct tm *aktuell) {
 static void renderApp(AppPackage* app, TFT_eSprite *spr, struct tm *aktuell) {
     if (!app || !spr) return;
     String target = (app->driver.length() > 0) ? app->driver : app->id;
-    if (AppManager::hasJsScript(app) || (app->isCustom && target.length() == 0)) {
+    if (AppManager::hasJsScript(app) || app->uiJson.length() > 0 || (app->isCustom && target.length() == 0)) {
         AppManager::tickDynamicApp(app, millis());
         AppManager::renderDynamicApp(app, spr);
         return;
@@ -1729,6 +1729,12 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
     else if (page == 26) { showTotpAuth(spr); }
     else if (page == 27) { showNotificationCenter(spr); }
     else if (page == Pages::LoraMessenger) { drawLoraMessenger(spr, aktuell); }
+    else {
+        AppPackage* curApp = AppManager::getAppByPage(page);
+        if (curApp != nullptr) {
+            renderApp(curApp, spr, aktuell);
+        }
+    }
     
     // Page indicator dots for watchfaces (pages 0-3 only, Page 4 = AOD Manager Info)
     if (page >= 0 && page <= 3) {
@@ -1790,12 +1796,14 @@ void slideToPage(int newPage, int dx, int dy) {
 void renderUI(unsigned long currentMillis) {
     time_t jetzt; time(&jetzt); struct tm *aktuell = localtime(&jetzt); bool isCharging = isChargingCached(false); static unsigned long lastFrame = 0;
 
-    bool fastRefresh = (currentPage == 1 || currentPage == 7 || currentPage == 9 || currentPage == 25); 
+    bool isAppActive = (AppManager::getAppByPage(currentPage) != nullptr);
+    bool fastRefresh = (currentPage == 1 || currentPage == 7 || currentPage == 9 || currentPage == 25 || isAppActive); 
     bool forceRender = (aktuell->tm_sec != lastSecond) 
                     || (fastRefresh && (currentMillis - lastFrame > 50)) 
                     || (currentMillis < toastEndTime) 
                     || (hotspotPromptActive && (currentMillis - lastFrame > 40))
-                    || (currentPage >= 13 && currentPage <= 25);
+                    || (currentPage >= 13 && currentPage <= 25)
+                    || (isAppActive && (currentMillis - lastFrame > 50));
     if (forceRender) { 
         if (cdSprite.getPointer() == nullptr) {
             Serial.println("[RENDER] cdSprite ist NULL - recreate!");

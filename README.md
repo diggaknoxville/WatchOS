@@ -66,12 +66,12 @@ Umschaltbar per horizontalem Wischen; im Dashboard aktivier- und sortierbar:
 ### Modulares App-Management & WatchJS Engine
 
 Das modularisierte `AppManager`-System erlaubt die dynamische Installation und Ausführung von Apps direkt aus dem FFat-Dateisystem:
-- **WatchJS JavaScript-Interpreter:** Apps müssen nicht mehr in C++ fest einkompiliert werden. Ihre gesamte Logik, Zustandsverwaltung (`state`) und Touch-Interaktion kann als portabler JavaScript-Code direkt in der `.app`-JSON-Datei liegen (`"script": "function onTouch(x, y) { ... }"`).
-- **Hardware-APIs für WatchJS:** Zugriff auf Haptik (`Watch.vibrate(dur, eff)`), Audio (`Watch.beep(freq, ms)`), Display-Toasts (`Watch.toast(msg, dur)`), Zeit/Datum (`Watch.time()`), Akku-Telemetrie (`Watch.battery()`), Touch (`Watch.getTouch()`) und USB-HID (`Watch.hidMove(dx, dy)`, `Watch.hidClick()`).
-- **In-Browser JS-Code-Editor:** Apps können direkt im Web-Dashboard per Code-Editor live im Browser bearbeitet, gespeichert und auf der Uhr ausgeführt werden.
-- **Dynamische Installation & Deinstallation:** App-Pakete (`.app`) können als JSON-Deskriptor über das Dashboard hochgeladen, exportiert und entfernt werden.
+- **WatchJS JavaScript-Interpreter:** Apps müssen nicht mehr in C++ fest einkompiliert werden. Ihre gesamte Logik, Zustandsverwaltung (`state`), Touch-Interaktion und UI-Events laufen als portabler JavaScript-Code direkt in der `.app`-JSON-Datei (`"script": "function onTouch(x, y) { ... }"`).
+- **Umfangreiche Hardware- & System-APIs für WatchJS:** Direkter Zugriff auf Haptik (`Watch.vibrate(dur, eff)`), Audio/Buzzer (`Watch.beep(freq, ms)`), Display-Toasts (`Watch.toast(msg, dur)`), Zeit/Datum (`Watch.time()`), Akku- & Ladestatus (`Watch.battery()`, `Watch.isCharging()`), Helligkeit (`Watch.setBrightness()`), PDM-Mikrofon RMS (`Watch.getRMS()`), BMA423-Lagesensor (`Watch.getPitch()`, `Watch.getRoll()`), TOTP 2FA (`Watch.totpCount()`, `Watch.totpCode()`), Benachrichtigungen (`Watch.notifCount()`, `Watch.notifClear()`), LoRa-Messenger & Beacon (`Watch.loraIsReady()`, `Watch.loraMsgCount()`), sowie die komplette Security-Suite (Evil Portal, BadUSB, WiFi/BLE Spam, Nmap, Deauther, Probe- & BLE-Scanner).
+- **In-Browser JS-Code-Editor:** Apps können direkt im Web-Dashboard per Code-Editor live im Browser bearbeitet, exportiert, gespeichert und auf der Uhr ausgeführt werden.
+- **Dynamische Installation & Deinstallation:** App-Pakete (`.app`) können als JSON-Deskriptor über das Dashboard hochgeladen, exportiert und entfernt werden. Re-Indexierung und dynamische Seiten-Zuordnung stellen sicher, dass neu importierte oder modifizierte Apps nahtlos funktionieren.
 - **Kategorien:** Produktivität (`CAT_PRODUCTIVITY`), Security (`CAT_SECURITY`) und System (`CAT_SYSTEM`).
-- **Migrierte Standard-Apps:** Stoppuhr, Timer, Taschenrechner, Mouse-Jiggler und Würfel laufen vollständig autark auf der WatchJS-Engine.
+- **Vollständig migrierte Standard-Apps:** Alle 20 Standard-Apps (inkl. Dezibel-Meter, Evil Portal, BadUSB, WiFi/BLE Spam, Nmap, Deauther, Probe- & BLE-Scanner, LoRa Messenger, TOTP, Notifications, etc.) sind modularisiert und besitzen ihre UI- und Script-Definitionen direkt in ihren `.app`-Paketen.
 
 ### Produktivitäts-Apps (Good Apps)
 

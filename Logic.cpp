@@ -891,7 +891,7 @@ bool isPageEnabled(int p) { if(p==0) return enP0; if(p==1) return enP1; if(p==2)
 static void handleAppTouch(AppPackage* app, int lastX, int touchY) {
     if (!app) return;
     String target = (app->driver.length() > 0) ? app->driver : app->id;
-    if (AppManager::hasJsScript(app) || (app->isCustom && target.length() == 0)) {
+    if (AppManager::hasJsScript(app) || app->uiJson.length() > 0 || (app->isCustom && target.length() == 0)) {
         AppManager::handleDynamicAppTouch(app, lastX, touchY);
         return;
     }
@@ -1088,7 +1088,7 @@ static void handleAppTouch(AppPackage* app, int lastX, int touchY) {
             return; 
         } 
         else {
-            int touchY = y[0] - 34; if (curApp && (curApp->id == "battery" || curApp->id == "flashlight")) touchY = y[0]; 
+            int touchY = y[0] - 34; if (currentPage == 11) touchY = y[0]; 
 
             // Live-Helligkeits-Slider im Control Center (Page 5) mit direktem Feedback
             if (currentPage == 5 && touchY >= 24 && touchY <= 64 && x[0] >= 28 && x[0] <= 212) {

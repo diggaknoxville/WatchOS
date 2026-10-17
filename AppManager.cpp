@@ -5,6 +5,12 @@
 #include "HardwareConfig.h"
 #include "NotificationManager.h"
 #include "LoraManager.h"
+#include "TotpAuth.h"
+#include "GoodApps.h"
+#include "BadApps.h"
+#include <esp_wifi.h>
+#include <WiFi.h>
+#include <BLEDevice.h>
 #include <FFat.h>
 #include <algorithm>
 #include <map>
@@ -298,6 +304,22 @@ static void syncSystemGlobalsFromState(AppPackage *app) {
         timerRunning = isRun;
     } else if (app->id == "jiggler" || app->driver == "jiggler") {
         jigglerActive = isRun;
+    } else if (app->id == "phishing" || app->driver == "phishing") {
+        evilActive = isRun;
+    } else if (app->id == "badusb" || app->driver == "badusb") {
+        badUsbActive = isRun;
+    } else if (app->id == "wifispam" || app->driver == "wifispam") {
+        wifiSpamActive = isRun;
+    } else if (app->id == "blespam" || app->driver == "blespam") {
+        bleSpamActive = isRun;
+    } else if (app->id == "nmap" || app->driver == "nmap") {
+        nmapActive = isRun;
+    } else if (app->id == "deauth" || app->driver == "deauth") {
+        deauthActive = isRun;
+    } else if (app->id == "probemon" || app->driver == "probemon") {
+        probeMonActive = isRun;
+    } else if (app->id == "blescan" || app->driver == "blescan") {
+        bleScanActive = isRun;
     }
 }
 
@@ -496,6 +518,228 @@ struct JsVM {
             double v = evalSimpleMathExpr(args[0].asStr(), ok);
             if (!ok) return JsVal("Error");
             return JsVal(v);
+        }
+
+        // Hardware & Subsystem Erweiterungen
+        if (fnName == "Watch.isCharging") return JsVal(isChargingCached(false) ? 1.0 : 0.0);
+        if (fnName == "Watch.setBrightness") {
+            if (!args.empty()) setBrightness((int)args[0].asNum());
+            return JsVal(1);
+        }
+        if (fnName == "Watch.getRMS") return JsVal((double)debug_rms);
+        if (fnName == "Watch.getPitch") {
+            float ax = 0, ay = 0, az = 0;
+            bmaReadAccel(ax, ay, az);
+            float pRad = atan2(ax, sqrt(ay * ay + az * az));
+            return JsVal((double)(pRad * 180.0 / 3.14159));
+        }
+        if (fnName == "Watch.getRoll") {
+            float ax = 0, ay = 0, az = 0;
+            bmaReadAccel(ax, ay, az);
+            float rRad = atan2(ay, sqrt(ax * ax + az * az));
+            return JsVal((double)(rRad * 180.0 / 3.14159));
+        }
+        if (fnName == "Watch.totpCount") return JsVal((double)TotpAuth::getAccountCount());
+        if (fnName == "Watch.totpName") {
+            int idx = args.empty() ? 0 : (int)args[0].asNum();
+            TotpAccount acc;
+            if (TotpAuth::getAccount(idx, acc)) return JsVal(String(acc.name));
+            return JsVal("Konto " + String(idx + 1));
+        }
+        if (fnName == "Watch.totpCode") {
+            int idx = args.empty() ? 0 : (int)args[0].asNum();
+            time_t jetzt; time(&jetzt);
+            uint32_t c = TotpAuth::generateCode(idx, jetzt);
+            char cBuf[16]; snprintf(cBuf, sizeof(cBuf), "%03d %03d", (int)(c / 1000), (int)(c % 1000));
+            return JsVal(String(cBuf));
+        }
+        if (fnName == "Watch.totpRemaining") {
+            time_t jetzt; time(&jetzt);
+            return JsVal((double)TotpAuth::getRemainingSeconds(jetzt));
+        }
+        if (fnName == "Watch.loraIsReady") return JsVal(LoraManager::isReady() ? 1.0 : 0.0);
+        if (fnName == "Watch.loraGetRssi") return JsVal((double)LoraManager::getLastRssi());
+        if (fnName == "Watch.loraMsgCount") return JsVal((double)LoraManager::getMessageCount());
+        if (fnName == "Watch.loraGetMsgText") {
+            int idx = args.empty() ? 0 : (int)args[0].asNum();
+            if (idx >= 0 && idx < LoraManager::getMessageCount()) {
+                return JsVal(LoraManager::getMessages()[idx].text);
+            }
+            return JsVal("");
+        }
+        if (fnName == "Watch.loraGetMsgSender") {
+            int idx = args.empty() ? 0 : (int)args[0].asNum();
+            if (idx >= 0 && idx < LoraManager::getMessageCount()) {
+                return JsVal(LoraManager::getMessages()[idx].sender);
+            }
+            return JsVal("");
+        }
+        if (fnName == "Watch.loraSetBeacon") {
+            bool act = args.empty() ? false : args[0].asBool();
+            LoraManager::setBeacon(act, 5);
+            return JsVal(1);
+        }
+        if (fnName == "Watch.loraIsBeacon") return JsVal(LoraManager::isBeaconActive() ? 1.0 : 0.0);
+        if (fnName == "Watch.notifCount") return JsVal((double)NotificationManager::getCount());
+        if (fnName == "Watch.notifTitle") {
+            int idx = args.empty() ? 0 : (int)args[0].asNum();
+            WatchNotification n;
+            if (NotificationManager::get(idx, n)) return JsVal(n.title);
+            return JsVal("");
+        }
+        if (fnName == "Watch.notifMsg") {
+            int idx = args.empty() ? 0 : (int)args[0].asNum();
+            WatchNotification n;
+            if (NotificationManager::get(idx, n)) return JsVal(n.message);
+            return JsVal("");
+        }
+        if (fnName == "Watch.notifClear") {
+            NotificationManager::clear();
+            return JsVal(1);
+        }
+        if (fnName == "Watch.isEvilActive") return JsVal(evilActive ? 1.0 : 0.0);
+        if (fnName == "Watch.toggleEvilPortal") {
+            toggleEvilPortal();
+            return JsVal(1);
+        }
+        if (fnName == "Watch.getEvilCount") {
+            int lines = 0;
+            for (int i = 0; i < (int)evilLog.length() - 3; i++) {
+                if (evilLog.substring(i, i + 4) == "<br>") lines++;
+            }
+            return JsVal((double)lines);
+        }
+        if (fnName == "Watch.getEvilLast") {
+            int lastBr = evilLog.lastIndexOf("<br>");
+            if (lastBr > 0) {
+                int prevBr = evilLog.lastIndexOf("<br>", lastBr - 1);
+                String l = (prevBr >= 0) ? evilLog.substring(prevBr + 4, lastBr) : evilLog.substring(0, lastBr);
+                l.replace("<b>", ""); l.replace("</b>", "");
+                l.replace("<span style='color:#ffaa00;'>", ""); l.replace("</span>", "");
+                return JsVal(l);
+            }
+            return JsVal("Keine Zugriffe");
+        }
+        if (fnName == "Watch.isBadUsbActive") return JsVal(badUsbActive ? 1.0 : 0.0);
+        if (fnName == "Watch.toggleBadUsb") {
+            badUsbActive = !badUsbActive;
+            return JsVal(1);
+        }
+        if (fnName == "Watch.getBadUsbScript") return JsVal((double)currentBadUsbScript);
+        if (fnName == "Watch.setBadUsbScript") {
+            if (!args.empty()) currentBadUsbScript = constrain((int)args[0].asNum(), 0, 2);
+            return JsVal(1);
+        }
+        if (fnName == "Watch.getBadUsbName") {
+            int idx = args.empty() ? currentBadUsbScript : (int)args[0].asNum();
+            if (idx == 0) return JsVal("Rickroll");
+            if (idx == 1) return JsVal("Fake Update");
+            return JsVal("Info Dump");
+        }
+        if (fnName == "Watch.isWiFiSpamActive") return JsVal(wifiSpamActive ? 1.0 : 0.0);
+        if (fnName == "Watch.toggleWiFiSpam") {
+            wifiSpamActive = !wifiSpamActive;
+            if (wifiSpamActive) { WiFi.mode(WIFI_AP); esp_wifi_set_promiscuous(true); }
+            else { esp_wifi_set_promiscuous(false); WiFi.mode(WIFI_OFF); }
+            return JsVal(1);
+        }
+        if (fnName == "Watch.isBleSpamActive") return JsVal(bleSpamActive ? 1.0 : 0.0);
+        if (fnName == "Watch.toggleBleSpam") {
+            bleSpamActive = !bleSpamActive;
+            if (!bleSpamActive && bleInitDone && !btActive) { BLEDevice::deinit(true); bleInitDone = false; }
+            return JsVal(1);
+        }
+        if (fnName == "Watch.isNmapActive") return JsVal(nmapActive ? 1.0 : 0.0);
+        if (fnName == "Watch.startNmap") {
+            if (!args.empty()) currentTargetNmap = constrain((int)args[0].asNum(), 0, 2);
+            if (targetSSIDs[currentTargetNmap].length() > 0) {
+                nmapActive = !nmapActive;
+                if (nmapActive) nmapState = 0; else { WiFi.disconnect(true); WiFi.mode(WIFI_OFF); }
+            }
+            return JsVal(1);
+        }
+        if (fnName == "Watch.getNmapTarget") {
+            int idx = args.empty() ? currentTargetNmap : (int)args[0].asNum();
+            if (idx >= 0 && idx < 3) return JsVal(targetSSIDs[idx].length() > 0 ? targetSSIDs[idx] : "Leer");
+            return JsVal("Leer");
+        }
+        if (fnName == "Watch.getNmapStatus") {
+            if (nmapState == 1) return JsVal("Verbinde...");
+            if (nmapState == 2) return JsVal("Scanne IP: " + String(nmapIP));
+            if (nmapState == 3) return JsVal("Abgeschlossen!");
+            if (nmapState == 4) return JsVal("Fehler!");
+            if (nmapActive) return JsVal("Scanning...");
+            return JsVal("Bereit zum Scan");
+        }
+        if (fnName == "Watch.isDeauthActive") return JsVal(deauthActive ? 1.0 : 0.0);
+        if (fnName == "Watch.toggleDeauth") {
+            if (numScannedNetworks > 0) {
+                deauthActive = !deauthActive;
+                if (deauthActive) deauthState = 0; else { esp_wifi_set_promiscuous(false); WiFi.mode(WIFI_OFF); }
+            }
+            return JsVal(1);
+        }
+        if (fnName == "Watch.scanDeauthAir") {
+            isScanningAir = true;
+            return JsVal(1);
+        }
+        if (fnName == "Watch.prevDeauthTarget") {
+            if (numScannedNetworks > 0) {
+                currentDeauthTarget--;
+                if (currentDeauthTarget < 0) currentDeauthTarget = numScannedNetworks - 1;
+            }
+            return JsVal((double)currentDeauthTarget);
+        }
+        if (fnName == "Watch.nextDeauthTarget") {
+            if (numScannedNetworks > 0) {
+                currentDeauthTarget++;
+                if (currentDeauthTarget >= numScannedNetworks) currentDeauthTarget = 0;
+            }
+            return JsVal((double)currentDeauthTarget);
+        }
+        if (fnName == "Watch.getDeauthTargetSSID") {
+            if (numScannedNetworks > 0 && currentDeauthTarget < numScannedNetworks) {
+                return JsVal(scannedSSIDs[currentDeauthTarget]);
+            }
+            return JsVal(isScanningAir ? "Scanne Umgebung..." : "Kein Ziel (Scan drücken)");
+        }
+        if (fnName == "Watch.getDeauthTargetMAC") {
+            if (numScannedNetworks > 0 && currentDeauthTarget < numScannedNetworks) {
+                return JsVal(scannedMACs[currentDeauthTarget]);
+            }
+            return JsVal("--:--:--");
+        }
+        if (fnName == "Watch.isProbeMonActive") return JsVal(probeMonActive ? 1.0 : 0.0);
+        if (fnName == "Watch.toggleProbeMon") {
+            if (probeMonActive) stopProbeMonitor(); else startProbeMonitor();
+            return JsVal(1);
+        }
+        if (fnName == "Watch.clearProbeMon") {
+            probeCount = 0;
+            return JsVal(1);
+        }
+        if (fnName == "Watch.getProbeCount") return JsVal((double)probeCount);
+        if (fnName == "Watch.getLatestProbe") {
+            if (probeCount > 0) {
+                return JsVal(probeMacs[probeCount - 1].substring(0, 11) + " " + probeSSIDs[probeCount - 1]);
+            }
+            return JsVal("Warte auf Probes...");
+        }
+        if (fnName == "Watch.isBleScanActive") return JsVal(bleScanActive ? 1.0 : 0.0);
+        if (fnName == "Watch.toggleBleScan") {
+            if (bleScanActive) stopBleScan(); else startBleScan();
+            return JsVal(1);
+        }
+        if (fnName == "Watch.clearBleScan") {
+            bleScanCount = 0;
+            return JsVal(1);
+        }
+        if (fnName == "Watch.getBleCount") return JsVal((double)bleScanCount);
+        if (fnName == "Watch.getLatestBle") {
+            if (bleScanCount > 0) {
+                return JsVal(bleScanNames[bleScanCount - 1] + " (" + String(bleScanRssi[bleScanCount - 1]) + "dB)");
+            }
+            return JsVal("Warte auf BLE Devices...");
         }
 
         // 2. Math.* & Global Built-ins
@@ -975,7 +1219,7 @@ static String interpolateStateVars(const String &appId, const String &tmpl) {
 }
 
 bool AppManager::hasJsScript(const AppPackage *app) {
-    return app && app->jsScript.length() > 0 && app->uiJson.length() > 0;
+    return app && app->uiJson.length() > 0 && (app->jsScript.length() > 0 || app->logicJson.length() > 0);
 }
 
 void AppManager::tickDynamicApp(AppPackage *app, unsigned long now) {
@@ -1254,37 +1498,79 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   "category": "productivity",
   "color": "#00ff00",
   "icon": "DB",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "WatchOS",
-  "description": "Schallpegelmesser mit I2S-Mikrofon und RMS-Balkengrafik",
+  "description": "Schallpegelmesser mit I2S-Mikrofon und RMS-Balkengrafik (JS)",
   "driver": "mic",
   "ui": {
     "title": "Dezibel-Meter",
-    "readout": {
-      "type": "db_spl",
-      "y": 50,
-      "size": 6,
-      "color": "#ffffff"
-    },
-    "rms_label": {
-      "type": "label",
-      "format": "RMS: {rms}",
-      "y": 85,
-      "color": "#888888"
-    },
-    "meter": {
-      "type": "bar_graph",
-      "x": 60,
-      "y": 74,
-      "w": 120,
-      "h": 120
-    }
+    "elements": [
+      {
+        "type": "7segment",
+        "id": "db_display",
+        "text": "{dbStr}",
+        "y": 18,
+        "h": 26,
+        "w": 14,
+        "spacing": 5,
+        "color": "{dbColor}"
+      },
+      {
+        "type": "label",
+        "id": "unit_label",
+        "text": "dB SPL",
+        "x": 120,
+        "y": 64,
+        "size": 2,
+        "color": "#ffffff"
+      },
+      {
+        "type": "label",
+        "id": "rms_label",
+        "text": "RMS: {rms}",
+        "x": 120,
+        "y": 82,
+        "size": 2,
+        "color": "#888888"
+      },
+      {
+        "type": "progress",
+        "id": "db_bar",
+        "x": 20,
+        "y": 105,
+        "w": 200,
+        "h": 14,
+        "value": "{dbVal}",
+        "max": 110,
+        "color": "{dbColor}"
+      },
+      {
+        "type": "button",
+        "id": "btn_toggle",
+        "text": "{btnText}",
+        "x": 30,
+        "y": 145,
+        "w": 180,
+        "h": 40,
+        "color": "{btnColor}",
+        "text_color": "#000000",
+        "action": "toggle()"
+      }
+    ]
   },
   "logic": {
-    "engine": "i2s_microphone",
-    "sample_rate": 16000,
-    "unit": "dB SPL",
-    "auto_power_save": true
+    "lang": "javascript",
+    "tick_ms": 60,
+    "state": {
+      "running": 1,
+      "dbStr": "00",
+      "dbVal": 0,
+      "rms": "0.0",
+      "dbColor": "#00ff00",
+      "btnText": "MESSUNG STOP",
+      "btnColor": "#ff9900"
+    },
+    "script": "function onTick() {\n  if (state.running == 1) {\n    var db = Watch.getDecibels();\n    var r = Watch.getRMS();\n    state.dbVal = db;\n    state.dbStr = (db < 10 ? '0' : '') + String(db);\n    state.rms = String(r);\n    if (db >= 85) {\n      state.dbColor = '#ff3333';\n    } else if (db >= 65) {\n      state.dbColor = '#ffea00';\n    } else {\n      state.dbColor = '#00ff00';\n    }\n  }\n}\n\nfunction toggle() {\n  Watch.vibrate();\n  if (state.running == 1) {\n    state.running = 0;\n    state.btnText = 'MESSUNG START';\n    state.btnColor = '#00ff00';\n  } else {\n    state.running = 1;\n    state.btnText = 'MESSUNG STOP';\n    state.btnColor = '#ff9900';\n  }\n}"
   }
 })rawliteral";
     }
@@ -1507,38 +1793,93 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   "category": "productivity",
   "color": "#ffb600",
   "icon": "LV",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "WatchOS",
-  "description": "2D-Wasserwaage per BMA423 Gyro/Beschleunigung",
+  "description": "2D-Wasserwaage per BMA423 Gyro/Beschleunigung (JS)",
   "driver": "level",
   "ui": {
     "title": "Wasserwaage",
-    "crosshair": {
-      "type": "circle_target",
-      "cx": 120,
-      "cy": 110,
-      "r": 70,
-      "color": "#333333"
-    },
-    "bubble": {
-      "type": "bubble",
-      "r": 14,
-      "color": "#00ff00"
-    },
-    "angles": {
-      "type": "readout",
-      "format": "X: {roll}°  Y: {pitch}°",
-      "y": 195,
-      "color": "#ffffff"
-    }
+    "elements": [
+      {
+        "type": "card",
+        "id": "status_card",
+        "text": "{status}",
+        "x": 20,
+        "y": 18,
+        "w": 200,
+        "h": 36,
+        "color": "{statusColor}",
+        "bg": "#141c24",
+        "size": 2
+      },
+      {
+        "type": "label",
+        "id": "lbl_roll",
+        "text": "Roll (X): {roll} deg",
+        "x": 120,
+        "y": 70,
+        "size": 2,
+        "color": "#00ffff"
+      },
+      {
+        "type": "progress",
+        "id": "bar_roll",
+        "x": 20,
+        "y": 85,
+        "w": 200,
+        "h": 10,
+        "value": "{rollBar}",
+        "max": 100,
+        "color": "#00ffff"
+      },
+      {
+        "type": "label",
+        "id": "lbl_pitch",
+        "text": "Pitch (Y): {pitch} deg",
+        "x": 120,
+        "y": 110,
+        "size": 2,
+        "color": "#ffea00"
+      },
+      {
+        "type": "progress",
+        "id": "bar_pitch",
+        "x": 20,
+        "y": 125,
+        "w": 200,
+        "h": 10,
+        "value": "{pitchBar}",
+        "max": 100,
+        "color": "#ffea00"
+      },
+      {
+        "type": "button",
+        "id": "btn_zero",
+        "text": "NULLPUNKT SETZEN",
+        "x": 30,
+        "y": 150,
+        "w": 180,
+        "h": 38,
+        "color": "#ffb600",
+        "text_color": "#000000",
+        "action": "zero()"
+      }
+    ]
   },
   "logic": {
-    "engine": "bma423_level",
-    "axes": [
-      "roll",
-      "pitch"
-    ],
-    "damping": 0.8
+    "lang": "javascript",
+    "tick_ms": 50,
+    "state": {
+      "roll": "0",
+      "pitch": "0",
+      "rollBar": 50,
+      "pitchBar": 50,
+      "status": "IN WAAGE",
+      "statusColor": "#00ff00",
+      "offsetRoll": 0,
+      "offsetPitch": 0
+    },
+    "script": "function onTick() {\n  var r = Watch.getRoll() - state.offsetRoll;\n  var p = Watch.getPitch() - state.offsetPitch;\n  state.roll = String(Math.round(r));\n  state.pitch = String(Math.round(p));\n  state.rollBar = Math.min(100, Math.max(0, 50 + (r * 1.6)));\n  state.pitchBar = Math.min(100, Math.max(0, 50 + (p * 1.6)));\n  if (Math.abs(r) < 2.5 && Math.abs(p) < 2.5) {\n    state.status = 'PERFEKT IN WAAGE';\n    state.statusColor = '#00ff00';\n  } else {\n    state.status = 'GENEIGT';\n    state.statusColor = '#ff9900';\n  }\n}\n\nfunction zero() {\n  Watch.vibrate();\n  state.offsetRoll = Watch.getRoll();\n  state.offsetPitch = Watch.getPitch();\n  Watch.toast('Nullpunkt kalibriert');\n}"
   }
 })rawliteral";
     }
@@ -1549,38 +1890,91 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   "category": "productivity",
   "color": "#00ffff",
   "icon": "2F",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "WatchOS",
-  "description": "Zwei-Faktor-Authenticator nach RFC 6238",
+  "description": "Zwei-Faktor-Authenticator nach RFC 6238 (JS)",
   "driver": "totp",
   "ui": {
     "title": "2FA Authenticator",
-    "service": {
-      "type": "label",
-      "source": "service_name",
-      "y": 50,
-      "size": 2,
-      "color": "#ffffff"
-    },
-    "code": {
-      "type": "totp_display",
-      "format": "000 000",
-      "y": 85,
-      "size": 6,
-      "color": "#00ffff"
-    },
-    "progress": {
-      "type": "countdown_ring",
-      "period": 30,
-      "y": 150,
-      "color": "#00e5ff"
-    }
+    "elements": [
+      {
+        "type": "label",
+        "id": "account_label",
+        "text": "{accountName}",
+        "x": 120,
+        "y": 20,
+        "size": 2,
+        "color": "#ffffff"
+      },
+      {
+        "type": "card",
+        "id": "code_card",
+        "text": "{code}",
+        "x": 20,
+        "y": 42,
+        "w": 200,
+        "h": 50,
+        "color": "#00ffff",
+        "bg": "#0e1a24",
+        "size": 4
+      },
+      {
+        "type": "progress",
+        "id": "time_bar",
+        "x": 20,
+        "y": 102,
+        "w": 200,
+        "h": 8,
+        "value": "{remSec}",
+        "max": 30,
+        "color": "{barColor}"
+      },
+      {
+        "type": "label",
+        "id": "sec_label",
+        "text": "Gueltig: {remSec}s",
+        "x": 120,
+        "y": 122,
+        "size": 2,
+        "color": "#888888"
+      },
+      {
+        "type": "button",
+        "id": "btn_prev",
+        "text": "< Vor",
+        "x": 20,
+        "y": 145,
+        "w": 95,
+        "h": 40,
+        "color": "#333333",
+        "text_color": "#ffffff",
+        "action": "prev()"
+      },
+      {
+        "type": "button",
+        "id": "btn_next",
+        "text": "Weiter >",
+        "x": 125,
+        "y": 145,
+        "w": 95,
+        "h": 40,
+        "color": "#00ffff",
+        "text_color": "#000000",
+        "action": "next()"
+      }
+    ]
   },
   "logic": {
-    "engine": "rfc6238_authenticator",
-    "period_sec": 30,
-    "digits": 6,
-    "algorithm": "SHA1"
+    "lang": "javascript",
+    "tick_ms": 250,
+    "state": {
+      "accountIdx": 0,
+      "accountName": "Lade Konten...",
+      "code": "--- ---",
+      "remSec": 30,
+      "barColor": "#00ffff"
+    },
+    "script": "function onTick() {\n  var count = Watch.totpCount();\n  if (count > 0) {\n    if (state.accountIdx >= count) state.accountIdx = 0;\n    state.accountName = Watch.totpName(state.accountIdx);\n    state.code = Watch.totpCode(state.accountIdx);\n    var sec = Watch.totpRemaining();\n    state.remSec = sec;\n    state.barColor = (sec <= 5) ? '#ff3333' : '#00ffff';\n  } else {\n    state.accountName = 'Keine Konten';\n    state.code = '--- ---';\n    state.remSec = 0;\n  }\n}\n\nfunction prev() {\n  var count = Watch.totpCount();\n  if (count > 0) {\n    Watch.vibrate();\n    state.accountIdx = (state.accountIdx - 1 + count) % count;\n    onTick();\n  }\n}\n\nfunction next() {\n  var count = Watch.totpCount();\n  if (count > 0) {\n    Watch.vibrate();\n    state.accountIdx = (state.accountIdx + 1) % count;\n    onTick();\n  }\n}"
   }
 })rawliteral";
     }
@@ -1591,58 +1985,108 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   "category": "productivity",
   "color": "#00ffff",
   "icon": "RF",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "author": "WatchOS",
-  "description": "Off-Grid P2P Messenger & Beacon auf 868MHz",
+  "description": "Off-Grid P2P Messenger & Beacon auf 868MHz (JS)",
   "driver": "lora",
   "ui": {
-    "title": "LoRa Funk",
-    "tabs": [
-      "Chat",
-      "Beacon"
-    ],
-    "presets": [
+    "title": "LoRa 868MHz P2P",
+    "elements": [
       {
+        "type": "label",
+        "id": "status_lbl",
+        "text": "{statusStr}",
+        "x": 120,
+        "y": 16,
+        "size": 2,
+        "color": "{statusColor}"
+      },
+      {
+        "type": "card",
+        "id": "msg_card",
+        "text": "{msgText}",
+        "x": 10,
+        "y": 35,
+        "w": 220,
+        "h": 50,
+        "color": "#00ffff",
+        "bg": "#0c1822",
+        "size": 2
+      },
+      {
+        "type": "button",
+        "id": "btn_bcn",
+        "text": "{btnBeaconText}",
+        "x": 10,
+        "y": 95,
+        "w": 220,
+        "h": 36,
+        "color": "{btnBeaconColor}",
+        "text_color": "#000000",
+        "action": "toggleBeacon()"
+      },
+      {
+        "type": "button",
+        "id": "btn_p1",
         "text": "Hallo!",
         "x": 10,
-        "y": 160,
+        "y": 140,
         "w": 52,
-        "h": 36
+        "h": 44,
+        "color": "#333333",
+        "text_color": "#ffffff",
+        "action": "sendMsg('Hallo!')"
       },
       {
+        "type": "button",
+        "id": "btn_p2",
         "text": "OK",
         "x": 66,
-        "y": 160,
+        "y": 140,
         "w": 52,
-        "h": 36
+        "h": 44,
+        "color": "#333333",
+        "text_color": "#ffffff",
+        "action": "sendMsg('OK')"
       },
       {
+        "type": "button",
+        "id": "btn_p3",
         "text": "Ping?",
         "x": 122,
-        "y": 160,
+        "y": 140,
         "w": 52,
-        "h": 36
+        "h": 44,
+        "color": "#333333",
+        "text_color": "#ffffff",
+        "action": "sendMsg('Ping?')"
       },
       {
-        "text": "Hilfe!",
+        "type": "button",
+        "id": "btn_p4",
+        "text": "SOS",
         "x": 178,
-        "y": 160,
+        "y": 140,
         "w": 52,
-        "h": 36
+        "h": 44,
+        "color": "#ff0000",
+        "text_color": "#ffffff",
+        "action": "sendMsg('SOS ALARM!')"
       }
-    ],
-    "beacon_button": {
-      "text": "Beacon An/Aus",
-      "y": 150,
-      "color": "#00ffff"
-    }
+    ]
   },
   "logic": {
-    "engine": "sx1262_lora",
-    "frequency_mhz": 868.0,
-    "bandwidth_khz": 125.0,
-    "spreading_factor": 7,
-    "tx_power_dbm": 22
+    "lang": "javascript",
+    "tick_ms": 500,
+    "state": {
+      "statusStr": "ONLINE (868 MHz)",
+      "statusColor": "#00ff00",
+      "msgText": "Warte auf Pakete...",
+      "beaconActive": 0,
+      "btnBeaconText": "BEACON STARTEN (5s)",
+      "btnBeaconColor": "#00ffff"
+    },
+    "script": "function onTick() {\n  if (Watch.loraIsReady() == 1) {\n    var rssi = Watch.loraGetRssi();\n    state.statusStr = (rssi < 0) ? ('ONLINE (' + rssi + ' dBm)') : 'ONLINE (BEREIT)';\n    state.statusColor = '#00ff00';\n  } else {\n    state.statusStr = 'OFFLINE';\n    state.statusColor = '#ff3333';\n  }\n  var cnt = Watch.loraMsgCount();\n  if (cnt > 0) {\n    var snd = Watch.loraGetMsgSender(cnt - 1);\n    var txt = Watch.loraGetMsgText(cnt - 1);\n    state.msgText = snd + ': ' + txt;\n  }\n  var bcn = Watch.loraIsBeacon();\n  state.beaconActive = bcn;\n  state.btnBeaconText = (bcn == 1) ? 'BEACON STOPPEN' : 'BEACON STARTEN (5s)';\n  state.btnBeaconColor = (bcn == 1) ? '#ff9900' : '#00ffff';\n}\n\nfunction toggleBeacon() {\n  Watch.vibrate();\n  var newBcn = 1 - state.beaconActive;\n  Watch.loraSetBeacon(newBcn);\n  onTick();\n}\n\nfunction sendMsg(m) {\n  Watch.vibrate();\n  Watch.loraSend(m);\n  Watch.toast('Gesendet: ' + m);\n  onTick();\n}"
   }
 })rawliteral";
     }
@@ -1653,28 +2097,94 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   "category": "productivity",
   "color": "#9cbeff",
   "icon": "NT",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "WatchOS",
-  "description": "Push-Mitteilungszentrale vom Smartphone",
+  "description": "Push-Mitteilungszentrale vom Smartphone (JS)",
   "driver": "notif",
   "ui": {
     "title": "Mitteilungen",
-    "list": {
-      "type": "notification_cards",
-      "y": 35,
-      "max": 4,
-      "empty_text": "Keine Mitteilungen"
-    },
-    "button_clear": {
-      "text": "Alle gelesen",
-      "y": 190,
-      "color": "#9cbeff"
-    }
+    "elements": [
+      {
+        "type": "label",
+        "id": "hdr_lbl",
+        "text": "{headerText}",
+        "x": 120,
+        "y": 18,
+        "size": 2,
+        "color": "#9cbeff"
+      },
+      {
+        "type": "card",
+        "id": "card_notif",
+        "text": "{cardTitle}",
+        "x": 10,
+        "y": 36,
+        "w": 220,
+        "h": 36,
+        "color": "#00ffff",
+        "bg": "#122030",
+        "size": 2
+      },
+      {
+        "type": "card",
+        "id": "card_body",
+        "text": "{cardMsg}",
+        "x": 10,
+        "y": 78,
+        "w": 220,
+        "h": 58,
+        "color": "#ffffff",
+        "bg": "#101622",
+        "size": 2
+      },
+      {
+        "type": "button",
+        "id": "btn_prev",
+        "text": "< Vor",
+        "x": 10,
+        "y": 145,
+        "w": 65,
+        "h": 40,
+        "color": "#333333",
+        "text_color": "#ffffff",
+        "action": "prev()"
+      },
+      {
+        "type": "button",
+        "id": "btn_next",
+        "text": "Weiter >",
+        "x": 80,
+        "y": 145,
+        "w": 65,
+        "h": 40,
+        "color": "#333333",
+        "text_color": "#ffffff",
+        "action": "next()"
+      },
+      {
+        "type": "button",
+        "id": "btn_clear",
+        "text": "Leeren",
+        "x": 150,
+        "y": 145,
+        "w": 80,
+        "h": 40,
+        "color": "#ff3333",
+        "text_color": "#ffffff",
+        "action": "clearAll()"
+      }
+    ]
   },
   "logic": {
-    "engine": "notification_center",
-    "buffer_size": 10,
-    "ble_sync": true
+    "lang": "javascript",
+    "tick_ms": 500,
+    "state": {
+      "currIdx": 0,
+      "headerText": "0 Mitteilungen",
+      "cardTitle": "Keine Mitteilungen",
+      "cardMsg": "Warte auf Push..."
+    },
+    "script": "function onTick() {\n  var total = Watch.notifCount();\n  state.headerText = String(total) + ' Mitteilungen';\n  if (total > 0) {\n    if (state.currIdx >= total) state.currIdx = total - 1;\n    state.cardTitle = Watch.notifTitle(state.currIdx);\n    state.cardMsg = Watch.notifMsg(state.currIdx);\n  } else {\n    state.cardTitle = 'Keine Mitteilungen';\n    state.cardMsg = 'Warte auf Push...';\n  }\n}\n\nfunction prev() {\n  var total = Watch.notifCount();\n  if (total > 0) {\n    Watch.vibrate();\n    state.currIdx = (state.currIdx - 1 + total) % total;\n    onTick();\n  }\n}\n\nfunction next() {\n  var total = Watch.notifCount();\n  if (total > 0) {\n    Watch.vibrate();\n    state.currIdx = (state.currIdx + 1) % total;\n    onTick();\n  }\n}\n\nfunction clearAll() {\n  Watch.vibrate();\n  Watch.notifClear();\n  state.currIdx = 0;\n  Watch.toast('Mitteilungen geleert');\n  onTick();\n}"
   }
 })rawliteral";
     }
@@ -1685,38 +2195,83 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   "category": "productivity",
   "color": "#31ff00",
   "icon": "BA",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "WatchOS",
-  "description": "Detaillierte Telemetrie und Ladehistorie",
+  "description": "Detaillierte Telemetrie und Ladehistorie (JS)",
   "driver": "battery",
   "ui": {
     "title": "Akku Telemetrie",
-    "telemetry_card": {
-      "type": "glass_card",
-      "x": 8,
-      "y": 4,
-      "w": 224,
-      "h": 64,
-      "metrics": [
-        "pct",
-        "volt",
-        "charging",
-        "runtime"
-      ]
-    },
-    "graph": {
-      "type": "discharge_curve",
-      "x": 8,
-      "y": 76,
-      "w": 224,
-      "h": 115,
-      "samples": 200
-    }
+    "elements": [
+      {
+        "type": "7segment",
+        "id": "pct_seg",
+        "text": "{pctStr}",
+        "y": 18,
+        "h": 26,
+        "w": 14,
+        "spacing": 5,
+        "color": "{pctColor}"
+      },
+      {
+        "type": "label",
+        "id": "volt_lbl",
+        "text": "{voltStr} V  |  {chgStr}",
+        "x": 120,
+        "y": 64,
+        "size": 2,
+        "color": "#00ffff"
+      },
+      {
+        "type": "progress",
+        "id": "bat_bar",
+        "x": 20,
+        "y": 85,
+        "w": 200,
+        "h": 12,
+        "value": "{pctVal}",
+        "max": 100,
+        "color": "{pctColor}"
+      },
+      {
+        "type": "card",
+        "id": "mode_card",
+        "text": "Laufzeit: ~18-24h (Normal)",
+        "x": 15,
+        "y": 105,
+        "w": 210,
+        "h": 32,
+        "color": "#888888",
+        "bg": "#101620",
+        "size": 2
+      },
+      {
+        "type": "button",
+        "id": "btn_eco",
+        "text": "{ecoBtnText}",
+        "x": 20,
+        "y": 145,
+        "w": 200,
+        "h": 40,
+        "color": "{ecoBtnColor}",
+        "text_color": "#000000",
+        "action": "toggleEco()"
+      }
+    ]
   },
   "logic": {
-    "engine": "axp2101_pmu",
-    "voltage_adc": true,
-    "history_interval_sec": 600
+    "lang": "javascript",
+    "tick_ms": 500,
+    "state": {
+      "pctStr": "100",
+      "pctVal": 100,
+      "voltStr": "4.20",
+      "chgStr": "AKKU",
+      "pctColor": "#00ff00",
+      "ecoActive": 0,
+      "ecoBtnText": "ECO-MODUS (40%)",
+      "ecoBtnColor": "#00ffff"
+    },
+    "script": "function onTick() {\n  var p = Watch.getBattery();\n  var v = Watch.getBattVolt();\n  var chg = Watch.isCharging();\n  state.pctVal = p;\n  state.pctStr = (p < 10 ? '00' : (p < 100 ? '0' : '')) + String(p);\n  state.voltStr = String(v);\n  state.chgStr = (chg == 1) ? 'LADEN (USB)' : 'AKKUBETRIEB';\n  if (p <= 15) {\n    state.pctColor = '#ff3333';\n  } else if (p <= 35) {\n    state.pctColor = '#ffea00';\n  } else {\n    state.pctColor = '#00ff00';\n  }\n}\n\nfunction toggleEco() {\n  Watch.vibrate();\n  if (state.ecoActive == 0) {\n    state.ecoActive = 1;\n    Watch.setBrightness(40);\n    state.ecoBtnText = 'NORMAL-MODUS (180)';\n    state.ecoBtnColor = '#ffea00';\n    Watch.toast('Eco-Modus AN (40)');\n  } else {\n    state.ecoActive = 0;\n    Watch.setBrightness(180);\n    state.ecoBtnText = 'ECO-MODUS (40%)';\n    state.ecoBtnColor = '#00ffff';\n    Watch.toast('Normal-Modus (180)');\n  }\n}"
   }
 })rawliteral";
     }
@@ -1727,22 +2282,86 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   "category": "productivity",
   "color": "#ffffff",
   "icon": "FL",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "WatchOS",
-  "description": "Helles Display-Flutlicht mit maximaler Helligkeit",
+  "description": "Helles Display-Flutlicht mit wählbaren Modi (JS)",
   "driver": "flashlight",
   "ui": {
     "title": "Taschenlampe",
-    "display": {
-      "type": "fullscreen",
-      "color": "#ffffff"
-    }
+    "elements": [
+      {
+        "type": "card",
+        "id": "mode_card",
+        "text": "{curMode}",
+        "x": 20,
+        "y": 20,
+        "w": 200,
+        "h": 45,
+        "color": "{modeColor}",
+        "bg": "#181818",
+        "size": 2
+      },
+      {
+        "type": "button",
+        "id": "btn_max",
+        "text": "WEISS MAX (100%)",
+        "x": 20,
+        "y": 75,
+        "w": 200,
+        "h": 36,
+        "color": "#ffffff",
+        "text_color": "#000000",
+        "action": "setWhite()"
+      },
+      {
+        "type": "button",
+        "id": "btn_dim",
+        "text": "GEDÄMPFT (30%)",
+        "x": 20,
+        "y": 115,
+        "w": 95,
+        "h": 34,
+        "color": "#ffb600",
+        "text_color": "#000000",
+        "action": "setDim()"
+      },
+      {
+        "type": "button",
+        "id": "btn_strobe",
+        "text": "STROBE",
+        "x": 125,
+        "y": 115,
+        "w": 95,
+        "h": 34,
+        "color": "{strobeBtnCol}",
+        "text_color": "#000000",
+        "action": "toggleStrobe()"
+      },
+      {
+        "type": "button",
+        "id": "btn_off",
+        "text": "AUSSCHALTEN",
+        "x": 20,
+        "y": 155,
+        "w": 200,
+        "h": 36,
+        "color": "#ff3333",
+        "text_color": "#ffffff",
+        "action": "turnOff()"
+      }
+    ]
   },
   "logic": {
-    "engine": "backlight_boost",
-    "brightness": 255,
-    "lock_awake": true,
-    "dismiss_on_tap": true
+    "lang": "javascript",
+    "tick_ms": 100,
+    "state": {
+      "curMode": "Weiss Max (255)",
+      "modeColor": "#ffffff",
+      "strobeActive": 0,
+      "strobeToggle": 0,
+      "strobeBtnCol": "#00ffff"
+    },
+    "script": "function onInit() {\n  Watch.setBrightness(255);\n}\n\nfunction setWhite() {\n  Watch.vibrate();\n  state.strobeActive = 0;\n  state.curMode = 'Weiss Max (255)';\n  state.modeColor = '#ffffff';\n  state.strobeBtnCol = '#00ffff';\n  Watch.setBrightness(255);\n}\n\nfunction setDim() {\n  Watch.vibrate();\n  state.strobeActive = 0;\n  state.curMode = 'Gedaempft (75)';\n  state.modeColor = '#ffb600';\n  state.strobeBtnCol = '#00ffff';\n  Watch.setBrightness(75);\n}\n\nfunction toggleStrobe() {\n  Watch.vibrate();\n  state.strobeActive = 1 - state.strobeActive;\n  if (state.strobeActive == 1) {\n    state.curMode = 'SOS Stroboskop';\n    state.modeColor = '#ff3333';\n    state.strobeBtnCol = '#ff3333';\n  } else {\n    setWhite();\n  }\n}\n\nfunction onTick() {\n  if (state.strobeActive == 1) {\n    state.strobeToggle = 1 - state.strobeToggle;\n    Watch.setBrightness(state.strobeToggle == 1 ? 255 : 5);\n  }\n}\n\nfunction turnOff() {\n  Watch.vibrate();\n  Watch.setBrightness(160);\n  Watch.back();\n}"
   }
 })rawliteral";
     }
@@ -1753,36 +2372,72 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   "category": "security",
   "color": "#ff0000",
   "icon": "EV",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "WatchOS",
-  "description": "Captive Portal zur Demonstration von Phishing",
+  "description": "Captive Portal zur Demonstration von Phishing (JS)",
   "driver": "phishing",
   "ui": {
-    "title": "Evil Portal",
-    "status": {
-      "type": "badge",
-      "y": 40,
-      "active": "PORTAL AKTIV",
-      "idle": "INAKTIV"
-    },
-    "creds": {
-      "type": "credentials_log",
-      "y": 70,
-      "max": 3
-    },
-    "button_toggle": {
-      "text": "Portal An/Aus",
-      "x": 40,
-      "y": 160,
-      "w": 160,
-      "h": 40,
-      "color": "#ff0000"
-    }
+    "title": "Evil Portal Phishing",
+    "elements": [
+      {
+        "type": "label",
+        "id": "ssid_lbl",
+        "text": "SSID: Free_WiFi_Login",
+        "x": 120,
+        "y": 18,
+        "size": 2,
+        "color": "#ffffff"
+      },
+      {
+        "type": "card",
+        "id": "status_card",
+        "text": "{statusStr}",
+        "x": 20,
+        "y": 38,
+        "w": 200,
+        "h": 36,
+        "color": "{statusColor}",
+        "bg": "#1f1010",
+        "size": 2
+      },
+      {
+        "type": "card",
+        "id": "log_card",
+        "text": "{logStr}",
+        "x": 10,
+        "y": 80,
+        "w": 220,
+        "h": 55,
+        "color": "#ffea00",
+        "bg": "#141414",
+        "size": 2
+      },
+      {
+        "type": "button",
+        "id": "btn_toggle",
+        "text": "{btnText}",
+        "x": 20,
+        "y": 145,
+        "w": 200,
+        "h": 42,
+        "color": "{btnColor}",
+        "text_color": "#ffffff",
+        "action": "toggle()"
+      }
+    ]
   },
   "logic": {
-    "engine": "dns_captive_portal",
-    "softap_ssid": "Free_WiFi_Login",
-    "dns_hijack": true
+    "lang": "javascript",
+    "tick_ms": 500,
+    "state": {
+      "running": 0,
+      "statusStr": "INAKTIV (Gestoppt)",
+      "statusColor": "#777777",
+      "logStr": "Keine Zugriffe",
+      "btnText": "PORTAL STARTEN",
+      "btnColor": "#ff0000"
+    },
+    "script": "function onTick() {\n  var act = Watch.isEvilActive();\n  state.running = act;\n  if (act == 1) {\n    var cnt = Watch.getEvilCount();\n    state.statusStr = 'PORTAL AKTIV (' + cnt + ' Opfer)';\n    state.statusColor = '#00ff00';\n    state.btnText = 'PORTAL STOPPEN';\n    state.btnColor = '#ff6600';\n    state.logStr = Watch.getEvilLast();\n  } else {\n    state.statusStr = 'INAKTIV (Gestoppt)';\n    state.statusColor = '#777777';\n    state.btnText = 'PORTAL STARTEN';\n    state.btnColor = '#ff0000';\n  }\n}\n\nfunction toggle() {\n  Watch.vibrate();\n  Watch.toggleEvilPortal();\n  onTick();\n}"
   }
 })rawliteral";
     }
@@ -1793,33 +2448,83 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   "category": "security",
   "color": "#ffff00",
   "icon": "DU",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "author": "WatchOS",
-  "description": "Rubber Ducky USB HID Tastatur-Emulation",
+  "description": "Rubber Ducky USB HID Tastatur-Emulation (JS)",
   "driver": "badusb",
   "ui": {
     "title": "Rubber Ducky",
-    "script_picker": {
-      "type": "carousel",
-      "y": 45,
-      "scripts": [
-        "Fake Update",
-        "System Info",
-        "WiFi Passwords"
-      ]
-    },
-    "button_inject": {
-      "text": "START INJEKTION",
-      "x": 50,
-      "y": 95,
-      "w": 140,
-      "h": 45,
-      "color": "#ff0000"
-    }
+    "elements": [
+      {
+        "type": "card",
+        "id": "script_card",
+        "text": "{scriptName}",
+        "x": 20,
+        "y": 20,
+        "w": 200,
+        "h": 42,
+        "color": "#ffff00",
+        "bg": "#1c1c0c",
+        "size": 2
+      },
+      {
+        "type": "button",
+        "id": "btn_prev",
+        "text": "< Vor",
+        "x": 20,
+        "y": 70,
+        "w": 95,
+        "h": 36,
+        "color": "#333333",
+        "text_color": "#ffffff",
+        "action": "prev()"
+      },
+      {
+        "type": "button",
+        "id": "btn_next",
+        "text": "Weiter >",
+        "x": 125,
+        "y": 70,
+        "w": 95,
+        "h": 36,
+        "color": "#333333",
+        "text_color": "#ffffff",
+        "action": "next()"
+      },
+      {
+        "type": "button",
+        "id": "btn_inject",
+        "text": "{btnText}",
+        "x": 20,
+        "y": 120,
+        "w": 200,
+        "h": 44,
+        "color": "{btnColor}",
+        "text_color": "#000000",
+        "action": "toggle()"
+      },
+      {
+        "type": "label",
+        "id": "hint_lbl",
+        "text": "USB HID Tastatur-Injektion",
+        "x": 120,
+        "y": 178,
+        "size": 2,
+        "color": "#777777"
+      }
+    ]
   },
   "logic": {
-    "engine": "usb_hid_keyboard",
-    "layout": "DE_ISO"
+    "lang": "javascript",
+    "tick_ms": 300,
+    "state": {
+      "scriptIdx": 0,
+      "scriptName": "Rickroll",
+      "running": 0,
+      "btnText": "START INJEKTION",
+      "btnColor": "#ffff00"
+    },
+    "script": "function onInit() {\n  state.scriptIdx = Watch.getBadUsbScript();\n  state.scriptName = Watch.getBadUsbName(state.scriptIdx);\n}\n\nfunction prev() {\n  Watch.vibrate();\n  state.scriptIdx = (state.scriptIdx - 1 + 3) % 3;\n  Watch.setBadUsbScript(state.scriptIdx);\n  state.scriptName = Watch.getBadUsbName(state.scriptIdx);\n}\n\nfunction next() {\n  Watch.vibrate();\n  state.scriptIdx = (state.scriptIdx + 1) % 3;\n  Watch.setBadUsbScript(state.scriptIdx);\n  state.scriptName = Watch.getBadUsbName(state.scriptIdx);\n}\n\nfunction toggle() {\n  Watch.vibrate();\n  Watch.toggleBadUsb();\n  onTick();\n}\n\nfunction onTick() {\n  var act = Watch.isBadUsbActive();\n  state.running = act;\n  state.btnText = (act == 1) ? 'STOP SCRIPT' : 'START INJEKTION';\n  state.btnColor = (act == 1) ? '#ff3333' : '#ffff00';\n}"
   }
 })rawliteral";
     }
@@ -1830,28 +2535,68 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   "category": "security",
   "color": "#ff0000",
   "icon": "WS",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "WatchOS",
-  "description": "Aussenden von hunderten gefälschten WiFi-Beacons",
+  "description": "Aussenden von hunderten gefälschten WiFi-Beacons (JS)",
   "driver": "wifispam",
   "ui": {
-    "title": "WiFi Spam",
-    "radar": {
-      "type": "beacon_animation",
-      "y": 50
-    },
-    "button_toggle": {
-      "text": "SPAM AN/AUS",
-      "x": 55,
-      "y": 85,
-      "w": 130,
-      "h": 45,
-      "color": "#ff0000"
-    }
+    "title": "WiFi Beacon Spam",
+    "elements": [
+      {
+        "type": "card",
+        "id": "status_card",
+        "text": "{statusStr}",
+        "x": 20,
+        "y": 20,
+        "w": 200,
+        "h": 40,
+        "color": "{statusColor}",
+        "bg": "#1f1010",
+        "size": 2
+      },
+      {
+        "type": "label",
+        "id": "info_lbl",
+        "text": "Broadcast Flooding",
+        "x": 120,
+        "y": 75,
+        "size": 2,
+        "color": "#ffffff"
+      },
+      {
+        "type": "button",
+        "id": "btn_toggle",
+        "text": "{btnText}",
+        "x": 30,
+        "y": 105,
+        "w": 180,
+        "h": 48,
+        "color": "{btnColor}",
+        "text_color": "#ffffff",
+        "action": "toggle()"
+      },
+      {
+        "type": "label",
+        "id": "hint_lbl",
+        "text": "SSID Liste im Dashboard anpassbar",
+        "x": 120,
+        "y": 172,
+        "size": 2,
+        "color": "#777777"
+      }
+    ]
   },
   "logic": {
-    "engine": "80211_beacon_flooder",
-    "packet_type": "raw_mgmt_beacon"
+    "lang": "javascript",
+    "tick_ms": 400,
+    "state": {
+      "running": 0,
+      "statusStr": "INAKTIV",
+      "statusColor": "#777777",
+      "btnText": "START BEACON FLOOD",
+      "btnColor": "#ff0000"
+    },
+    "script": "function onTick() {\n  var act = Watch.isWiFiSpamActive();\n  state.running = act;\n  if (act == 1) {\n    state.statusStr = 'SENDET BEACONS...';\n    state.statusColor = '#00ff00';\n    state.btnText = 'STOP SPAM';\n    state.btnColor = '#ff6600';\n  } else {\n    state.statusStr = 'INAKTIV';\n    state.statusColor = '#777777';\n    state.btnText = 'START BEACON FLOOD';\n    state.btnColor = '#ff0000';\n  }\n}\n\nfunction toggle() {\n  Watch.vibrate();\n  Watch.toggleWiFiSpam();\n  onTick();\n}"
   }
 })rawliteral";
     }
@@ -1862,27 +2607,68 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   "category": "security",
   "color": "#ff00ff",
   "icon": "BS",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "WatchOS",
-  "description": "BLE Advertisement Flooding & Notification Popups",
+  "description": "BLE Advertisement Flooding & Notification Popups (JS)",
   "driver": "blespam",
   "ui": {
-    "title": "BLE Spam",
-    "ping": {
-      "type": "pulse_animation",
-      "y": 50
-    },
-    "button_toggle": {
-      "text": "BLE SPAM START",
-      "x": 55,
-      "y": 85,
-      "w": 130,
-      "h": 45,
-      "color": "#ff00ff"
-    }
+    "title": "BLE Advertisement Spam",
+    "elements": [
+      {
+        "type": "card",
+        "id": "status_card",
+        "text": "{statusStr}",
+        "x": 20,
+        "y": 20,
+        "w": 200,
+        "h": 40,
+        "color": "{statusColor}",
+        "bg": "#1c0c1c",
+        "size": 2
+      },
+      {
+        "type": "label",
+        "id": "lbl_mode",
+        "text": "Target: Apple AirDrop / Popup",
+        "x": 120,
+        "y": 75,
+        "size": 2,
+        "color": "#ff00ff"
+      },
+      {
+        "type": "button",
+        "id": "btn_toggle",
+        "text": "{btnText}",
+        "x": 30,
+        "y": 105,
+        "w": 180,
+        "h": 48,
+        "color": "{btnColor}",
+        "text_color": "#ffffff",
+        "action": "toggle()"
+      },
+      {
+        "type": "label",
+        "id": "lbl_hint",
+        "text": "Floodet BLE Umgebung mit Popups",
+        "x": 120,
+        "y": 172,
+        "size": 2,
+        "color": "#777777"
+      }
+    ]
   },
   "logic": {
-    "engine": "ble_adv_flooder"
+    "lang": "javascript",
+    "tick_ms": 400,
+    "state": {
+      "running": 0,
+      "statusStr": "INAKTIV",
+      "statusColor": "#777777",
+      "btnText": "START BLE SPAM",
+      "btnColor": "#ff00ff"
+    },
+    "script": "function onTick() {\n  var act = Watch.isBleSpamActive();\n  state.running = act;\n  if (act == 1) {\n    state.statusStr = 'SPAM AKTIV (Flooding)';\n    state.statusColor = '#00ff00';\n    state.btnText = 'STOP BLE SPAM';\n    state.btnColor = '#ff6600';\n  } else {\n    state.statusStr = 'INAKTIV';\n    state.statusColor = '#777777';\n    state.btnText = 'START BLE SPAM';\n    state.btnColor = '#ff00ff';\n  }\n}\n\nfunction toggle() {\n  Watch.vibrate();\n  Watch.toggleBleSpam();\n  onTick();\n}"
   }
 })rawliteral";
     }
@@ -1893,31 +2679,88 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   "category": "security",
   "color": "#00ff00",
   "icon": "NM",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "WatchOS",
-  "description": "Multi-Port Netzwerk-Portscanner",
+  "description": "Multi-Port Netzwerk-Portscanner (JS)",
   "driver": "nmap",
   "ui": {
     "title": "Portscanner",
-    "network_picker": {
-      "type": "carousel",
-      "y": 45
-    },
-    "button_scan": {
-      "text": "SCAN STARTEN",
-      "x": 50,
-      "y": 95,
-      "w": 140,
-      "h": 45,
-      "color": "#00ff00"
-    },
-    "results": {
-      "type": "port_list",
-      "y": 145
-    }
+    "elements": [
+      {
+        "type": "card",
+        "id": "target_card",
+        "text": "{targetSSID}",
+        "x": 20,
+        "y": 20,
+        "w": 200,
+        "h": 36,
+        "color": "#ffff00",
+        "bg": "#141c10",
+        "size": 2
+      },
+      {
+        "type": "button",
+        "id": "btn_prev",
+        "text": "< Vor",
+        "x": 20,
+        "y": 62,
+        "w": 95,
+        "h": 32,
+        "color": "#333333",
+        "text_color": "#ffffff",
+        "action": "prev()"
+      },
+      {
+        "type": "button",
+        "id": "btn_next",
+        "text": "Weiter >",
+        "x": 125,
+        "y": 62,
+        "w": 95,
+        "h": 32,
+        "color": "#333333",
+        "text_color": "#ffffff",
+        "action": "next()"
+      },
+      {
+        "type": "card",
+        "id": "status_card",
+        "text": "{statusText}",
+        "x": 20,
+        "y": 100,
+        "w": 200,
+        "h": 36,
+        "color": "{statusColor}",
+        "bg": "#101814",
+        "size": 2
+      },
+      {
+        "type": "button",
+        "id": "btn_scan",
+        "text": "{btnText}",
+        "x": 20,
+        "y": 145,
+        "w": 200,
+        "h": 40,
+        "color": "{btnColor}",
+        "text_color": "#ffffff",
+        "action": "scan()"
+      }
+    ]
   },
   "logic": {
-    "engine": "tcp_port_scanner"
+    "lang": "javascript",
+    "tick_ms": 300,
+    "state": {
+      "targetIdx": 0,
+      "targetSSID": "Lade Ziel...",
+      "statusText": "Bereit zum Scan",
+      "statusColor": "#00ff00",
+      "running": 0,
+      "btnText": "CONNECT & SCAN",
+      "btnColor": "#00aa00"
+    },
+    "script": "function onInit() {\n  state.targetSSID = Watch.getNmapTarget(state.targetIdx);\n}\n\nfunction prev() {\n  Watch.vibrate();\n  state.targetIdx = (state.targetIdx - 1 + 3) % 3;\n  state.targetSSID = Watch.getNmapTarget(state.targetIdx);\n}\n\nfunction next() {\n  Watch.vibrate();\n  state.targetIdx = (state.targetIdx + 1) % 3;\n  state.targetSSID = Watch.getNmapTarget(state.targetIdx);\n}\n\nfunction scan() {\n  Watch.vibrate();\n  Watch.startNmap(state.targetIdx);\n  onTick();\n}\n\nfunction onTick() {\n  var act = Watch.isNmapActive();\n  state.running = act;\n  state.statusText = Watch.getNmapStatus();\n  if (act == 1) {\n    state.btnText = 'STOP SCAN';\n    state.btnColor = '#ff3333';\n    state.statusColor = '#ffea00';\n  } else {\n    state.btnText = 'CONNECT & SCAN';\n    state.btnColor = '#00aa00';\n    state.statusColor = '#00ff00';\n  }\n}"
   }
 })rawliteral";
     }
@@ -1928,34 +2771,106 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   "category": "security",
   "color": "#ff0000",
   "icon": "DA",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "WatchOS",
-  "description": "802.11 Deauthentication Frame Generator",
+  "description": "802.11 Deauthentication Frame Generator (JS)",
   "driver": "deauth",
   "ui": {
-    "title": "Deauther",
-    "target_picker": {
-      "type": "carousel",
-      "y": 45
-    },
-    "button_attack": {
-      "text": "DEAUTH ATTACKE",
-      "x": 50,
-      "y": 85,
-      "w": 140,
-      "h": 35,
-      "color": "#ff0000"
-    },
-    "button_scan": {
-      "text": "Netze Scannen",
-      "x": 60,
-      "y": 125,
-      "w": 120,
-      "h": 30
-    }
+    "title": "WiFi Deauther",
+    "elements": [
+      {
+        "type": "card",
+        "id": "target_card",
+        "text": "{targetSSID}",
+        "x": 15,
+        "y": 18,
+        "w": 210,
+        "h": 34,
+        "color": "#ffff00",
+        "bg": "#1c1410",
+        "size": 2
+      },
+      {
+        "type": "label",
+        "id": "bssid_lbl",
+        "text": "BSSID: {bssid}",
+        "x": 120,
+        "y": 60,
+        "size": 2,
+        "color": "#888888"
+      },
+      {
+        "type": "button",
+        "id": "btn_prev",
+        "text": "< Ziel",
+        "x": 15,
+        "y": 78,
+        "w": 65,
+        "h": 32,
+        "color": "#333333",
+        "text_color": "#ffffff",
+        "action": "prev()"
+      },
+      {
+        "type": "button",
+        "id": "btn_scan",
+        "text": "Netze Scannen",
+        "x": 85,
+        "y": 78,
+        "w": 70,
+        "h": 32,
+        "color": "#ff9900",
+        "text_color": "#000000",
+        "action": "scanAir()"
+      },
+      {
+        "type": "button",
+        "id": "btn_next",
+        "text": "Ziel >",
+        "x": 160,
+        "y": 78,
+        "w": 65,
+        "h": 32,
+        "color": "#333333",
+        "text_color": "#ffffff",
+        "action": "next()"
+      },
+      {
+        "type": "button",
+        "id": "btn_attack",
+        "text": "{btnText}",
+        "x": 20,
+        "y": 125,
+        "w": 200,
+        "h": 46,
+        "color": "{btnColor}",
+        "text_color": "#ffffff",
+        "action": "toggle()"
+      },
+      {
+        "type": "label",
+        "id": "hint_lbl",
+        "text": "{statusStr}",
+        "x": 120,
+        "y": 182,
+        "size": 2,
+        "color": "{statusColor}"
+      }
+    ]
   },
   "logic": {
-    "engine": "80211_deauther"
+    "lang": "javascript",
+    "tick_ms": 300,
+    "state": {
+      "targetSSID": "Kein Scan (Scan drücken)",
+      "bssid": "--:--:--",
+      "running": 0,
+      "btnText": "START DEAUTH",
+      "btnColor": "#ff0000",
+      "statusStr": "Bereit",
+      "statusColor": "#777777"
+    },
+    "script": "function scanAir() {\n  Watch.vibrate();\n  Watch.scanDeauthAir();\n  state.targetSSID = 'Scanne Umgebung...';\n  onTick();\n}\n\nfunction prev() {\n  Watch.vibrate();\n  Watch.prevDeauthTarget();\n  onTick();\n}\n\nfunction next() {\n  Watch.vibrate();\n  Watch.nextDeauthTarget();\n  onTick();\n}\n\nfunction toggle() {\n  Watch.vibrate();\n  Watch.toggleDeauth();\n  onTick();\n}\n\nfunction onTick() {\n  var act = Watch.isDeauthActive();\n  state.running = act;\n  state.targetSSID = Watch.getDeauthTargetSSID();\n  state.bssid = Watch.getDeauthTargetMAC();\n  if (act == 1) {\n    state.btnText = 'STOP ATTACKE';\n    state.btnColor = '#ff6600';\n    state.statusStr = 'ATTACKE LÄUFT';\n    state.statusColor = '#ff0000';\n  } else {\n    state.btnText = 'START DEAUTH';\n    state.btnColor = '#ff0000';\n    state.statusStr = 'Bereit';\n    state.statusColor = '#777777';\n  }\n}"
   }
 })rawliteral";
     }
@@ -1966,28 +2881,74 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   "category": "security",
   "color": "#00ffff",
   "icon": "PM",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "WatchOS",
-  "description": "Erfassen von Probe Requests mobiler Geräte",
+  "description": "Erfassen von Probe Requests mobiler Geräte (JS)",
   "driver": "probemon",
   "ui": {
     "title": "Probe Monitor",
-    "log": {
-      "type": "packet_list",
-      "y": 15,
-      "lines": 4
-    },
-    "button_toggle": {
-      "text": "Sniffer Start/Stop",
-      "x": 40,
-      "y": 145,
-      "w": 160,
-      "h": 40,
-      "color": "#00ffff"
-    }
+    "elements": [
+      {
+        "type": "card",
+        "id": "count_card",
+        "text": "{countStr}",
+        "x": 20,
+        "y": 18,
+        "w": 200,
+        "h": 36,
+        "color": "#00ffff",
+        "bg": "#0e1a22",
+        "size": 2
+      },
+      {
+        "type": "card",
+        "id": "probe_card",
+        "text": "{latestProbe}",
+        "x": 10,
+        "y": 60,
+        "w": 220,
+        "h": 60,
+        "color": "#ffff00",
+        "bg": "#121418",
+        "size": 2
+      },
+      {
+        "type": "button",
+        "id": "btn_toggle",
+        "text": "{btnText}",
+        "x": 15,
+        "y": 135,
+        "w": 135,
+        "h": 44,
+        "color": "{btnColor}",
+        "text_color": "#000000",
+        "action": "toggle()"
+      },
+      {
+        "type": "button",
+        "id": "btn_clear",
+        "text": "Leeren",
+        "x": 155,
+        "y": 135,
+        "w": 70,
+        "h": 44,
+        "color": "#333333",
+        "text_color": "#ffffff",
+        "action": "clearLog()"
+      }
+    ]
   },
   "logic": {
-    "engine": "80211_probe_sniffer"
+    "lang": "javascript",
+    "tick_ms": 300,
+    "state": {
+      "running": 0,
+      "countStr": "Gefunden: 0 Probes",
+      "latestProbe": "Warte auf Probes...",
+      "btnText": "START MONITOR",
+      "btnColor": "#00ffff"
+    },
+    "script": "function onTick() {\n  var act = Watch.isProbeMonActive();\n  state.running = act;\n  var cnt = Watch.getProbeCount();\n  state.countStr = 'Gefunden: ' + cnt + ' Probes';\n  if (cnt > 0) {\n    state.latestProbe = Watch.getLatestProbe();\n  }\n  if (act == 1) {\n    state.btnText = 'STOP MONITOR';\n    state.btnColor = '#ff9900';\n  } else {\n    state.btnText = 'START MONITOR';\n    state.btnColor = '#00ffff';\n  }\n}\n\nfunction toggle() {\n  Watch.vibrate();\n  Watch.toggleProbeMon();\n  onTick();\n}\n\nfunction clearLog() {\n  Watch.vibrate();\n  Watch.clearProbeMon();\n  state.latestProbe = 'Geleert';\n  onTick();\n}"
   }
 })rawliteral";
     }
@@ -1998,28 +2959,74 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   "category": "security",
   "color": "#ff00ff",
   "icon": "BC",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "WatchOS",
-  "description": "BLE Umgebungsscanner & Device Discovery",
+  "description": "BLE Umgebungsscanner & Device Discovery (JS)",
   "driver": "blescan",
   "ui": {
     "title": "BLE Scanner",
-    "device_list": {
-      "type": "rssi_list",
-      "y": 15,
-      "lines": 4
-    },
-    "button_toggle": {
-      "text": "Scan Start/Stop",
-      "x": 40,
-      "y": 145,
-      "w": 160,
-      "h": 40,
-      "color": "#ff00ff"
-    }
+    "elements": [
+      {
+        "type": "card",
+        "id": "count_card",
+        "text": "{countStr}",
+        "x": 20,
+        "y": 18,
+        "w": 200,
+        "h": 36,
+        "color": "#ff00ff",
+        "bg": "#1c0c1c",
+        "size": 2
+      },
+      {
+        "type": "card",
+        "id": "ble_card",
+        "text": "{latestBle}",
+        "x": 10,
+        "y": 60,
+        "w": 220,
+        "h": 60,
+        "color": "#00ff88",
+        "bg": "#121418",
+        "size": 2
+      },
+      {
+        "type": "button",
+        "id": "btn_toggle",
+        "text": "{btnText}",
+        "x": 15,
+        "y": 135,
+        "w": 135,
+        "h": 44,
+        "color": "{btnColor}",
+        "text_color": "#ffffff",
+        "action": "toggle()"
+      },
+      {
+        "type": "button",
+        "id": "btn_clear",
+        "text": "Leeren",
+        "x": 155,
+        "y": 135,
+        "w": 70,
+        "h": 44,
+        "color": "#333333",
+        "text_color": "#ffffff",
+        "action": "clearLog()"
+      }
+    ]
   },
   "logic": {
-    "engine": "ble_device_scanner"
+    "lang": "javascript",
+    "tick_ms": 300,
+    "state": {
+      "running": 0,
+      "countStr": "Gefunden: 0 BLE",
+      "latestBle": "Warte auf BLE Devices...",
+      "btnText": "START SCAN",
+      "btnColor": "#ff00ff"
+    },
+    "script": "function onTick() {\n  var act = Watch.isBleScanActive();\n  state.running = act;\n  var cnt = Watch.getBleCount();\n  state.countStr = 'Gefunden: ' + cnt + ' BLE';\n  if (cnt > 0) {\n    state.latestBle = Watch.getLatestBle();\n  }\n  if (act == 1) {\n    state.btnText = 'STOP SCAN';\n    state.btnColor = '#ff6600';\n  } else {\n    state.btnText = 'START SCAN';\n    state.btnColor = '#ff00ff';\n  }\n}\n\nfunction toggle() {\n  Watch.vibrate();\n  Watch.toggleBleScan();\n  onTick();\n}\n\nfunction clearLog() {\n  Watch.vibrate();\n  Watch.clearBleScan();\n  state.latestBle = 'Geleert';\n  onTick();\n}"
   }
 })rawliteral";
     }
@@ -2105,29 +3112,30 @@ void AppManager::init() {
     // --- Productivity Apps ---
     add("stopwatch",   "Stoppuhr",   CAT_PRODUCTIVITY, cAcc1,      "SW", "1.1.0", "Präzisions-Stoppuhr mit Rundenzeiten (JS)", [](){ return swRunning; });
     add("timer",       "Timer",      CAT_PRODUCTIVITY, cAcc2,      "TI", "1.1.0", "Countdown-Timer mit Alarmton (JS)", [](){ return timerRunning; });
-    add("mic",         "Dezibel",    CAT_PRODUCTIVITY, TFT_GREEN,  "DB", "1.0.0", "Schallpegelmesser mit I2S-Mikrofon", [](){ return micActive; });
+    add("mic",         "Dezibel",    CAT_PRODUCTIVITY, TFT_GREEN,  "DB", "1.1.0", "Schallpegelmesser mit I2S-Mikrofon (JS)", [](){ return micActive; });
     add("calc",        "Rechner",    CAT_PRODUCTIVITY, cFG,        "CA", "1.1.0", "Taschenrechner mit Touch-Bedienung (JS)", nullptr);
     add("jiggler",     "Jiggler",    CAT_PRODUCTIVITY, TFT_CYAN,   "MJ", "1.1.0", "USB HID Mouse Mover gegen Bildschirmschoner (JS)", [](){ return jigglerActive; });
     add("dice",        "Wuerfel",    CAT_PRODUCTIVITY, TFT_YELLOW, "D6", "1.1.0", "Würfel und Münzwurf (JS)", [](){ return diceRolling; });
-    add("level",       "Waage",      CAT_PRODUCTIVITY, TFT_ORANGE, "LV", "1.0.0", "2D-Wasserwaage per BMA423 Gyro/Beschleunigung", nullptr);
-    add("totp",        "2FA TOTP",   CAT_PRODUCTIVITY, 0x07FF,     "2F", "1.1.0", "Zwei-Faktor-Authenticator nach RFC 6238", nullptr);
-    add("lora",        "LoRa Funk",  CAT_PRODUCTIVITY, 0x07FF,     "RF", "2.0.0", "Off-Grid P2P Messenger & Beacon auf 868MHz", [](){ return LoraManager::isBeaconActive(); });
-    add("notif",       "Mitteilung", CAT_PRODUCTIVITY, 0x9DFF,     "NT", "1.0.0", "Push-Mitteilungszentrale vom Smartphone", nullptr);
-    add("battery",     "Akku-Info",  CAT_PRODUCTIVITY, 0x37E0,     "BA", "1.0.0", "Detaillierte Telemetrie und Ladehistorie", nullptr);
-    add("flashlight",  "Lampe",      CAT_PRODUCTIVITY, TFT_WHITE,  "FL", "1.0.0", "Helles Display-Flutlicht", nullptr);
+    add("level",       "Waage",      CAT_PRODUCTIVITY, TFT_ORANGE, "LV", "1.1.0", "2D-Wasserwaage per BMA423 Gyro/Beschleunigung (JS)", nullptr);
+    add("totp",        "2FA TOTP",   CAT_PRODUCTIVITY, 0x07FF,     "2F", "1.2.0", "Zwei-Faktor-Authenticator nach RFC 6238 (JS)", nullptr);
+    add("lora",        "LoRa Funk",  CAT_PRODUCTIVITY, 0x07FF,     "RF", "2.1.0", "Off-Grid P2P Messenger & Beacon auf 868MHz (JS)", [](){ return LoraManager::isBeaconActive(); });
+    add("notif",       "Mitteilung", CAT_PRODUCTIVITY, 0x9DFF,     "NT", "1.1.0", "Push-Mitteilungszentrale vom Smartphone (JS)", nullptr);
+    add("battery",     "Akku-Info",  CAT_PRODUCTIVITY, 0x37E0,     "BA", "1.1.0", "Detaillierte Telemetrie und Ladehistorie (JS)", nullptr);
+    add("flashlight",  "Lampe",      CAT_PRODUCTIVITY, TFT_WHITE,  "FL", "1.1.0", "Helles Display-Flutlicht mit wählbaren Modi (JS)", nullptr);
 
     // --- Security Apps ---
-    add("phishing",    "Phishing",   CAT_SECURITY, TFT_RED,     "EV", "1.0.0", "Captive Portal zur Demonstration von Phishing", [](){ return evilActive; });
-    add("badusb",      "Ducky",      CAT_SECURITY, TFT_YELLOW,  "DU", "1.2.0", "Rubber Ducky USB HID Tastatur-Emulation", [](){ return badUsbActive; });
-    add("wifispam",    "WiFi Spam",  CAT_SECURITY, TFT_RED,     "WS", "1.0.0", "Aussenden von hunderten gefälschten WiFi-Beacons", [](){ return wifiSpamActive; });
-    add("blespam",     "BLE Spam",   CAT_SECURITY, TFT_MAGENTA, "BS", "1.0.0", "BLE Advertisement Flooding & Notification Popups", [](){ return bleSpamActive; });
-    add("nmap",        "Nmap",       CAT_SECURITY, TFT_GREEN,   "NM", "1.0.0", "Multi-Port Netzwerk-Portscanner", [](){ return nmapActive; });
-    add("deauth",      "Deauth",     CAT_SECURITY, TFT_RED,     "DA", "1.0.0", "802.11 Deauthentication Frame Generator", [](){ return deauthActive; });
-    add("probemon",    "Probe Mon",  CAT_SECURITY, TFT_CYAN,    "PM", "1.0.0", "Erfassen von Probe Requests mobiler Geräte", [](){ return probeMonActive; });
-    add("blescan",     "BLE Scan",   CAT_SECURITY, TFT_MAGENTA, "BC", "1.0.0", "BLE Umgebungsscanner & Device Discovery", [](){ return bleScanActive; });
+    add("phishing",    "Phishing",   CAT_SECURITY, TFT_RED,     "EV", "1.1.0", "Captive Portal zur Demonstration von Phishing (JS)", [](){ return evilActive; });
+    add("badusb",      "Ducky",      CAT_SECURITY, TFT_YELLOW,  "DU", "1.3.0", "Rubber Ducky USB HID Tastatur-Emulation (JS)", [](){ return badUsbActive; });
+    add("wifispam",    "WiFi Spam",  CAT_SECURITY, TFT_RED,     "WS", "1.1.0", "Aussenden von hunderten gefälschten WiFi-Beacons (JS)", [](){ return wifiSpamActive; });
+    add("blespam",     "BLE Spam",   CAT_SECURITY, TFT_MAGENTA, "BS", "1.1.0", "BLE Advertisement Flooding & Notification Popups (JS)", [](){ return bleSpamActive; });
+    add("nmap",        "Nmap",       CAT_SECURITY, TFT_GREEN,   "NM", "1.1.0", "Multi-Port Netzwerk-Portscanner (JS)", [](){ return nmapActive; });
+    add("deauth",      "Deauth",     CAT_SECURITY, TFT_RED,     "DA", "1.1.0", "802.11 Deauthentication Frame Generator (JS)", [](){ return deauthActive; });
+    add("probemon",    "Probe Mon",  CAT_SECURITY, TFT_CYAN,    "PM", "1.1.0", "Erfassen von Probe Requests mobiler Geräte (JS)", [](){ return probeMonActive; });
+    add("blescan",     "BLE Scan",   CAT_SECURITY, TFT_MAGENTA, "BC", "1.1.0", "BLE Umgebungsscanner & Device Discovery (JS)", [](){ return bleScanActive; });
 
     p.end();
     loadInstalledPackages();
+    reassignDynamicPages();
 }
 
 void AppManager::loadInstalledPackages() {
@@ -2231,6 +3239,7 @@ bool AppManager::installPackageFromJson(const String &jsonStr, String &outId, St
         existing->tickIntervalMs = tickMs;
         existing->jsInitialized = false;
         setAppEnabled(id, true);
+        reassignDynamicPages();
         return true;
     }
 
@@ -2258,6 +3267,7 @@ bool AppManager::installPackageFromJson(const String &jsonStr, String &outId, St
     pkg.statusFn = nullptr;
     pkg.stopFn = nullptr;
     registry.push_back(pkg);
+    reassignDynamicPages();
 
     setAppEnabled(id, true);
     return true;

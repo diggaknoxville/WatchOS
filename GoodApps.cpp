@@ -338,7 +338,7 @@ static void bmaInit() {
     bmaOK = true;
 }
 
-static void bmaReadAccel(float &ax, float &ay, float &az) {
+void bmaReadAccel(float &ax, float &ay, float &az) {
     if (!bmaOK) bmaInit();
     uint8_t buf[6];
     Wire.beginTransmission(BMA423_ADDR);

@@ -36,3 +36,4 @@ void updateMotion(unsigned long now);
 void loadMotionPrefs();
 void saveMotionPrefs();
 void bmaInvalidate();
+void bmaReadAccel(float &ax, float &ay, float &az);

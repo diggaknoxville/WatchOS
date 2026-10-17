@@ -208,7 +208,7 @@ void loop() {
         if (powerState == 1 || powerState == 2) { renderUI(currentMillis); } else if (powerState == 3) { renderAOD(); }
         AppPackage* curP = AppManager::getAppByPage(currentPage);
         String pid = curP ? (curP->driver.length() > 0 ? curP->driver : curP->id) : "";
-        bool isFastPage = (currentPage == Pages::Opportunity || pid == "stopwatch" || pid == "mic" || pid == "level");
+        bool isFastPage = (currentPage == Pages::Opportunity || pid == "stopwatch" || pid == "mic" || pid == "level" || (curP && AppManager::hasJsScript(curP)));
         int loopDelayMs = (powerState == 3) ? 500 : (powerState == 2) ? 80 : (isFastPage ? 20 : 50);
         delay(loopDelayMs);
     } else {
