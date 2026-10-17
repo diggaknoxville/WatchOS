@@ -426,12 +426,12 @@ void initHardware() {
         pmu.setChargerTerminationCurr(XPOWERS_AXP2101_CHG_ITERM_25MA);
         pmu.enableChargerTerminationLimit();
 
-        // Power-Rails (BLDO1 ungenutzt -> aus, ALDO3 = Audio-Verstärker wird nach Boot abgeschaltet)
+        // Power-Rails (ALDO2 = Backlight, ALDO3 = ST7789 TFT Logik + Touch, ALDO4 = LoRa, BLDO2 = Haptik)
         pmu.setALDO1Voltage(3300); pmu.enableALDO1();
         pmu.setALDO2Voltage(3300); pmu.enableALDO2();
         pmu.setALDO3Voltage(3300); pmu.enableALDO3();
         pmu.setALDO4Voltage(3300); pmu.enableALDO4();
-        pmu.disableBLDO1();
+        pmu.setBLDO1Voltage(3300); pmu.enableBLDO1();
         pmu.setBLDO2Voltage(3300); pmu.enableBLDO2();
 
         pmu.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
@@ -581,7 +581,6 @@ void showBootSequence() {
     i2s_driver_install(I2S_NUM_0, &i2s_tx_config, 0, NULL); i2s_set_pin(I2S_NUM_0, &tx_pin_config); i2s_zero_dma_buffer(I2S_NUM_0);
 
     if (bootMode == 4) {
-        pmu.disableALDO3(); // Audio-Verstärker im Schnellstart direkt abschalten
         WiFi.mode(WIFI_STA); WiFi.begin(userSSID.c_str(), userPWD.c_str()); int wifiRetry = 0; while (WiFi.status() != WL_CONNECTED && wifiRetry < 16) { delay(250); wifiRetry++; }
         if (WiFi.status() == WL_CONNECTED) { syncNtpTime(6); } WiFi.disconnect(true); WiFi.mode(WIFI_OFF);
         i2s_driver_uninstall(I2S_NUM_0); i2s_config_t i2s_rx_config; memset(&i2s_rx_config, 0, sizeof(i2s_rx_config)); i2s_rx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); i2s_rx_config.sample_rate = 16000; i2s_rx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_rx_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT; i2s_rx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_rx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; i2s_rx_config.dma_desc_num = 8; i2s_rx_config.dma_frame_num = 256; i2s_rx_config.use_apll = false; i2s_pin_config_t rx_pin_config; memset(&rx_pin_config, 0, sizeof(rx_pin_config)); rx_pin_config.bck_io_num = -1; rx_pin_config.ws_io_num = I2S_WS_MIC; rx_pin_config.data_out_num = -1; rx_pin_config.data_in_num = I2S_DIN_MIC; rx_pin_config.mck_io_num = -1;
@@ -679,7 +678,6 @@ void showBootSequence() {
 
     uint16_t okCol = (bootMode == 0) ? TFT_WHITE : bFG; uint16_t errCol = (bootMode == 0) ? TFT_WHITE : bFG; uint16_t infCol = (bootMode == 0) ? TFT_WHITE : bFG; uint16_t waitCol = (bootMode == 0) ? TFT_WHITE : bFG;
     bootLog("LilyGo BIOS v2.0", "OK", okCol); bootLog("Copyright (C) 2026", "", okCol); bootLog("Michael Strassburger", "", okCol); bootLog("======================="); bootLog("CPU: ESP32-S3", String(ESP.getCpuFreqMHz()) + " MHz", infCol); bootLog("SRAM Base", String(ESP.getHeapSize() / 1024) + " KB", infCol); bootLog("OPI PSRAM", String(ESP.getPsramSize() / 1024) + " KB", infCol); bootLog("Flash ROM", String(ESP.getFlashChipSize() / 1024 / 1024) + " MB", infCol); WiFi.mode(WIFI_STA); bootLog("MAC", WiFi.macAddress(), infCol); bootLog("", ""); bootLog("--- System Init ---"); bootLog("I2C Bus", "OK", okCol); bootLog("PMU AXP2101", "OK", okCol); bootLog(" BATT Volt", String(pmu.getBattVoltage() / 1000.0) + "V", infCol); bootLog("Haptic DRV", "OK", okCol); bootLog("Touch FT6X36", "OK", okCol);
-    pmu.disableALDO3(); // Audio-Verstärker nach Boot-Sequenz abschalten (spart ~5 mA Ruhestrom)
     i2s_driver_uninstall(I2S_NUM_0); i2s_config_t i2s_rx_config; memset(&i2s_rx_config, 0, sizeof(i2s_rx_config)); i2s_rx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); i2s_rx_config.sample_rate = 16000; i2s_rx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_rx_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT; i2s_rx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_rx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; i2s_rx_config.dma_desc_num = 8; i2s_rx_config.dma_frame_num = 256; i2s_rx_config.use_apll = false; i2s_pin_config_t rx_pin_config; memset(&rx_pin_config, 0, sizeof(rx_pin_config)); rx_pin_config.bck_io_num = -1; rx_pin_config.ws_io_num = I2S_WS_MIC; rx_pin_config.data_out_num = -1; rx_pin_config.data_in_num = I2S_DIN_MIC; rx_pin_config.mck_io_num = -1;
     if(i2s_driver_install(I2S_NUM_0, &i2s_rx_config, 0, NULL) == ESP_OK) { i2s_set_pin(I2S_NUM_0, &rx_pin_config); i2s_stop(I2S_NUM_0); bootLog("Audio Mic", "OK", okCol); } else { bootLog("Audio Mic", "FAIL", errCol); }
     bootLog("EEPROM NVRAM", "OK", okCol); WiFi.begin(userSSID.c_str(), userPWD.c_str()); int wifiRetry = 0; bootLog("WLAN", "Wait", waitCol); while (WiFi.status() != WL_CONNECTED && wifiRetry < 16) { bootUpdateRight(String(wifiRetry+1), waitCol); delay(300); wifiRetry++; }

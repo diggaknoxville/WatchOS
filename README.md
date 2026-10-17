@@ -135,7 +135,6 @@ Das Webinterface (`WebManager.cpp`) bietet ein responsives **Glassmorphism Dark 
   - Deaktivierung der TS-Thermistor-Messung (`disableTSPinMeasure()`) gegen Fehlinterpretationen von Temperaturpins ohne angeschlossenen NTC.
   - Korrigierte 100%-Dekodierung in Statusleiste und 24h-Batteriegrafik.
 - **Aggressive Stromspar-Architektur:**
-  - Abschaltung ungenutzter AXP2101-Spannungsregler (`BLDO1`, Audio-Verstärker `ALDO3`) außerhalb der Audio-Nutzung.
   - SX1262 LoRa-Funkmodul geht im Watch-Sleep (`powerState >= 4`) automatisch in den Low-Power Sleep.
   - Entkopplung von WLAN-Verbindung und CPU-Takt: Die CPU taktet bei aktivem WLAN ohne rechenintensive Hacks automatisch auf 160/80 MHz herunter.
   - WiFi-Modem-Sleep (`WIFI_PS_MIN_MODEM`) aktiviert, um bis zu 70% Ruhestrom im Leerlauf zu sparen.
@@ -284,7 +283,7 @@ Der unbefugte Betrieb von Deauthern, Signal-Spammern oder Captive Portals verst�
 - **v1.3.1 (Aktueller Stand):**
   - **WatchJS Engine:** Integrierter, ressourcenschonender JavaScript-Interpreter für dynamische `.app`-Pakete mit Hardware-APIs (`Watch.*`) und In-Browser Live-Editor im Dashboard.
   - **Portierte JS-Apps:** Stoppuhr, Timer, Rechner, Mouse-Jiggler und Würfel als portable `.app`-Pakete mit nativer JS-Logik implementiert.
-  - **Akku- & Power-Optimierung:** 4,20V Ladekurvenkalibrierung (100% wieder erreichbar), TS-Pin Deaktivierung, LDO1/Audio-LDO Abschaltung, LoRa SX1262 Deep Sleep und dynamische 80/160 MHz CPU-Skalierung.
+  - **Akku- & Power-Optimierung:** 4,20V Ladekurvenkalibrierung (100% wieder erreichbar), TS-Pin Deaktivierung, LoRa SX1262 Deep Sleep und dynamische 80/160 MHz CPU-Skalierung.
   - **Zuverlässiges OTA:** Throttling der Display-Fortschrittsanzeige auf 1%-Schritte zur Vermeidung von TCP-Pufferüberläufen und automatisches `Update.abort()` bei Verbindungsabbruch.
   - **AppManager:** Dynamisches Paket-System für modulare Apps und Dashboard-Paketverwaltung.
   - **2FA TOTP Authenticator:** Lokaler Token-Generator nach RFC 6238.
