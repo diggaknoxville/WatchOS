@@ -627,7 +627,20 @@ void checkBackgroundTasks(unsigned long currentMillis) {
     if (isCharging && !wlanActive && !evilActive) {
         startHotspotAP();
     }
-    if (timerRunning && (currentMillis - timerLastTick >= 1000)) { timerRemaining--; timerLastTick = currentMillis; if (timerRemaining <= 0) { timerRunning = false; timerRemaining = 0; triggerAlarm(); lastSecond = -1; lastTouchTime = currentMillis; showToastColor("Timer abgelaufen! ⏱️", 6000, 0xFD20); } }
+    AppPackage* tmApp = AppManager::getAppById("timer");
+    bool timerIsJs = (tmApp && AppManager::hasJsScript(tmApp));
+    if (!timerIsJs && timerRunning && (currentMillis - timerLastTick >= 1000)) {
+        timerRemaining--;
+        timerLastTick = currentMillis;
+        if (timerRemaining <= 0) {
+            timerRunning = false;
+            timerRemaining = 0;
+            triggerAlarm();
+            lastSecond = -1;
+            lastTouchTime = currentMillis;
+            showToastColor("Timer abgelaufen! ⏱️", 6000, 0xFD20);
+        }
+    }
 
     static unsigned long lastJiggle = 0; 
     if (jigglerActive && currentMillis - lastJiggle > 15000) { Mouse.move(2, 2); Mouse.move(-2, -2); lastJiggle = currentMillis; }
@@ -1114,13 +1127,17 @@ static void handleAppTouch(AppPackage* app, int lastX, int touchY) {
         bool isQSApp   = (curApp && (curApp->id == "battery" || curApp->id == "flashlight"));
         
         // --- Swipe UP to kill (in App-Pages) ---
-        if (dy < -60 && abs(dy) > abs(dx) && isApp) {
+        if (dy < -35 && abs(dy) > abs(dx) && isApp) {
             // Trash-Icon Animation direkt auf TFT
             tft.fillRect(80, 0, 80, 40, TFT_RED);
             tft.setTextDatum(MC_DATUM); tft.setTextColor(TFT_WHITE, TFT_RED);
             tft.drawString("KILL", 120, 20, 2);
-            // Kurz anzeigen
-            delay(250);
+            delay(200);
+            if (curApp) {
+                if (curApp->id == "mic" || curApp->driver == "mic") stopMic();
+                if (curApp->id == "flashlight" || curApp->driver == "flashlight") setBrightness(maxBright);
+                AppManager::stopJsApp(curApp);
+            }
             killAllApps(); triggerVibration();
             // Rücksprung
             if (isQSApp) slideToPage(5, 0, 1);
@@ -1129,53 +1146,67 @@ static void handleAppTouch(AppPackage* app, int lastX, int touchY) {
             else slideToPage(6, 0, 1);
             lastTouchTime = millis(); return;
         }
-        // --- Swipe back: Good Apps -> Good Menu, Bad Apps -> Bad Menu ---
-        // Good: Finger rechts ansetzen, nach links wischen (dx < 0) → zurück zum Good Menu
-        // Bad: Finger links ansetzen, nach rechts wischen (dx > 0) → zurück zum Bad Menu
-        else if (abs(dx) > 40 && abs(dx) > abs(dy) && isApp) {
-            if (isGoodApp && dx < 0) { triggerVibration(); slideToPage(22, -1, 0); lastTouchTime = millis(); return; }
-            if (isBadApp && dx > 0) { triggerVibration(); slideToPage(23, 1, 0); lastTouchTime = millis(); return; }
-            if (isQSApp) { triggerVibration(); slideToPage(5, (dx > 0) ? 1 : -1, 0); lastTouchTime = millis(); return; }
-            // Productivity Menu (22) -> Paging oder Uebersicht (6)
-            if (currentPage == 22) {
-                int totalG = AppManager::getAppCount(CAT_PRODUCTIVITY, true);
-                int maxP = (totalG > 0) ? ((totalG - 1) / 8) : 0;
-                if (dx < -40) {
-                    if (AppManager::prodMenuPage < maxP) {
-                        AppManager::prodMenuPage++;
-                        triggerVibration(); lastSecond = -1; lastTouchTime = millis(); return;
-                    } else {
-                        triggerVibration(); slideToPage(6, -1, 0); lastTouchTime = millis(); return;
-                    }
-                } else if (dx > 40 && AppManager::prodMenuPage > 0) {
-                    AppManager::prodMenuPage--;
+        // --- Swipe Horizontal in Apps (Zurück zum Menü in BEIDE Richtungen: links oder rechts) ---
+        else if (abs(dx) > 35 && abs(dx) > abs(dy) && isApp) {
+            triggerVibration();
+            if (curApp && (curApp->id == "mic" || curApp->driver == "mic")) stopMic();
+            if (curApp && (curApp->id == "flashlight" || curApp->driver == "flashlight")) setBrightness(maxBright);
+            if (isGoodApp) slideToPage(22, (dx > 0) ? 1 : -1, 0);
+            else if (isBadApp) slideToPage(23, (dx > 0) ? 1 : -1, 0);
+            else if (isQSApp) slideToPage(5, (dx > 0) ? 1 : -1, 0);
+            else slideToPage(6, (dx > 0) ? 1 : -1, 0);
+            lastTouchTime = millis(); return;
+        }
+        // --- Swipe DOWN in Apps (Zurück zum Menü) ---
+        else if (dy > 35 && abs(dy) > abs(dx) && isApp) {
+            triggerVibration();
+            if (curApp && (curApp->id == "mic" || curApp->driver == "mic")) stopMic();
+            if (curApp && (curApp->id == "flashlight" || curApp->driver == "flashlight")) setBrightness(maxBright);
+            if (isQSApp) slideToPage(5, 0, 1);
+            else if (isGoodApp) slideToPage(22, 0, 1);
+            else if (isBadApp) slideToPage(23, 0, 1);
+            else slideToPage(6, 0, 1);
+            lastTouchTime = millis(); return;
+        }
+        // Productivity Menu (22) -> Paging oder Uebersicht (6)
+        else if (currentPage == 22 && abs(dx) > 35 && abs(dx) > abs(dy)) {
+            int totalG = AppManager::getAppCount(CAT_PRODUCTIVITY, true);
+            int maxP = (totalG > 0) ? ((totalG - 1) / 8) : 0;
+            if (dx < -35) {
+                if (AppManager::prodMenuPage < maxP) {
+                    AppManager::prodMenuPage++;
                     triggerVibration(); lastSecond = -1; lastTouchTime = millis(); return;
+                } else {
+                    triggerVibration(); slideToPage(6, -1, 0); lastTouchTime = millis(); return;
                 }
+            } else if (dx > 35 && AppManager::prodMenuPage > 0) {
+                AppManager::prodMenuPage--;
+                triggerVibration(); lastSecond = -1; lastTouchTime = millis(); return;
             }
-            // Security Menu (23) -> Paging oder Uebersicht (6)
-            if (currentPage == 23) {
-                int totalB = AppManager::getAppCount(CAT_SECURITY, true);
-                int maxP = (totalB > 0) ? ((totalB - 1) / 8) : 0;
-                if (dx > 40) {
-                    if (AppManager::secMenuPage < maxP) {
-                        AppManager::secMenuPage++;
-                        triggerVibration(); lastSecond = -1; lastTouchTime = millis(); return;
-                    } else {
-                        triggerVibration(); slideToPage(6, 1, 0); lastTouchTime = millis(); return;
-                    }
-                } else if (dx < -40 && AppManager::secMenuPage > 0) {
-                    AppManager::secMenuPage--;
+        }
+        // Security Menu (23) -> Paging oder Uebersicht (6)
+        else if (currentPage == 23 && abs(dx) > 35 && abs(dx) > abs(dy)) {
+            int totalB = AppManager::getAppCount(CAT_SECURITY, true);
+            int maxP = (totalB > 0) ? ((totalB - 1) / 8) : 0;
+            if (dx > 35) {
+                if (AppManager::secMenuPage < maxP) {
+                    AppManager::secMenuPage++;
                     triggerVibration(); lastSecond = -1; lastTouchTime = millis(); return;
+                } else {
+                    triggerVibration(); slideToPage(6, 1, 0); lastTouchTime = millis(); return;
                 }
+            } else if (dx < -35 && AppManager::secMenuPage > 0) {
+                AppManager::secMenuPage--;
+                triggerVibration(); lastSecond = -1; lastTouchTime = millis(); return;
             }
         }
         // --- Swipe UP to kill from Menu Pages 22/23 ---
-        else if (dy < -60 && abs(dy) > abs(dx) && (currentPage == 22 || currentPage == 23)) {
+        else if (dy < -40 && abs(dy) > abs(dx) && (currentPage == 22 || currentPage == 23)) {
             killAllApps(); triggerVibration();
             tft.fillRect(80, 0, 80, 40, TFT_RED);
             tft.setTextDatum(MC_DATUM); tft.setTextColor(TFT_WHITE, TFT_RED);
             tft.drawString("KILL", 120, 20, 2);
-            delay(250);
+            delay(200);
             slideToPage(6, 0, 1);
             lastTouchTime = millis(); return;
         }
@@ -1196,7 +1227,7 @@ static void handleAppTouch(AppPackage* app, int lastX, int touchY) {
             Serial.printf("[TOUCH] Swipe UP page=%d -> ziel: %s\n", currentPage, (currentPage >= 0 && currentPage <= 3) ? "6" : (currentPage == 5) ? "main" : "?");
             if (currentPage >= 0 && currentPage <= 3) { triggerVibration(); slideToPage(6, 0, -1); } else if (currentPage == 5) { triggerVibration(); slideToPage(mainPage, 0, -1); } 
         }
-        else if (abs(dx) < 25 && abs(dy) < 25) { 
+        else if (abs(dx) <= 35 && abs(dy) <= 35) { 
             int touchY = lastY - 34; 
             if (currentPage == 0) {
                 triggerVibration();
@@ -1324,6 +1355,17 @@ static void handleAppTouch(AppPackage* app, int lastX, int touchY) {
             else if (currentPage == 23) { handleBadMenuTouch(lastX, touchY); }
             // === Dynamische App-Page Taps (nur bei echtem Tap, nicht bei Swipe) ===
             else if (curApp) {
+                if (touchY <= 0) {
+                    // Oberer Header angetippt: Zurück zum Menü
+                    triggerVibration();
+                    if (curApp->id == "mic" || curApp->driver == "mic") stopMic();
+                    if (curApp->id == "flashlight" || curApp->driver == "flashlight") setBrightness(maxBright);
+                    if (isGoodApp) slideToPage(22, -1, 0);
+                    else if (isBadApp) slideToPage(23, 1, 0);
+                    else if (isQSApp) slideToPage(5, -1, 0);
+                    else slideToPage(6, -1, 0);
+                    return;
+                }
                 handleAppTouch(curApp, lastX, touchY);
             }
             lastTouchTime = millis();

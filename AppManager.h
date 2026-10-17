@@ -81,6 +81,7 @@ public:
     static void tickDynamicApp(AppPackage *app, unsigned long now);
     static void tickBackgroundApps(unsigned long now);
     static void stopAllJsApps();
+    static void stopJsApp(AppPackage *app);
     static void renderDynamicApp(AppPackage *app, TFT_eSprite *spr);
     static void handleDynamicAppTouch(AppPackage *app, int x, int touchY);
 

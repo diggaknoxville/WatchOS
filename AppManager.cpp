@@ -302,6 +302,11 @@ static void syncSystemGlobalsFromState(AppPackage *app) {
         swRunning = isRun;
     } else if (app->id == "timer" || app->driver == "timer") {
         timerRunning = isRun;
+        if (st.count("remainingSec")) {
+            timerRemaining = (long)st["remainingSec"].asNum();
+        } else if (!isRun) {
+            timerRemaining = 0;
+        }
     } else if (app->id == "jiggler" || app->driver == "jiggler") {
         jigglerActive = isRun;
     } else if (app->id == "phishing" || app->driver == "phishing") {
@@ -1252,20 +1257,26 @@ void AppManager::tickBackgroundApps(unsigned long now) {
     }
 }
 
+void AppManager::stopJsApp(AppPackage *pkg) {
+    if (!pkg) return;
+    if (appStates.count(pkg->id)) {
+        auto &st = appStates[pkg->id];
+        if (pkg->jsScript.indexOf("function reset") != -1) {
+            runJsAction(pkg, "reset()");
+        } else if (pkg->jsScript.indexOf("function cancel") != -1) {
+            runJsAction(pkg, "cancel()");
+        } else if (pkg->jsScript.indexOf("function stop") != -1) {
+            runJsAction(pkg, "stop()");
+        }
+        st["running"] = JsVal(0);
+        st["isIdle"] = JsVal(1);
+        syncSystemGlobalsFromState(pkg);
+    }
+}
+
 void AppManager::stopAllJsApps() {
     for (auto &pkg : registry) {
-        if (appStates.count(pkg.id) && appStates[pkg.id].count("running")) {
-            if (appStates[pkg.id]["running"].asBool()) {
-                if (pkg.jsScript.indexOf("function reset") != -1) {
-                    runJsAction(&pkg, "reset()");
-                } else if (pkg.jsScript.indexOf("function cancel") != -1) {
-                    runJsAction(&pkg, "cancel()");
-                } else {
-                    appStates[pkg.id]["running"] = JsVal(0);
-                    syncSystemGlobalsFromState(&pkg);
-                }
-            }
-        }
+        stopJsApp(&pkg);
     }
 }
 
@@ -1466,14 +1477,27 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
         "type": "button",
         "id": "cancel",
         "text": "Abbruch",
-        "x": 75,
-        "y": 150,
-        "w": 90,
+        "x": 20,
+        "y": 145,
+        "w": 95,
         "h": 40,
-        "color": "#ff0000",
+        "color": "#ff3333",
         "text_color": "#ffffff",
         "visible": "{running}",
         "action": "cancel()"
+      },
+      {
+        "type": "button",
+        "id": "btn_reset",
+        "text": "Neustart",
+        "x": 125,
+        "y": 145,
+        "w": 95,
+        "h": 40,
+        "color": "#ff9900",
+        "text_color": "#000000",
+        "visible": "{running}",
+        "action": "reset()"
       }
     ]
   },
@@ -1487,7 +1511,7 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
       "remainingSec": 0,
       "timeStr": "00:00"
     },
-    "script": "function start(mins) {\n  Watch.vibrate();\n  state.remainingSec = mins * 60;\n  state.endTime = Watch.millis() + (mins * 60000);\n  state.running = 1;\n  state.isIdle = 0;\n  state.timeStr = Watch.formatTimeSec(state.remainingSec);\n}\n\nfunction onTick() {\n  if (state.running == 1) {\n    var leftMs = state.endTime - Watch.millis();\n    if (leftMs <= 0) {\n      state.running = 0;\n      state.isIdle = 1;\n      state.remainingSec = 0;\n      state.timeStr = '00:00';\n      Watch.alarm();\n      Watch.toast('Timer abgelaufen!');\n    } else {\n      state.remainingSec = Math.ceil(leftMs / 1000);\n      state.timeStr = Watch.formatTimeSec(state.remainingSec);\n    }\n  }\n}\n\nfunction cancel() {\n  Watch.vibrate();\n  state.running = 0;\n  state.isIdle = 1;\n  state.remainingSec = 0;\n  state.timeStr = '00:00';\n}"
+    "script": "function start(mins) {\n  Watch.vibrate();\n  state.remainingSec = mins * 60;\n  state.endTime = Watch.millis() + (mins * 60000);\n  state.running = 1;\n  state.isIdle = 0;\n  state.timeStr = Watch.formatTimeSec(state.remainingSec);\n}\n\nfunction onTick() {\n  if (state.running == 1) {\n    var leftMs = state.endTime - Watch.millis();\n    if (leftMs <= 0) {\n      state.running = 0;\n      state.isIdle = 1;\n      state.remainingSec = 0;\n      state.endTime = 0;\n      state.timeStr = '00:00';\n      Watch.alarm();\n      Watch.toast('Timer abgelaufen!');\n    } else {\n      state.remainingSec = Math.ceil(leftMs / 1000);\n      state.timeStr = Watch.formatTimeSec(state.remainingSec);\n    }\n  }\n}\n\nfunction cancel() {\n  Watch.vibrate();\n  state.running = 0;\n  state.isIdle = 1;\n  state.remainingSec = 0;\n  state.endTime = 0;\n  state.timeStr = '00:00';\n}\n\nfunction reset() {\n  cancel();\n}"
   }
 })rawliteral";
     }
