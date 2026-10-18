@@ -12,7 +12,7 @@
 #include "Logic.h"
 #include "HardwareConfig.h" 
 #include "UpdateOTA.h" 
-#include "BadApps.h"
+#include "PortalServer.h"
 #include "TotpAuth.h"
 #include "NotificationManager.h"
 #include "SystemEvents.h"
@@ -151,7 +151,20 @@ static BattEtaResult computeBatteryEta(bool chargingNow, bool hackingNow, int cu
     return r;
 }
 
+static bool checkAdminAccess() {
+    if (evilActive) {
+        server.send(404, "text/plain", "Not Found");
+        return false;
+    }
+    if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) {
+        server.requestAuthentication();
+        return false;
+    }
+    return true;
+}
+
 void handleApiStatus() {
+    if (!checkAdminAccess()) return;
     time_t jetzt; time(&jetzt); struct tm *aktuell = localtime(&jetzt);
     float dailyNet = (netSalary * 12.0) / 365.0; float fraction = (millis() % 1000) / 1000.0;
     long secToday = aktuell->tm_hour * 3600 + aktuell->tm_min * 60 + aktuell->tm_sec;
@@ -178,8 +191,8 @@ void handleApiStatus() {
     String currentSSID = ""; String currentIP = "";
     if (wlanActive) { if (wlanClientMode) { currentSSID = userSSID; currentIP = wlanIP; } else { currentSSID = apSSID; currentIP = "192.168.4.1"; } } 
     else if (nmapActive) { currentSSID = targetSSIDs[currentTargetNmap]; currentIP = WiFi.localIP().toString(); } 
-    else if (evilActive) { currentSSID = evilSSID; currentIP = "192.168.4.1"; } 
-    else if (deauthActive || wifiSpamActive) { currentSSID = "Hacking..."; currentIP = "RAW TX"; }
+    else if (portalActive) { currentSSID = portalSSID; currentIP = "192.168.4.1"; } 
+    else if (deauthActive || wifiSpamActive) { currentSSID = "Security Audit..."; currentIP = "RAW TX"; }
     
     // RSSI zu Prozent Umrechnung (-100dBm = 0%, -50dBm = 100%)
     int rssi = cachedRssi;
@@ -197,11 +210,16 @@ void handleApiStatus() {
     if (eta.etaMin >= 0) etaMode = isCharging ? "charge" : "discharge";
 
     static unsigned long lastStorageSampleMs = 0;
-    static int cachedFlashFreeKB = 0, cachedFlashTotKB = 0, cachedNvsFree = 0, cachedNvsTot = 0;
+    static int cachedFfatFreeKB = 0, cachedFfatTotKB = 0;
+    static int cachedFlashChipKB = 0, cachedTotalFreeKB = 0;
+    static int cachedNvsFree = 0, cachedNvsTot = 0;
     if (lastStorageSampleMs == 0 || (nowMs - lastStorageSampleMs) > 5000) {
         lastStorageSampleMs = nowMs;
-        cachedFlashTotKB = littleFsReady ? (int)(FFat.totalBytes() / 1024) : 0;
-        cachedFlashFreeKB = littleFsReady ? (int)((FFat.totalBytes() - FFat.usedBytes()) / 1024) : 0;
+        cachedFlashChipKB = (int)(ESP.getFlashChipSize() / 1024);
+        uint32_t fwFreeBytes = ESP.getFreeSketchSpace();
+        cachedFfatTotKB = littleFsReady ? (int)(FFat.totalBytes() / 1024) : 0;
+        cachedFfatFreeKB = littleFsReady ? (int)((FFat.totalBytes() - FFat.usedBytes()) / 1024) : 0;
+        cachedTotalFreeKB = (int)((fwFreeBytes / 1024) + cachedFfatFreeKB);
         nvs_stats_t nvsStats;
         if (nvs_get_stats(NULL, &nvsStats) == ESP_OK) { cachedNvsFree = nvsStats.free_entries; cachedNvsTot = nvsStats.total_entries; }
     }
@@ -212,14 +230,14 @@ void handleApiStatus() {
     String macAddr = getHardwareMacAddress();
 
     char json[1800];
-    snprintf(json, sizeof(json), "{\"akku\":%d,\"volt\":\"%.2f\",\"cpu\":\"%.1f\",\"ram_free\":%d,\"ram_tot\":%d,\"geld\":\"%.4f\",\"geld_work\":\"%.4f\",\"geld_month\":\"%.4f\",\"geld_year\":\"%.4f\",\"wifi\":%s,\"wifi_mode\":\"%s\",\"clients\":%d,\"channel\":%d,\"mac\":\"%s\",\"charging\":%s,\"bt\":%s,\"ssid\":\"%s\",\"ip\":\"%s\",\"cpufreq\":%d,\"uptime\":%lu,\"rssi\":%d,\"rssi_pct\":%d,\"eta_min\":%d,\"eta_mode\":\"%s\",\"eta_conf\":%d,\"steps\":%ld,\"step_goal\":%d,\"flash_free_kb\":%d,\"flash_tot_kb\":%d,\"nvs_free\":%d,\"nvs_tot\":%d,\"wf_mode\":%d,\"phone_mac\":\"%s\",\"phone_name\":\"%s\",\"phone_connected\":%s}",
+    snprintf(json, sizeof(json), "{\"akku\":%d,\"volt\":\"%.2f\",\"cpu\":\"%.1f\",\"ram_free\":%d,\"ram_tot\":%d,\"geld\":\"%.4f\",\"geld_work\":\"%.4f\",\"geld_month\":\"%.4f\",\"geld_year\":\"%.4f\",\"wifi\":%s,\"wifi_mode\":\"%s\",\"clients\":%d,\"channel\":%d,\"mac\":\"%s\",\"charging\":%s,\"bt\":%s,\"ssid\":\"%s\",\"ip\":\"%s\",\"cpufreq\":%d,\"uptime\":%lu,\"rssi\":%d,\"rssi_pct\":%d,\"eta_min\":%d,\"eta_mode\":\"%s\",\"eta_conf\":%d,\"steps\":%ld,\"step_goal\":%d,\"flash_free_kb\":%d,\"flash_tot_kb\":%d,\"total_free_kb\":%d,\"flash_chip_kb\":%d,\"ffat_free_kb\":%d,\"ffat_tot_kb\":%d,\"nvs_free\":%d,\"nvs_tot\":%d,\"wf_mode\":%d,\"phone_mac\":\"%s\",\"phone_name\":\"%s\",\"phone_connected\":%s}",
              battPct, getBatteryVoltageCached(false), cachedCpuTemp,
              (int)(ESP.getFreeHeap() / 1024), (int)(ESP.getHeapSize() / 1024), earnedToday, earnedTodayWork, earnedMonth, earnedYear,
              (WiFi.status() == WL_CONNECTED || wlanActive || evilActive || wifiSpamActive || deauthActive || nmapActive) ? "true" : "false",
              isApMode ? "ap" : "sta", apClients, apChan, macAddr.c_str(),
              isCharging ? "true" : "false", btActive ? "true" : "false", jsonEscape(currentSSID).c_str(), jsonEscape(currentIP).c_str(),
              ESP.getCpuFreqMHz(), millis() / 1000, rssi, rssi_pct, eta.etaMin, etaMode, eta.confidencePct, stepCount, stepGoal,
-             cachedFlashFreeKB, cachedFlashTotKB, cachedNvsFree, cachedNvsTot,
+             cachedTotalFreeKB, cachedFlashChipKB, cachedTotalFreeKB, cachedFlashChipKB, cachedFfatFreeKB, cachedFfatTotKB, cachedNvsFree, cachedNvsTot,
              watchfaceMode, jsonEscape(phoneMac).c_str(), jsonEscape(phoneName).c_str(), phoneConnected ? "true" : "false");
     server.send(200, "application/json", json);
 }
@@ -1424,8 +1442,6 @@ body.high-contrast button {
     return s;
 }
 
-String htmlEscape(String str) { str.replace("&", "&amp;"); str.replace("<", "&lt;"); str.replace(">", "&gt;"); str.replace("\"", "&quot;"); return str; }
-
 // Berechnet, an welchem Kalenderdatum "andere" Person (Elternteil oder Kind) genau so alt war/sein wird
 // wie man selbst gerade ist - und wie alt man dabei damals/dann ist. Gemeinsame Formel fuer
 // Mama/Papa (Vergangenheit) und Kinder (i.d.R. Zukunft), da beide nach demselben Prinzip funktionieren.
@@ -1517,14 +1533,21 @@ input:focus,select:focus,textarea:focus{outline:2px solid var(--accent-2);outlin
 input[type='color']{padding:0;height:40px;cursor:pointer;}
 input[type='checkbox']{width:auto;accent-color:var(--accent);}
 input[type='range']{width:100%; cursor:pointer;accent-color:var(--accent);}
-.btn{background:var(--accent);color:#1a1406;font-weight:650;border:none;cursor:pointer;padding:12px;border-radius:var(--r-sm);width:100%;margin-bottom:10px;min-height:44px; transition: filter 0.15s, transform 0.08s;}
-.btn:hover{filter:brightness(1.08);}
-.btn:active{transform:translateY(1px);}
-.btn-blue{background:var(--charge);color:#fff;} .btn-red{background:var(--crit);color:#fff;} .btn-gray{background:#4b5563;color:#fff;}
+.btn{background:var(--accent);color:#12161c;font-weight:600;border:1px solid transparent;cursor:pointer;padding:11px 16px;border-radius:var(--r-sm);width:100%;margin-bottom:10px;min-height:42px;font-size:14px;letter-spacing:0.2px;transition:filter .15s,transform .08s,box-shadow .15s;}
+.btn:hover{filter:brightness(1.08);box-shadow:0 2px 8px rgba(0,0,0,0.3);}
+.btn:active{transform:scale(0.99);}
+.btn-blue{background:var(--charge);color:#0a1017;}
+.btn-red{background:var(--crit);color:#fff;}
+.btn-gray{background:var(--surface-2);color:var(--text);border:1px solid var(--border-strong);}
+.btn-gray:hover{border-color:var(--accent);}
+.form-card{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r-sm);padding:14px;margin-bottom:14px;transition:border-color .2s;}
+.form-card:hover{border-color:var(--border-strong);}
+.form-card h4{margin:0 0 10px 0;color:var(--accent);font-size:13px;text-transform:uppercase;letter-spacing:0.5px;}
+hr{border:none;border-top:1px solid var(--border);margin:18px 0;}
 .toast{visibility:hidden;min-width:250px;background-color:var(--good);color:#fff;text-align:center;border-radius:8px;padding:16px;position:fixed;z-index:1;left:50%;bottom:30px;transform:translateX(-50%);box-shadow:var(--shadow);}
 .toast.show{visibility:visible;animation:fadein 0.5s, fadeout 0.5s 2.5s;}
 @keyframes fadein{from{bottom:0;opacity:0;}to{bottom:30px;opacity:1;}} @keyframes fadeout{from{bottom:30px;opacity:1;}to{bottom:0;opacity:0;}}
-h3{margin-top:0;} .cb-lbl{display:flex; align-items:center; gap:10px; margin-bottom:10px; font-size:16px;}
+h3{margin-top:0;letter-spacing:.3px;} .cb-lbl{display:flex; align-items:center; gap:10px; margin-bottom:10px; font-size:15px;}
 .box{background:var(--surface-2); padding:12px; border-radius:var(--r-sm); font-size:14px; line-height:1.6; border:1px solid var(--border); transition: background 0.3s, border-color 0.3s;}
 .box-title{color:var(--accent); margin:0 0 8px 0; border-bottom:1px solid var(--border); padding-bottom:5px; font-weight:600;}
 
@@ -1738,7 +1761,7 @@ const I18N = {
     current: { de:'Aktuell', en:'Current', fr:'Actuelle' },
     unknown: { de:'unbekannt', en:'unknown', fr:'inconnue' },
     notAvailable: { de:'nicht verfuegbar', en:'not available', fr:'indisponible' },
-    stopBadAppsOk: { de:'Security Apps gestoppt.', en:'Security apps stopped.', fr:'Apps securite arretees.' },
+    stopBadAppsOk: { de:'Security-Aufgaben gestoppt.', en:'Security tasks stopped.', fr:'Taches de securite arretees.' },
     stopBadAppsFail: { de:'Stop fehlgeschlagen', en:'Stop failed', fr:'Echec de l\'arret' },
     scanWifiBusy: { de:'Scanne... (kann dauern)', en:'Scanning... (may take a while)', fr:'Scan en cours... (cela peut prendre du temps)' },
     scanWifiIdle: { de:'WLANs scannen', en:'Scan WiFis', fr:'Scanner les WiFis' },
@@ -2171,42 +2194,165 @@ function connectWebBle(){
         }
     });
 }
-var curWfMode = 0;
-var wfNames = ["Ultra Rings", "Classic Chrono", "Retro Casio", "3D Lebensuhr"];
-function updateWfUI(mode){
-    curWfMode = mode;
-    var bName = document.getElementById('activeWfName');
-    if (bName) bName.textContent = wfNames[mode] || ("Modus " + mode);
-    var p2Name = document.getElementById('p2WfName');
-    if (p2Name) p2Name.textContent = wfNames[mode] || ("Modus " + mode);
-    for (var i = 0; i < 4; i++) {
-        var c = document.getElementById('wfCard' + i);
-        var b = document.getElementById('wfBadge' + i);
-        var btn = document.getElementById('wfBtn' + i);
-        if (!c) continue;
-        if (i === mode) {
-            c.style.borderColor = 'var(--accent)';
-            c.style.background = 'rgba(59,130,246,0.12)';
-            if (b) { b.textContent = 'AKTIV'; b.style.background = 'var(--accent)'; b.style.color = '#fff'; }
-            if (btn) { btn.textContent = 'Aktiv ✓'; btn.style.background = 'var(--accent)'; btn.style.color = '#fff'; }
-        } else {
-            c.style.borderColor = 'var(--border)';
-            c.style.background = 'var(--surface-2)';
-            if (b) { b.textContent = 'Bereit'; b.style.background = 'var(--surface)'; b.style.color = 'var(--muted)'; }
-            if (btn) { btn.textContent = 'Aktivieren'; btn.style.background = 'var(--surface-2)'; btn.style.color = 'var(--text)'; }
+var carOrder = [0, 1, 2, 7, 8, 9];
+var carStart = 0;
+var wfCatalog = [
+    {id: 0, name: "Ultra Rings", icon: "⚡", desc: "Cyberpunk Aktivitätsringe & Glowing Complications"},
+    {id: 1, name: "Classic Chrono", icon: "⏱️", desc: "Schweizer Bi-Compax Chronograph mit 3 Hilfszifferblättern"},
+    {id: 2, name: "Retro Casio", icon: "📟", desc: "Kultiges 80er Olive LCD mit Wochentagsmatrix & Odometer"},
+    {id: 3, name: "3D Lebensuhr", icon: "⏳", desc: "Restlebenszeit-Countdown mit 3D Glass Cards & Säule"},
+    {id: 4, name: "Bauhaus Minimalist", icon: "📐", desc: "Schlichte Bauhaus-Ästhetik, puristische Ziffern & rote Zentralsekunde"},
+    {id: 5, name: "Cyberpunk Terminal HUD", icon: "💻", desc: "High-Tech Matrix HUD mit Live CPU/RAM/Akku-Telemetrie"},
+    {id: 6, name: "Deutsche Wortuhr", icon: "🔤", desc: "Typografische Textmatrix ('ES IST HALB ZEHN') mit 4 Minutenpunkten"},
+    {id: 7, name: "Opportunität & Finanzen", icon: "💶", desc: "Echtzeit-Verdienstticker (EUR) & echter Stundenlohn"},
+    {id: 8, name: "Kinder-Zeitleiste", icon: "👶", desc: "Chronologische Altersanzeige für Kinder (Jahre, Monate, Wochen, Tage)"},
+    {id: 9, name: "Generationen & Eltern", icon: "👨‍👩‍👧", desc: "Altersvergleich & Projektionsrechner (Tippen zum Umschalten)"}
+];
+
+function loadCarouselData(){
+    fetch('/api/carousel').then(r=>r.json()).then(d=>{
+        if(d.order) {
+            carOrder = d.order.split(',').map(Number).filter(n => !isNaN(n) && n>=0 && n<10);
         }
-    }
+        if(d.activeIdx !== undefined) carStart = d.activeIdx;
+        renderCarouselUI();
+    }).catch(function(e){ console.log('loadCarousel error', e); });
 }
-function selectWatchface(mode){
-    updateWfUI(mode);
-    fetch('/api/watchface', {
+
+function renderCarouselUI(){
+    var activeFaceId = (carOrder.length > carStart && carStart >= 0) ? carOrder[carStart] : (carOrder[0] || 0);
+    var actObj = wfCatalog.find(f => f.id === activeFaceId) || wfCatalog[0];
+    var hb = document.getElementById('homeWfName');
+    if (hb) hb.textContent = actObj.icon + " " + actObj.name;
+    var p2Badge = document.getElementById('p2WfName');
+    if (p2Badge) p2Badge.textContent = actObj.icon + " " + actObj.name;
+
+    var list = document.getElementById('carouselList');
+    if (!list) return;
+    var html = '';
+
+    for (var i = 0; i < carOrder.length; i++) {
+        var fid = carOrder[i];
+        var item = wfCatalog.find(f => f.id === fid);
+        if (!item) continue;
+        var isStart = (i === carStart);
+        html += '<div class="car-item" style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--surface-2);border:2px solid ' + (isStart ? 'var(--accent)' : 'var(--border)') + ';border-radius:10px;padding:10px 14px;margin-bottom:8px;">';
+        html += '  <div style="display:flex;align-items:center;gap:12px;min-width:180px;">';
+        html += '    <span style="font-size:22px;">' + item.icon + '</span>';
+        html += '    <div>';
+        html += '      <div style="font-weight:700;font-size:14px;color:var(--text);">' + item.name + (isStart ? ' <span class="badge" style="font-size:10px;background:var(--accent);color:#fff;padding:2px 6px;border-radius:4px;">START</span>' : '') + '</div>';
+        html += '      <div class="hint" style="font-size:11px;margin-top:2px;">' + item.desc + '</div>';
+        html += '    </div>';
+        html += '  </div>';
+        html += '  <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">';
+        html += '    <span class="pill" style="font-size:11px;font-weight:600;background:rgba(59,130,246,0.1);color:var(--accent);border:1px solid var(--accent);">Pos #' + (i + 1) + '</span>';
+        html += '    <button type="button" class="btn" style="padding:4px 8px;font-size:12px;" onclick="moveCarousel(' + i + ',-1)"' + (i === 0 ? ' disabled' : '') + '>▲</button>';
+        html += '    <button type="button" class="btn" style="padding:4px 8px;font-size:12px;" onclick="moveCarousel(' + i + ',1)"' + (i === carOrder.length - 1 ? ' disabled' : '') + '>▼</button>';
+        html += '    <button type="button" class="btn" style="padding:4px 10px;font-size:12px;' + (isStart ? 'background:var(--accent);color:#fff;' : '') + '" onclick="setCarouselStart(' + i + ')">' + (isStart ? 'Standard ✓' : 'Als Start') + '</button>';
+        html += '    <button type="button" class="btn" style="padding:4px 8px;font-size:12px;color:var(--warn);" onclick="toggleCarouselFace(' + item.id + ')">✕ Entfernen</button>';
+        html += '  </div>';
+        html += '</div>';
+    }
+
+    var inactive = wfCatalog.filter(f => !carOrder.includes(f.id));
+    if (inactive.length > 0) {
+        html += '<div style="margin-top:16px;margin-bottom:8px;font-weight:700;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">Weitere verfügbare Watchfaces:</div>';
+        html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;">';
+        for (var j = 0; j < inactive.length; j++) {
+            var inAct = inactive[j];
+            html += '<div style="background:var(--surface);border:1px dashed var(--border);border-radius:8px;padding:10px;display:flex;justify-content:space-between;align-items:center;">';
+            html += '  <div><span style="font-size:18px;margin-right:6px;">' + inAct.icon + '</span><b>' + inAct.name + '</b><div class="hint" style="font-size:10.5px;">' + inAct.desc + '</div></div>';
+            html += '  <button type="button" class="btn" style="padding:4px 10px;font-size:12px;" onclick="toggleCarouselFace(' + inAct.id + ')">+ Hinzufügen</button>';
+            html += '</div>';
+        }
+        html += '</div>';
+    }
+
+    list.innerHTML = html;
+}
+
+function moveCarousel(idx, dir){
+    var target = idx + dir;
+    if (target < 0 || target >= carOrder.length) return;
+    var temp = carOrder[idx];
+    carOrder[idx] = carOrder[target];
+    carOrder[target] = temp;
+    if (carStart === idx) carStart = target;
+    else if (carStart === target) carStart = idx;
+    renderCarouselUI();
+}
+
+function setCarouselStart(idx){
+    carStart = idx;
+    renderCarouselUI();
+}
+
+function toggleCarouselFace(fid){
+    var idx = carOrder.indexOf(fid);
+    if (idx >= 0) {
+        if (carOrder.length <= 1) {
+            alert('Mindestens ein Watchface muss im Karussell aktiv bleiben!');
+            return;
+        }
+        carOrder.splice(idx, 1);
+        if (carStart >= carOrder.length) carStart = 0;
+    } else {
+        carOrder.push(fid);
+    }
+    renderCarouselUI();
+}
+
+function saveCarouselConfig(){
+    var body = 'order=' + encodeURIComponent(carOrder.join(',')) + '&start=' + encodeURIComponent(carStart);
+    fetch('/api/carousel', {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: 'mode=' + mode
+        body: body
     }).then(r => r.json()).then(d => {
-        if (d.mode !== undefined) updateWfUI(d.mode);
-        showToastMsg && showToastMsg('Watchface: ' + (wfNames[mode] || mode));
-    }).catch(function(e){ console.log('WF err', e); });
+        showToastMsg && showToastMsg('Karussell erfolgreich auf Uhr angewendet!');
+        renderCarouselUI();
+    }).catch(function(e){ alert('Fehler beim Speichern'); });
+}
+
+function activateFaceDirect(fid){
+    fetch('/api/carousel', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'activate=' + fid
+    }).then(r => r.json()).then(d => {
+        showToastMsg && showToastMsg('Watchface aktiviert!');
+        loadCarouselData();
+    }).catch(function(e){ alert('Fehler'); });
+}
+
+function checkGitHubRelease(){
+    var st = document.getElementById('ghReleaseStatus');
+    var det = document.getElementById('ghReleaseDetails');
+    if (st) st.textContent = 'Suche nach Releases auf GitHub...';
+    fetch('https://api.github.com/repos/diggaknoxville/WatchOS/releases/latest', {cache: 'no-store'})
+    .then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    }).then(d => {
+        var remoteTag = d.tag_name || 'unbekannt';
+        var currentVer = 'v' + ('2.4.0');
+        var isNewer = (remoteTag !== currentVer && remoteTag !== 'latest');
+        if (st) {
+            st.innerHTML = isNewer ? 
+                '<span class="badge" style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:4px;">NEUE VERSION VERFÜGBAR: ' + remoteTag + '</span>' :
+                '<span class="badge" style="background:var(--good);color:#fff;padding:3px 8px;border-radius:4px;">Aktuell (Installiert: ' + currentVer + ')</span>';
+        }
+        if (det) {
+            det.style.display = 'block';
+            var binAsset = (d.assets || []).find(a => a.name.endsWith('.bin'));
+            var binUrl = binAsset ? binAsset.browser_download_url : (d.html_url || '#');
+            det.innerHTML = '<b>' + (d.name || remoteTag) + '</b> (' + (d.published_at ? d.published_at.substring(0, 10) : '') + ')<br>' +
+                            '<div class="hint" style="margin:6px 0;">' + (d.body ? d.body.replace(/\\n/g, '<br>') : 'Keine Release-Notes vorhanden.') + '</div>' +
+                            (binAsset ? '<a href="' + binUrl + '" class="btn" style="display:inline-block;margin-top:8px;text-decoration:none;" target="_blank">Firmware herunterladen (' + (binAsset.size/1024).toFixed(0) + ' KB)</a>' : '');
+        }
+    }).catch(function(err){
+        if (st) st.textContent = 'GitHub Release Check: Keine Verbindung oder Rate-Limit (' + err.message + ')';
+    });
 }
 function fsSizeStr(b){
     if(b < 1024) return b + ' B';
@@ -2232,9 +2378,23 @@ function loadStorageDetail(){
         if(!r.ok) throw new Error('HTTP '+r.status);
         return r.json();
     }).then(function(d){
-        var pct = d.flash_tot_kb>0 ? Math.round((d.flash_tot_kb-d.flash_free_kb)/d.flash_tot_kb*100) : 0;
-        var bar=document.getElementById('stFlashUsedBar'); if(bar) bar.style.width=pct+'%';
-        setTextIfChanged('stFlashTxt', fsSizeStr(d.flash_free_kb*1024) + ' ' + t('free') + ' / ' + fsSizeStr(d.flash_tot_kb*1024));
+        var chip = d.flash_chip_kb || 16384;
+        function pctOf(kb){ return Math.max(0.5, ((kb/chip)*100)).toFixed(1) + '%'; }
+
+        var bFwU = document.getElementById('barFwUsed'); if(bFwU) bFwU.style.width = pctOf(d.fw_used_kb);
+        var bFwF = document.getElementById('barFwFree'); if(bFwF) bFwF.style.width = pctOf(d.fw_free_kb);
+        var bOta = document.getElementById('barOtaRes'); if(bOta) bOta.style.width = pctOf(d.ota_reserve_kb);
+        var bFfU = document.getElementById('barFfatUsed'); if(bFfU) bFfU.style.width = pctOf(d.ffat_used_kb);
+        var bFfF = document.getElementById('barFfatFree'); if(bFfF) bFfF.style.width = pctOf(d.ffat_free_kb);
+        var bSys = document.getElementById('barSysRes'); if(bSys) bSys.style.width = pctOf(d.sys_res_kb);
+
+        setTextIfChanged('stTotalFreeTxt', (d.total_free_kb/1024).toFixed(2) + ' MB frei (' + Math.round((d.total_free_kb/chip)*100) + '%)');
+        setTextIfChanged('stFwTxt', (d.fw_used_kb/1024).toFixed(2) + ' MB belegt · ' + (d.fw_free_kb/1024).toFixed(2) + ' MB frei (Partition: ' + (d.fw_tot_kb/1024).toFixed(1) + ' MB)');
+        setTextIfChanged('stOtaTxt', (d.ota_reserve_kb/1024).toFixed(2) + ' MB (A/B Ausfallsicherheit)');
+        setTextIfChanged('stFfatTxt', (d.ffat_used_kb/1024).toFixed(2) + ' MB belegt · ' + (d.ffat_free_kb/1024).toFixed(2) + ' MB frei (Partition: ' + (d.ffat_tot_kb/1024).toFixed(1) + ' MB)');
+        setTextIfChanged('stSysTxt', d.sys_res_kb + ' KB (Bootloader, Partition Table, NVS, OTA-Data)');
+        setTextIfChanged('stRamTxt', 'SRAM: ' + d.ram_sram_free_kb + ' KB frei / ' + d.ram_sram_tot_kb + ' KB · PSRAM: ' + (d.ram_psram_free_kb/1024).toFixed(1) + ' MB frei / ' + (d.ram_psram_tot_kb/1024).toFixed(1) + ' MB');
+
         var nvsPct = d.nvs_tot>0 ? Math.round((d.nvs_tot-d.nvs_free)/d.nvs_tot*100) : 0;
         var nbar=document.getElementById('stNvsUsedBar'); if(nbar) nbar.style.width=nvsPct+'%';
         setTextIfChanged('stNvsTxt', d.nvs_free + ' / ' + d.nvs_tot + ' ' + t('slotsFree'));
@@ -2252,9 +2412,14 @@ function loadStorageDetail(){
         list.innerHTML='';
         if(!d.files || d.files.length===0){ list.innerHTML='<div class="hint">'+t('noFiles')+'</div>'; return; }
         d.files.forEach(function(f){
+            var tag = '<span style="font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700;margin-right:6px;background:#374151;color:#e5e7eb;">FILE</span>';
+            if(f.name.indexOf('/apps/')!==-1) tag = '<span style="font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700;margin-right:6px;background:#0369a1;color:#38bdf8;">APP</span>';
+            else if(f.name.indexOf('/portal/')!==-1) tag = '<span style="font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700;margin-right:6px;background:#b45309;color:#fde68a;">PORTAL</span>';
+            else if(f.name.indexOf('/scripts/')!==-1) tag = '<span style="font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700;margin-right:6px;background:#6d28d9;color:#ddd6fe;">SCRIPT</span>';
+
             var row=document.createElement('div'); row.className='frow'; row.setAttribute('data-file', f.name);
             row.innerHTML='<div class="frow-main" style="display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;flex-wrap:wrap;">'+
-                '<span class="fname" style="font-weight:600;color:var(--text);">' + f.name + '</span>'+
+                '<div style="display:flex;align-items:center;">' + tag + '<span class="fname" style="font-weight:600;color:var(--text);">' + f.name + '</span></div>'+
                 '<div style="display:flex;align-items:center;gap:6px;">'+
                 '<span class="fsize mono" style="font-size:11px;color:var(--muted);">' + fsSizeStr(f.size) + '</span>'+
                 '<a href="/api/fs/read?path=' + encodeURIComponent(f.name) + '" download style="padding:3px 8px;font-size:11px;background:var(--surface-2);border:1px solid var(--border);color:var(--text);border-radius:6px;text-decoration:none;">Download</a>'+
@@ -2573,6 +2738,7 @@ window.onload = function() {
     loadTotpList();
     refreshLoraApi();
     loadPackagesList();
+    loadCarouselData();
     fetch('/api/watchface').then(r=>r.json()).then(d=>{ if(d.mode!==undefined) updateWfUI(d.mode); }).catch(function(){});
 };
 function syncTitle(id, val) { document.getElementById(id).innerText = val; }
@@ -2871,11 +3037,11 @@ function openNewJsAppEditor() {
         ui: {
             title: "Klick-Zaehler",
             elements: [
-                { type: "card", x: 15, y: 24, w: 210, h: 66, color: "#142538", border: "#00e5ff" },
+                { type: "card", x: 15, y: 24, w: 210, h: 66, bg: "#142538", color: "#00e5ff" },
                 { type: "7segment", x: 120, y: 35, text: "{count}", size: 28, color: "#00ff88" },
-                { type: "label", x: 120, y: 112, text: "{statusText}", font: 2, color: "#90caf9" },
-                { type: "button", x: 10, y: 145, w: 105, h: 44, label: "+1 Klick", action: "inc()", color: "#00c853", text_color: "#000000" },
-                { type: "button", x: 125, y: 145, w: 105, h: 44, label: "Reset", action: "reset()", color: "#37474f", text_color: "#ffffff" }
+                { type: "label", x: 120, y: 112, text: "{statusText}", size: 2, color: "#90caf9" },
+                { type: "button", x: 10, y: 145, w: 105, h: 44, text: "+1 Klick", action: "inc()", bg: "#00c853", color: "#000000" },
+                { type: "button", x: 125, y: 145, w: 105, h: 44, text: "Reset", action: "reset()", bg: "#37474f", color: "#ffffff" }
             ]
         },
         logic: {
@@ -3066,7 +3232,7 @@ function resetPackagesApi() {
     s += F("</div><div class='tab' onclick='showTab(\"p5\", this);document.querySelector(\".tabs\").classList.remove(\"open\")'>");
     s += tr(sysLang, "Persoenlich", "Personal", "Personnel");
     s += F("</div><div class='tab' onclick='showTab(\"p8\", this);document.querySelector(\".tabs\").classList.remove(\"open\")'>");
-    s += tr(sysLang, "Hacker Tools", "Hacker Tools", "Outils Hacker");
+    s += tr(sysLang, "Security & Test", "Security & Test", "Securite & Test");
     s += F("</div><div class='tab' onclick='showTab(\"p9\", this);document.querySelector(\".tabs\").classList.remove(\"open\")'>");
     s += tr(sysLang, "2FA & Mitteilungen", "2FA & Alerts", "2FA & Notifs");
     s += F("</div><div class='tab' onclick='showTab(\"p_apps\", this);document.querySelector(\".tabs\").classList.remove(\"open\");loadPackagesList();'>");
@@ -3095,7 +3261,7 @@ function resetPackagesApi() {
     // Speicher-Übersicht (RAM/Flash/NVS als Ringe + Details-Button -> Speicher-Detailfenster)
     s += F("<div class='card'><h2><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round'><rect x='3' y='3' width='7' height='7' rx='1.5'/><rect x='14' y='3' width='7' height='7' rx='1.5'/><rect x='3' y='14' width='7' height='7' rx='1.5'/><rect x='14' y='14' width='7' height='7' rx='1.5'/></svg> ");
     s += tr(sysLang, "Speicher-Übersicht", "Storage overview", "Aperçu du stockage"); s += F("</h2><div class='hint'>");
-    s += tr(sysLang, "RAM, Flash (FFat) und Einstellungs-Speicher (NVS)", "RAM, flash (FFat) and settings storage (NVS)", "RAM, flash (FFat) et stockage des réglages (NVS)"); s += F("</div>");
+    s += tr(sysLang, "RAM, 16 MB Gesamtspeicher (Hardware-Flash) und Einstellungs-Speicher (NVS)", "RAM, 16 MB total hardware flash and settings storage (NVS)", "RAM, 16 Mo flash matériel et stockage des réglages (NVS)"); s += F("</div>");
     s += F("<div class='ring-row'>");
     s += F("<div class='ring-mini'><div class='rwrap'><svg width='72' height='72' viewBox='0 0 72 72'><circle class='track' cx='36' cy='36' r='30'></circle><circle class='val' id='ringRam' cx='36' cy='36' r='30' style='stroke:var(--accent-2)'></circle></svg><div class='rc' id='ringRamTxt'>--%</div></div><div class='lbl'>"); s += tr(sysLang, "RAM frei", "RAM free", "RAM libre"); s += F("</div><div class='sub' id='ramSub'>--</div></div>");
     s += F("<div class='ring-mini'><div class='rwrap'><svg width='72' height='72' viewBox='0 0 72 72'><circle class='track' cx='36' cy='36' r='30'></circle><circle class='val' id='ringFlash' cx='36' cy='36' r='30' style='stroke:var(--good)'></circle></svg><div class='rc' id='ringFlashTxt'>--%</div></div><div class='lbl'>"); s += tr(sysLang, "Flash frei", "Flash free", "Flash libre"); s += F("</div><div class='sub' id='flashSub'>--</div></div>");
@@ -3103,59 +3269,17 @@ function resetPackagesApi() {
     s += F("</div><button type='button' class='details-btn' id='openStorage'>"); s += tr(sysLang, "Speicherinhalt anzeigen…", "Show storage contents…", "Afficher le contenu…"); s += F("</button></div>");
     s += F("</div>"); // .hero
 
-    // Watchface Galerie
+    // Watchface & Karussell Info Card (Link zu Anzeige)
     s += F("<div class='card' style='margin-top:16px;'>");
-    s += F("<div style='display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px;'>");
+    s += F("<div style='display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;'>");
     s += F("<div><h2 style='margin:0;'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' style='width:20px;height:20px;vertical-align:middle;margin-right:6px;'><circle cx='12' cy='12' r='10'></circle><polyline points='12 6 12 12 16 14'></polyline></svg> ");
-    s += tr(sysLang, "Watchface Galerie", "Watchface Gallery", "Galerie de cadrans");
+    s += tr(sysLang, "Aktives Zifferblatt", "Active Watchface", "Cadran actif");
     s += F("</h2><div class='hint'>");
-    s += tr(sysLang, "Aktives Zifferblatt auf der Uhr bequem per Klick auswählen", "Select active watchface on watch with a click", "Sélectionnez le cadran actif en un clic");
-    s += F("</div></div><span class='pill' id='activeWfBadge' style='background:rgba(59,130,246,0.15);color:var(--accent);border:1px solid var(--accent);font-weight:600;'>");
-    s += tr(sysLang, "Aktiv: ", "Active: ", "Actif: ");
-    s += F("<b id='activeWfName'>--</b></span></div>");
-    s += F("<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;'>");
-
-    // Card 0: Ultra Rings
-    s += F("<div class='wf-card' id='wfCard0' onclick='selectWatchface(0)' style='background:var(--surface-2);border:2px solid var(--border);border-radius:12px;padding:12px;cursor:pointer;transition:all .2s ease;'>");
-    s += F("<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;'><span style='font-size:18px;'>⚡</span><span class='badge' id='wfBadge0' style='font-size:10px;padding:2px 6px;border-radius:4px;'>--</span></div>");
-    s += F("<div style='font-weight:700;font-size:14px;color:var(--text);'>Ultra Rings</div>");
-    s += F("<div class='hint' style='font-size:11px;margin-top:3px;'>");
-    s += tr(sysLang, "Cyberpunk Aktivitätsringe & Glowing Complications", "Cyberpunk activity rings & glowing complications", "Anneaux d'activité cyberpunk et complications");
-    s += F("</div><button type='button' class='btn' style='margin-top:8px;padding:5px 10px;font-size:12px;width:100%;' id='wfBtn0'>");
-    s += tr(sysLang, "Aktivieren", "Activate", "Activer");
-    s += F("</button></div>");
-
-    // Card 1: Classic Chrono
-    s += F("<div class='wf-card' id='wfCard1' onclick='selectWatchface(1)' style='background:var(--surface-2);border:2px solid var(--border);border-radius:12px;padding:12px;cursor:pointer;transition:all .2s ease;'>");
-    s += F("<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;'><span style='font-size:18px;'>⏱️</span><span class='badge' id='wfBadge1' style='font-size:10px;padding:2px 6px;border-radius:4px;'>--</span></div>");
-    s += F("<div style='font-weight:700;font-size:14px;color:var(--text);'>Classic Chrono</div>");
-    s += F("<div class='hint' style='font-size:11px;margin-top:3px;'>");
-    s += tr(sysLang, "Schweizer Chronograph mit 3 Hilfszifferblättern", "Swiss chronograph with 3 sub-dials & sword hands", "Chronographe suisse avec 3 sous-cadrans");
-    s += F("</div><button type='button' class='btn' style='margin-top:8px;padding:5px 10px;font-size:12px;width:100%;' id='wfBtn1'>");
-    s += tr(sysLang, "Aktivieren", "Activate", "Activer");
-    s += F("</button></div>");
-
-    // Card 2: Retro Casio
-    s += F("<div class='wf-card' id='wfCard2' onclick='selectWatchface(2)' style='background:var(--surface-2);border:2px solid var(--border);border-radius:12px;padding:12px;cursor:pointer;transition:all .2s ease;'>");
-    s += F("<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;'><span style='font-size:18px;'>📟</span><span class='badge' id='wfBadge2' style='font-size:10px;padding:2px 6px;border-radius:4px;'>--</span></div>");
-    s += F("<div style='font-weight:700;font-size:14px;color:var(--text);'>Retro Casio</div>");
-    s += F("<div class='hint' style='font-size:11px;margin-top:3px;'>");
-    s += tr(sysLang, "Kultiges 80er Olive LCD mit Wochentagsmatrix", "Iconic 80s olive LCD with weekday matrix", "LCD olive emblématique des années 80");
-    s += F("</div><button type='button' class='btn' style='margin-top:8px;padding:5px 10px;font-size:12px;width:100%;' id='wfBtn2'>");
-    s += tr(sysLang, "Aktivieren", "Activate", "Activer");
-    s += F("</button></div>");
-
-    // Card 3: 3D Lebensuhr
-    s += F("<div class='wf-card' id='wfCard3' onclick='selectWatchface(3)' style='background:var(--surface-2);border:2px solid var(--border);border-radius:12px;padding:12px;cursor:pointer;transition:all .2s ease;'>");
-    s += F("<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;'><span style='font-size:18px;'>⏳</span><span class='badge' id='wfBadge3' style='font-size:10px;padding:2px 6px;border-radius:4px;'>--</span></div>");
-    s += F("<div style='font-weight:700;font-size:14px;color:var(--text);'>3D Lebensuhr</div>");
-    s += F("<div class='hint' style='font-size:11px;margin-top:3px;'>");
-    s += tr(sysLang, "Restlebenszeit-Countdown mit 3D Glass Cards", "Life countdown with 3D glass cards", "Compte à rebours de vie avec cartes en verre 3D");
-    s += F("</div><button type='button' class='btn' style='margin-top:8px;padding:5px 10px;font-size:12px;width:100%;' id='wfBtn3'>");
-    s += tr(sysLang, "Aktivieren", "Activate", "Activer");
-    s += F("</button></div>");
-
-    s += F("</div></div>");
+    s += tr(sysLang, "Aktuelles Watchface im Zifferblatt-Karussell: ", "Current watchface in carousel: ", "Cadran actuel dans le carrousel: ");
+    s += F("<b id='homeWfName' style='color:var(--accent);font-weight:700;'>--</b></div></div>");
+    s += F("<button type='button' class='btn' style='margin:0;padding:7px 16px;font-size:13px;background:var(--accent);color:#fff;' onclick='showTab(\"p2\", document.querySelectorAll(\".tabs .tab\")[1])'>");
+    s += tr(sysLang, "Watchface Karussell & Sichten verwalten →", "Manage Watchface Carousel & Views →", "Gérer le carrousel & les vues →");
+    s += F("</button></div></div>");
 
     s += F("<div class='grid cols2' style='margin-top:16px'>");
 
@@ -3211,26 +3335,32 @@ function resetPackagesApi() {
     s += F("</div>"); // .cols2
     s += F("</div>"); // #p1
     
-    // 2. ANZEIGE (9 Farben im Grid)
+    // 2. ANZEIGE: Watchface-Karussell & Sichten Manager (Vollständig verschmolzen)
     s += F("<div id='p2' class='panel'>");
-    s += F("<div style='background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:14px;'>");
-    s += F("<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;'>");
-    s += F("<b>"); s += tr(sysLang, "Aktives Watchface:", "Active Watchface:", "Cadran actif:"); s += F(" <span id='p2WfName' style='color:var(--accent);font-weight:700;'>--</span></b>");
-    s += F("<button type='button' class='btn' style='margin:0;padding:5px 12px;font-size:12px;background:var(--accent);color:#fff;' onclick='showTab(\"p1\", document.querySelector(\".tabs .tab\"))'>");
-    s += tr(sysLang, "In Watchface Galerie wechseln →", "Go to Watchface Gallery →", "Aller à la Galerie →");
+    s += F("<div class='card' style='margin-bottom:16px;'>");
+    s += F("<div style='display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px;'>");
+    s += F("<div><h3 style='margin:0;'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' style='width:20px;height:20px;vertical-align:middle;margin-right:6px;'><circle cx='12' cy='12' r='10'></circle><polyline points='12 6 12 12 16 14'></polyline></svg> ");
+    s += tr(sysLang, "Watchface Karussell & Sichten-Manager", "Watchface Carousel & Views Manager", "Gestionnaire de carrousel et vues");
+    s += F("</h3><div class='hint'>");
+    s += tr(sysLang, "Alle Zifferblätter und Informations-Sichten sind gleichberechtigt im Karussell vereint. Aktiviere, deaktiviere oder ordne sie nach Wunsch an.", 
+                   "All watchfaces and information views are united in the carousel. Enable, disable or rearrange them as desired.", 
+                   "Tous les cadrans et vues d'information sont réunis dans le carrousel. Activez, désactivez ou réorganisez selon vos souhaits.");
+    s += F("</div></div><div style='display:flex;align-items:center;gap:8px;'>");
+    s += F("<span class='pill' style='background:rgba(59,130,246,0.15);color:var(--accent);border:1px solid var(--accent);font-weight:600;'>");
+    s += tr(sysLang, "Aktiv: ", "Active: ", "Actif: ");
+    s += F("<b id='p2WfName'>--</b></span>");
+    s += F("<button type='button' class='btn' style='margin:0;padding:6px 14px;background:var(--accent);color:#fff;font-weight:600;' onclick='saveCarouselConfig()'>");
+    s += tr(sysLang, "💾 Karussell auf Uhr anwenden", "💾 Apply Carousel to Watch", "💾 Appliquer le carrousel");
     s += F("</button></div></div>");
-    s += F("<form id='fViews' onsubmit='return saveForm(\"fViews\")'><h3>"); s += tr(sysLang, "Sichten (Gesten)", "Views (Gestures)", "Vues (Gestes)"); s += F("</h3>");
-    s += F("<div style='display:flex; flex-direction:column; gap:5px; margin-bottom:15px;'>");
-    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' name='enP0' value='1' "); if(enP0) s += F("checked"); s += F("> 1. Dashboard</label>");
-    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' name='enP1' value='1' "); if(enP1) s += F("checked"); s += F("> 2. "); s += tr(sysLang, "Opportunitaet", "Opportunity", "Opportunite"); s += F("</label>");
-    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' name='enP2' value='1' "); if(enP2) s += F("checked"); s += F("> 3. Kinder</label>");
-    s += F("<label class='cb-lbl'><input type='checkbox' style='width:auto;' name='enP3' value='1' "); if(enP3) s += F("checked"); s += F("> 4. Eltern</label></div>");
-    s += F("<input type='submit' class='btn' value='"); s += tr(sysLang, "Sichten speichern", "Save views", "Enregistrer vues"); s += F("'></form><hr>");
+    
+    // Container für die dynamische Karussell-Liste (wird via JS gerendert)
+    s += F("<div id='carouselList' style='margin-top:10px;'></div>");
+    s += F("</div><hr>");
 
     s += F("<form id='fDesign' onsubmit='return saveForm(\"fDesign\")'><h3>"); s += tr(sysLang, "Optik & Verhalten", "Look & Behavior", "Apparence & Comportement"); s += F("</h3>");
     s += F("<b>"); s += tr(sysLang, "Boot-Animation", "Boot animation", "Animation de demarrage"); s += F(":</b><br><select name='bm'><option value='0'"); if(bootMode==0) s += F(" selected"); s += F(">MS-DOS (486)</option><option value='1'"); if(bootMode==1) s += F(" selected"); s += F(">C64</option><option value='3'"); if(bootMode==3) s += F(" selected"); s += F(">Win98</option><option value='4'"); if(bootMode==4) s += F(" selected"); s += F(">Fast Boot</option></select><hr>");
     
-    s += F(R"rawliteral(<b>Farb-Presets:</b><br><select id='themeSel' onchange='applyThemePreset()'><option value=''>- Eigene / Manuell -</option><option value='night'>Nightlife</option><option value='day'>Daybreak</option><option value='cyber'>Cyberpunk</option><option value='hacker'>Hacker Matrix</option></select><br>)rawliteral");
+    s += F(R"rawliteral(<b>Farb-Presets:</b><br><select id='themeSel' onchange='applyThemePreset()'><option value=''>- Eigene / Manuell -</option><option value='night'>Nightlife</option><option value='day'>Daybreak</option><option value='cyber'>Cyberpunk</option><option value='hacker'>Matrix Grün</option></select><br>)rawliteral");
     
     s += F("<div style='display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:10px; font-size:12px;'>");
     s += F("<div><b>"); s += tr(sysLang, "Hintergrund", "Background", "Arriere-plan"); s += F(":</b><input name='cBG' type='color' value='"); s += hexBG; s += F("'></div>");
@@ -3599,8 +3729,8 @@ function resetPackagesApi() {
     s += F("<select name='sysLang'><option value='0'"); if(sysLang==0) s += F(" selected"); s += F(">Deutsch</option><option value='1'"); if(sysLang==1) s += F(" selected"); s += F(">English</option><option value='2'"); if(sysLang==2) s += F(" selected"); s += F(">Français</option></select><hr>");
 
     s += F("<h3>"); s += tr(sysLang, "WLAN Konfiguration", "WiFi Configuration", "Configuration WiFi"); s += F("</h3><div style='display:grid; grid-template-columns:1fr 1fr; gap:10px;'>");
-    s += F("<div class='box'><div class='box-title'>"); s += tr(sysLang, "Hotspot (Uhr)", "Hotspot (watch)", "Hotspot (montre)"); s += F("</div><b>SSID:</b><input name='apSsid' type='text' value='"); s += apSSID; s += F("'><b>"); s += tr(sysLang, "Passwort", "Password", "Mot de passe"); s += F(":</b><input name='apPwd' type='text' value='"); s += apPWD; s += F("'></div>");
-    s += F("<div class='box'><div class='box-title'>"); s += tr(sysLang, "Client (Heim/Handy)", "Client (home/phone)", "Client (maison/telephone)"); s += F("</div><b>SSID:</b><input name='ssid' type='text' value='"); s += userSSID; s += F("'><b>"); s += tr(sysLang, "Passwort", "Password", "Mot de passe"); s += F(":</b><input name='pwd' type='password' value='"); s += userPWD; s += F("'></div></div><hr>");
+    s += F("<div class='box'><div class='box-title'>"); s += tr(sysLang, "Hotspot (Uhr)", "Hotspot (watch)", "Hotspot (montre)"); s += F("</div><b>SSID:</b><input name='apSsid' type='text' value='"); s += htmlEscape(apSSID); s += F("'><b>"); s += tr(sysLang, "Passwort", "Password", "Mot de passe"); s += F(":</b><input name='apPwd' type='password' value='"); s += htmlEscape(apPWD); s += F("'></div>");
+    s += F("<div class='box'><div class='box-title'>"); s += tr(sysLang, "Client (Heim/Handy)", "Client (home/phone)", "Client (maison/telephone)"); s += F("</div><b>SSID:</b><input name='ssid' type='text' value='"); s += htmlEscape(userSSID); s += F("'><b>"); s += tr(sysLang, "Passwort", "Password", "Mot de passe"); s += F(":</b><input name='pwd' type='password' value='"); s += htmlEscape(userPWD); s += F("'></div></div><hr>");
     
     int valMax = (maxBright * 100) / 255; int valMin = (minBright * 100) / 255;
     s += F("<h3>"); s += tr(sysLang, "Helligkeit & Timer", "Brightness & Timer", "Luminosite & Minuteur"); s += F("</h3>");
@@ -3644,18 +3774,18 @@ function resetPackagesApi() {
     s += F("<b>"); s += tr(sysLang, "Papa Name", "Dad's name", "Nom de papa"); s += F(":</b><input name='ppN' type='text' value='"); s += htmlEscape(papaName); s += F("'>");
     s += F("<b>"); s += tr(sysLang, "Geburt & Zeit", "Birth & time", "Naissance & heure"); s += F(":</b><br><input name='ppD' type='date' value='"); s += papaDate; s += F("' style='width:60%;display:inline-block;'><input name='ppT' type='time' value='"); s += papaTime; s += F("' style='width:35%;display:inline-block;float:right;'><hr>");
     s += F("<b>Netto-Monatslohn (E):</b><input name='netS' type='number' step='0.01' value='"); s += netSalary; s += F("'><b>Arbeitsstunden / Tag (100%):</b><input name='wh' type='number' step='0.1' value='"); s += workHoursPerDay; s += F("'><b>Teilzeit (%):</b><input name='pt' type='number' min='1' max='100' value='"); s += partTimePct; s += F("'><b>Regel-Arbeitstage / Jahr:</b><input name='wd' type='number' value='"); s += workDaysYear; s += F("'><b>Urlaubstage:</b><input name='vac' type='number' value='"); s += vacationDays; s += F("'><b>Krankheitstage (dieses Jahr):</b><input name='sick' type='number' value='"); s += sickDays; s += F("'><hr>");
-    s += F("<b>Kind 1 Name:</b><input name='c1n' type='text' value='"); s += child1Name; s += F("'>");
+    s += F("<b>Kind 1 Name:</b><input name='c1n' type='text' value='"); s += htmlEscape(child1Name); s += F("'>");
     s += F("<b>Kind 1 Geburtsdatum & Zeit:</b><br><input name='c1d' type='date' value='"); s += child1Date; s += F("' style='width:60%;display:inline-block;'><input name='c1t' type='time' value='"); s += child1Time; s += F("' style='width:35%;display:inline-block;float:right;'><br>");
-    s += F("<b>Kind 2 Name:</b><input name='c2n' type='text' value='"); s += child2Name; s += F("'>");
+    s += F("<b>Kind 2 Name:</b><input name='c2n' type='text' value='"); s += htmlEscape(child2Name); s += F("'>");
     s += F("<b>Kind 2 Geburtsdatum & Zeit:</b><br><input name='c2d' type='date' value='"); s += child2Date; s += F("' style='width:60%;display:inline-block;'><input name='c2t' type='time' value='"); s += child2Time; s += F("' style='width:35%;display:inline-block;float:right;'><br>");
-    s += F("<b>Kind 3 Name:</b><input name='c3n' type='text' value='"); s += child3Name; s += F("'>");
+    s += F("<b>Kind 3 Name:</b><input name='c3n' type='text' value='"); s += htmlEscape(child3Name); s += F("'>");
     s += F("<b>Kind 3 Geburtsdatum & Zeit:</b><br><input name='c3d' type='date' value='"); s += child3Date; s += F("' style='width:60%;display:inline-block;'><input name='c3t' type='time' value='"); s += child3Time; s += F("' style='width:35%;display:inline-block;float:right;'><br>");
     s += F("<input type='submit' class='btn' value='"); s += tr(sysLang, "Daten speichern", "Save data", "Enregistrer donnees"); s += F("'></form></div>");
 
-    // 5. HACKER TOOLS
+    // 5. SECURITY & AUDIT TOOLS
     s += F("<div id='p8' class='panel'>");
     s += F("<div style='position:sticky; top:6px; z-index:5; margin-bottom:10px;'><button type='button' class='btn btn-red' onclick='stopBadApps()' style='margin:0;'>");
-    s += tr(sysLang, "Not-Aus: Security Apps stoppen", "Emergency Stop: Stop Security Apps", "Arret d'urgence: Stopper Security Apps");
+    s += tr(sysLang, "Not-Aus: Security-Aufgaben stoppen", "Emergency Stop: Stop Security Tasks", "Arret d'urgence: Stopper les taches de securite");
     s += F("</button></div>");
 
     // LoRa SX1262 Off-Grid Funk Card
@@ -3712,7 +3842,7 @@ function resetPackagesApi() {
     s += F("<input type='submit' class='btn btn-red' style='margin-bottom:20px;' value='"); s += tr(sysLang, "Nmap Ziele speichern", "Save Nmap targets", "Enregistrer cibles Nmap"); s += F("'></form>");
     
     s += F("<b>Nmap Scan Ergebnisse:</b>");
-    s += F("<pre style='background:#111; color:#0f0; padding:10px; border-radius:5px; min-height:50px; max-height:200px; overflow-y:auto; font-size:12px;'>");
+    s += F("<pre style='background:var(--surface-2); color:var(--good); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px; min-height:50px; max-height:200px; overflow-y:auto; font-family:ui-monospace, monospace; font-size:12px; box-shadow:inset 0 1px 3px rgba(0,0,0,0.4);'>");
     s += (nmapLog.length() > 0 ? htmlEscape(nmapLog) : String(tr(sysLang, "Bisher keine Scans...", "No scans yet...", "Aucun scan pour l'instant...")));
     s += F("</pre>");
 
@@ -3720,46 +3850,56 @@ function resetPackagesApi() {
     s += F("<input type='button' id='scanRBtn' class='btn btn-blue' value='"); s += tr(sysLang, "Router scannen", "Scan routers", "Scanner les routeurs"); s += F("' onclick='scanRouters()'>");
     s += F("<div id='routerTable'></div>");
 
-    s += F("<hr><h3>BadUSB / Rubber Ducky</h3><form id='fHacker2' onsubmit='return saveForm(\"fHacker2\")'>");
+    s += F("<hr><h3>USB HID Ducky Scripts / Keystroke Test</h3><form id='fHacker2' onsubmit='return saveForm(\"fHacker2\")'>");
     s += F("<b>Tastatur-Layout:</b><br><select name='buLay'><option value='0'");
-    if(badUsbLayout==0) s += F(" selected");
+    if(duckyLayout==0) s += F(" selected");
     s += F(">US (QWERTY)</option><option value='1'");
-    if(badUsbLayout==1) s += F(" selected");
+    if(duckyLayout==1) s += F(" selected");
     s += F(">DE (QWERTZ)</option></select><br><br>");
     
-    s += F("<details style='background:#222;padding:10px;border-radius:6px;margin-bottom:8px;'><summary style='cursor:pointer;color:#ffb020;font-weight:bold;'>"); s += tr(sysLang, "Skript 1", "Script 1", "Script 1"); s += F(": <span id='sN0'>"); s += htmlEscape(badUsbNames[0]); s += F("</span></summary>");
-    s += F("Name: <input name='buN0' type='text' value='"); s += htmlEscape(badUsbNames[0]); s += F("' oninput='syncTitle(\"sN0\", this.value)'><br>");
-    s += F("Code: <textarea name='buS0' rows='4' style='font-family:monospace; font-size:11px;'>"); s += htmlEscape(badUsbScripts[0]); s += F("</textarea></details>");
+    s += F("<details style='background:var(--surface-2); border:1px solid var(--border); padding:10px; border-radius:var(--radius-sm); margin-bottom:8px;'><summary style='cursor:pointer; color:var(--warn); font-weight:600;'>"); s += tr(sysLang, "Skript 1", "Script 1", "Script 1"); s += F(": <span id='sN0'>"); s += htmlEscape(duckyNames[0]); s += F("</span></summary>");
+    s += F("Name: <input name='buN0' type='text' value='"); s += htmlEscape(duckyNames[0]); s += F("' oninput='syncTitle(\"sN0\", this.value)'><br>");
+    s += F("Code: <textarea name='buS0' rows='4' style='font-family:monospace; font-size:11px;'>"); s += htmlEscape(duckyScripts[0]); s += F("</textarea></details>");
 
-    s += F("<details style='background:#222;padding:10px;border-radius:6px;margin-bottom:8px;'><summary style='cursor:pointer;color:#ffb020;font-weight:bold;'>"); s += tr(sysLang, "Skript 2", "Script 2", "Script 2"); s += F(": <span id='sN1'>"); s += htmlEscape(badUsbNames[1]); s += F("</span></summary>");
-    s += F("Name: <input name='buN1' type='text' value='"); s += htmlEscape(badUsbNames[1]); s += F("' oninput='syncTitle(\"sN1\", this.value)'><br>");
-    s += F("Code: <textarea name='buS1' rows='4' style='font-family:monospace; font-size:11px;'>"); s += htmlEscape(badUsbScripts[1]); s += F("</textarea></details>");
+    s += F("<details style='background:var(--surface-2); border:1px solid var(--border); padding:10px; border-radius:var(--radius-sm); margin-bottom:8px;'><summary style='cursor:pointer; color:var(--warn); font-weight:600;'>"); s += tr(sysLang, "Skript 2", "Script 2", "Script 2"); s += F(": <span id='sN1'>"); s += htmlEscape(duckyNames[1]); s += F("</span></summary>");
+    s += F("Name: <input name='buN1' type='text' value='"); s += htmlEscape(duckyNames[1]); s += F("' oninput='syncTitle(\"sN1\", this.value)'><br>");
+    s += F("Code: <textarea name='buS1' rows='4' style='font-family:monospace; font-size:11px;'>"); s += htmlEscape(duckyScripts[1]); s += F("</textarea></details>");
 
-    s += F("<details style='background:#222;padding:10px;border-radius:6px;margin-bottom:8px;'><summary style='cursor:pointer;color:#ffb020;font-weight:bold;'>"); s += tr(sysLang, "Skript 3", "Script 3", "Script 3"); s += F(": <span id='sN2'>"); s += htmlEscape(badUsbNames[2]); s += F("</span></summary>");
-    s += F("Name: <input name='buN2' type='text' value='"); s += htmlEscape(badUsbNames[2]); s += F("' oninput='syncTitle(\"sN2\", this.value)'><br>");
-    s += F("Code: <textarea name='buS2' rows='4' style='font-family:monospace; font-size:11px;'>"); s += htmlEscape(badUsbScripts[2]); s += F("</textarea></details>");
+    s += F("<details style='background:var(--surface-2); border:1px solid var(--border); padding:10px; border-radius:var(--radius-sm); margin-bottom:8px;'><summary style='cursor:pointer; color:var(--warn); font-weight:600;'>"); s += tr(sysLang, "Skript 3", "Script 3", "Script 3"); s += F(": <span id='sN2'>"); s += htmlEscape(duckyNames[2]); s += F("</span></summary>");
+    s += F("Name: <input name='buN2' type='text' value='"); s += htmlEscape(duckyNames[2]); s += F("' oninput='syncTitle(\"sN2\", this.value)'><br>");
+    s += F("Code: <textarea name='buS2' rows='4' style='font-family:monospace; font-size:11px;'>"); s += htmlEscape(duckyScripts[2]); s += F("</textarea></details>");
     
     s += F("<hr><h3>WiFi Spam (Beacons)</h3>");
     s += F("<input name='spamSsid' type='text' value='"); s += htmlEscape(spamSSIDs); s += F("'>");
-    s += F("<br><br><input type='submit' class='btn btn-red' value='USB/Spam Tools Speichern'></form>");
+    s += F("<br><br><input type='submit' class='btn btn-red' value='Ducky &amp; Spam Tools Speichern'></form>");
     
     s += F("<hr><form id='fEvil' onsubmit='return saveForm(\"fEvil\")'>");
-    s += F("<h3>Evil Portal Setup</h3>");
-    s += F("<b>WLAN Name (SSID):</b><input name='evSsid' type='text' value='"); s += evilSSID; s += F("'><br><br>");
+    s += F("<h3>Captive Portal Setup</h3>");
+    s += F("<b>WLAN Name (SSID):</b><input name='evSsid' type='text' value='"); s += htmlEscape(portalSSID); s += F("'><br><br>");
     s += F("<b>HTML Code für die Startseite:</b><br>");
-    s += F("<textarea name='evHtml' rows='12' style='font-family:monospace; font-size:11px;'>"); s += htmlEscape(evilHTML); s += F("</textarea>");
-    s += F("<div style='display:flex;gap:10px;'><button type='button' class='btn btn-blue' onclick='previewHTML()'>HTML Vorschau</button><input type='submit' class='btn btn-red' value='Evil Portal Speichern'></div></form>");
+    s += F("<textarea name='evHtml' rows='12' style='font-family:monospace; font-size:11px;'>"); s += htmlEscape(portalHTML); s += F("</textarea>");
+    s += F("<div style='display:flex;gap:10px;'><button type='button' class='btn btn-blue' onclick='previewHTML()'>HTML Vorschau</button><input type='submit' class='btn btn-red' value='Captive Portal Speichern'></div></form>");
     
-    s += F("<hr><h3>"); s += tr(sysLang, "Phishing Logbuch", "Phishing logbook", "Journal phishing"); s += F("</h3><div style='background:#111;color:#0f0;padding:10px;text-align:left;font-family:monospace;min-height:100px;max-height:300px;overflow-y:auto;'>");
-    s += (evilLog.length() > 0 ? evilLog : String(tr(sysLang, "Bisher keine Phishing-Opfer...", "No phishing victims yet...", "Aucune victime de phishing pour l'instant...")));
+    s += F("<hr><h3>"); s += tr(sysLang, "Portal Access Log (Anmeldungen)", "Portal Access Log", "Journal d'acces Portail"); s += F("</h3><div style='background:var(--surface-2); color:var(--good); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px; text-align:left; font-family:ui-monospace, monospace; font-size:12px; min-height:100px; max-height:300px; overflow-y:auto; box-shadow:inset 0 1px 3px rgba(0,0,0,0.4);'>");
+    s += (portalLog.length() > 0 ? portalLog : String(tr(sysLang, "Bisher keine Portal-Anmeldungen...", "No portal logins yet...", "Aucune connexion au portail pour l'instant...")));
     s += F("</div><br><form action='/clearlog' method='POST'><input type='submit' class='btn btn-gray' value='"); s += tr(sysLang, "Logbuch leeren", "Clear logbook", "Vider le journal"); s += F("'></form></div>");
 
     // 6. UPDATE
-    s += F("<div id='p6' class='panel'><h3>"); s += tr(sysLang, "Firmware Update", "Firmware Update", "Mise a jour Firmware"); s += F("</h3>");
-    s += F("<p>"); s += tr(sysLang, "WatchOS Version", "WatchOS Version", "Version WatchOS"); s += F(": <b id='ota_cur_ver' style='color:#ffb020;'>"); s += WATCHOS_VERSION; s += F("</b><br>Build: <b style='color:#ffb020;'>");
+    s += F("<div id='p6' class='panel'><h3>"); s += tr(sysLang, "Firmware Update &amp; CI/CD", "Firmware Update &amp; CI/CD", "Mise a jour Firmware &amp; CI/CD"); s += F("</h3>");
+    s += F("<p>"); s += tr(sysLang, "WatchOS Version", "WatchOS Version", "Version WatchOS"); s += F(": <b id='ota_cur_ver' style='color:#ffb020;'>v"); s += WATCHOS_VERSION; s += F("</b><br>Build: <b style='color:#ffb020;'>");
     s += String(__DATE__) + " - " + String(__TIME__);
-    s += F("</b></p><hr><p>"); s += tr(sysLang, "Waehle die kompilierte .bin Datei aus.", "Select the compiled .bin file.", "Selectionnez le fichier .bin compile."); s += F("</p>");
-    s += F("<input type='file' id='otafile' accept='.bin' onchange='updateOtaMeta()' style='background:#333;color:#fff;padding:10px;margin:8px 0;border-radius:6px;width:100%;box-sizing:border-box;'><br>");
+    s += F("</b></p>");
+
+    // GitHub Releases / Auto-Update Block
+    s += F("<div class='card' style='background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:14px;margin:12px 0;'>");
+    s += F("<div style='display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;'>");
+    s += F("<div><b style='font-size:14px;'>GitHub Releases &amp; CI/CD Auto-Update</b><div class='hint' style='font-size:11.5px;margin-top:2px;'>Überwacht das GitHub Repository <code>diggaknoxville/WatchOS</code> auf automatische Firmware-Releases.</div></div>");
+    s += F("<button type='button' class='btn' style='margin:0;padding:5px 12px;font-size:12px;' onclick='checkGitHubRelease()'>🔄 Auf Updates prüfen</button>");
+    s += F("</div><div id='ghReleaseStatus' style='margin-top:10px;font-size:12px;color:var(--text);'>Klicke auf 'Auf Updates prüfen' um den neuesten Build abzufragen.</div>");
+    s += F("<div id='ghReleaseDetails' style='display:none;margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;'></div>");
+    s += F("</div><hr><p>");
+    s += tr(sysLang, "Manuelles Update: Waehle die kompilierte .bin Datei aus.", "Manual Update: Select the compiled .bin file.", "Mise a jour manuelle: Selectionnez le fichier .bin compile."); s += F("</p>");
+    s += F("<input type='file' id='otafile' accept='.bin' onchange='updateOtaMeta()' style='background:var(--surface-2); color:var(--text); border:1px solid var(--border); padding:10px; margin:8px 0; border-radius:var(--radius-sm); width:100%; box-sizing:border-box;'><br>");
     s += F("<div id='ota_meta' style='font-size:12px; color:#bbb; margin:4px 0;'></div>");
     s += F("<div id='ota_sha' style='font-family:monospace; font-size:11px; color:#9fd; margin:4px 0 10px 0; word-break:break-all;'></div>");
     s += F("<button type='button' class='btn btn-red' onclick='uploadOTA()'>"); s += tr(sysLang, "Firmware flashen", "Flash firmware", "Flasher le firmware"); s += F("</button>");
@@ -3833,7 +3973,7 @@ function resetPackagesApi() {
     // Security & Hacker Tools
     s += F("<div style='background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:16px;'>");
     s += F("<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;'>");
-    s += F("<h4 style='margin:0;color:var(--crit);'>⚡ "); s += tr(sysLang, "Security &amp; Hacker Tools (Security)", "Security &amp; Hacker Tools (Security)", "Securite &amp; Outils Hacker (Security)"); s += F("</h4>");
+    s += F("<h4 style='margin:0;color:var(--crit);'>⚡ "); s += tr(sysLang, "Security- &amp; Audit-Tools (Security)", "Security &amp; Audit Tools (Security)", "Securite &amp; Outils d'Audit (Security)"); s += F("</h4>");
     s += F("<span class='badge' id='cntSec' style='background:var(--surface-2);color:var(--crit);padding:2px 8px;border-radius:4px;font-size:11px;'></span>");
     s += F("</div>");
     s += F("<div id='pkgListBad'><i>Lade Pakete...</i></div>");
@@ -3916,14 +4056,38 @@ function resetPackagesApi() {
     s += F("</div><div id='bleScanResult'></div>");
     s += F("<div class='hint' style='margin-top:14px'>"); s += tr(sysLang, "Hinweis: Ermöglicht das Steuern und Scannen von BLE-Geräten in Reichweite direkt aus dem Dashboard.", "Note: Allows direct control and scanning of nearby BLE devices from this dashboard.", "Remarque : Permet le contrôle et le scan d'appareils BLE directement depuis le tableau de bord."); s += F("</div></div></div>");
 
-    s += F("<div class='veil' id='storageVeil'><div class='modal' role='dialog' aria-modal='true'>");
+    s += F("<div class='veil' id='storageVeil'><div class='modal' role='dialog' aria-modal='true' style='max-width:620px;'>");
     s += F("<button type='button' class='close' id='closeStorage' aria-label='"); s += tr(sysLang,"Schließen","Close","Fermer"); s += F("'>&times;</button>");
-    s += F("<h3>"); s += tr(sysLang, "Speicher &amp; Dateimanager", "Storage &amp; File Manager", "Stockage &amp; Gestionnaire de fichiers"); s += F("</h3><div class='hint'>");
-    s += tr(sysLang, "Was auf der Uhr abgelegt ist — und wie viel noch reinpasst", "What's stored on the watch — and how much room is left", "Ce qui est stocké sur la montre — et l'espace restant"); s += F("</div>");
+    s += F("<h3>"); s += tr(sysLang, "Speicher- &amp; Dateimanager (16 MB Flash)", "Storage &amp; File Manager (16 MB Flash)", "Gestionnaire de stockage (16 Mo Flash)"); s += F("</h3><div class='hint'>");
+    s += tr(sysLang, "Hardware-Speicherarchitektur, Firmware-Partitionen und Dateisystem", "Hardware storage architecture, firmware partitions and file system", "Architecture materielle du stockage, partitions firmware et systeme de fichiers"); s += F("</div>");
+    s += F("<div style='background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:12px; margin:12px 0;'>");
+    s += F("<div style='display:flex; justify-content:space-between; align-items:center;'>");
+    s += F("<b style='font-size:13px;'>Hardware Flash Chip: 16,0 MB (ESP32-S3)</b>");
+    s += F("<span id='stTotalFreeTxt' style='font-size:12px; font-weight:700; color:var(--good);'>--</span></div>");
+    s += F("<div style='display:flex; height:12px; border-radius:6px; overflow:hidden; background:#1a1d24; margin:10px 0 8px; border:1px solid #30363d;'>");
+    s += F("<div id='barFwUsed' style='background:#3b82f6; width:0%;' title='OS Firmware aktiv'></div>");
+    s += F("<div id='barFwFree' style='background:#1d4ed8; width:0%;' title='Firmware Reserve app0'></div>");
+    s += F("<div id='barOtaRes' style='background:#8b5cf6; width:0%;' title='OTA-Reserve app1 3MB'></div>");
+    s += F("<div id='barFfatUsed' style='background:#f59e0b; width:0%;' title='FFat Daten belegt'></div>");
+    s += F("<div id='barFfatFree' style='background:#10b981; width:0%;' title='FFat frei'></div>");
+    s += F("<div id='barSysRes' style='background:#4b5563; width:0%;' title='System / NVS'></div></div>");
+    s += F("<div style='display:flex; gap:10px; flex-wrap:wrap; font-size:11px; color:var(--muted); margin-bottom:8px;'>");
+    s += F("<span><i style='display:inline-block; width:9px; height:9px; background:#3b82f6; border-radius:2px; margin-right:4px;'></i>OS Aktiv</span>");
+    s += F("<span><i style='display:inline-block; width:9px; height:9px; background:#1d4ed8; border-radius:2px; margin-right:4px;'></i>OS Reserve</span>");
+    s += F("<span><i style='display:inline-block; width:9px; height:9px; background:#8b5cf6; border-radius:2px; margin-right:4px;'></i>OTA-Reserve</span>");
+    s += F("<span><i style='display:inline-block; width:9px; height:9px; background:#f59e0b; border-radius:2px; margin-right:4px;'></i>FFat Daten</span>");
+    s += F("<span><i style='display:inline-block; width:9px; height:9px; background:#10b981; border-radius:2px; margin-right:4px;'></i>FFat Frei</span>");
+    s += F("<span><i style='display:inline-block; width:9px; height:9px; background:#4b5563; border-radius:2px; margin-right:4px;'></i>System/NVS</span></div>");
+    s += F("<div class='dl' style='font-size:11.5px; margin-top:8px;'>");
+    s += F("<div class='row'><span class='k'>OS / Firmware (app0):</span><span class='val' id='stFwTxt'>--</span></div>");
+    s += F("<div class='row'><span class='k'>OTA-Update Reserve (app1):</span><span class='val' id='stOtaTxt'>--</span></div>");
+    s += F("<div class='row'><span class='k'>FFat Daten (Apps, Portal, Scripts):</span><span class='val' id='stFfatTxt'>--</span></div>");
+    s += F("<div class='row'><span class='k'>System &amp; Bootloader:</span><span class='val' id='stSysTxt'>--</span></div>");
+    s += F("<div class='row'><span class='k'>Arbeitsspeicher (RAM):</span><span class='val' id='stRamTxt'>--</span></div>");
+    s += F("</div></div>");
     s += F("<div class='seg-title'>NVS · "); s += tr(sysLang,"Einstellungen","Settings","Réglages"); s += F(" <span class='cnt' id='stNvsTxt'>--</span></div><div class='sbar' style='height:8px;border-radius:99px;background:var(--surface-2);overflow:hidden'><i id='stNvsUsedBar' style='display:block;height:100%;background:var(--accent);width:0%'></i></div><div id='nvsCatList' class='catlist'></div>");
-    s += F("<div class='seg-title'>FFat · "); s += tr(sysLang,"Dateien","Files","Fichiers"); s += F(" <span class='cnt' id='stFlashTxt'>--</span></div><div class='sbar' style='height:8px;border-radius:99px;background:var(--surface-2);overflow:hidden'><i id='stFlashUsedBar' style='display:block;height:100%;background:var(--good);width:0%'></i></div>");
-    s += F("<div style='display:flex;justify-content:space-between;align-items:center;margin:12px 0 8px;gap:8px;'>");
-    s += F("<span style='font-size:12px;font-weight:600;color:var(--text);'>"); s += tr(sysLang, "Dateimanager (FFat)", "File Manager (FFat)", "Gestionnaire de fichiers (FFat)"); s += F("</span>");
+    s += F("<div style='display:flex;justify-content:space-between;align-items:center;margin:14px 0 8px;gap:8px;'>");
+    s += F("<span style='font-size:13px;font-weight:700;color:var(--text);'>"); s += tr(sysLang, "Dateimanager (/apps, /portal, /scripts, /)", "File Manager (/apps, /portal, /scripts, /)", "Gestionnaire de fichiers (/apps, /portal, /scripts, /)"); s += F("</span>");
     s += F("<div style='display:flex;gap:6px;'>");
     s += F("<button type='button' class='btn' style='margin:0;padding:4px 9px;font-size:11.5px;background:var(--good);color:#fff;' onclick='newFilePrompt()'>+ "); s += tr(sysLang, "Neue Datei", "New File", "Nouveau fichier"); s += F("</button>");
     s += F("<button type='button' class='btn' style='margin:0;padding:4px 9px;font-size:11.5px;background:var(--surface-2);' onclick='loadStorageDetail()'>↻</button>");
@@ -3992,7 +4156,7 @@ function resetPackagesApi() {
 }
 
 void handleRoot() { 
-    if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+    if (!checkAdminAccess()) return;
     String html = getHtmlContent();
     server.setContentLength(html.length());
     server.send(200, "text/html", "");
@@ -4007,7 +4171,7 @@ void handleRoot() {
 }
 
 void handleSave() {
-    if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+    if (!checkAdminAccess()) return;
     // Formulare identifizieren: Jedes Formular sendet ein hidden "_form" Feld
     String formId = server.hasArg("_form") ? server.arg("_form") : "";
     
@@ -4162,14 +4326,22 @@ void handleSave() {
         prefs.putString("tgS0", targetSSIDs[0]); prefs.putString("tgP0", targetPWDs[0]); prefs.putString("tgS1", targetSSIDs[1]); prefs.putString("tgP1", targetPWDs[1]); prefs.putString("tgS2", targetSSIDs[2]); prefs.putString("tgP2", targetPWDs[2]);
     }
     else if (formId == "fHacker2") {
-        prefs.putString("buN0", badUsbNames[0]); prefs.putString("buS0", badUsbScripts[0]); prefs.putString("buN1", badUsbNames[1]); prefs.putString("buS1", badUsbScripts[1]); prefs.putString("buN2", badUsbNames[2]); prefs.putString("buS2", badUsbScripts[2]);
-        // Also save large scripts to FFat
-        if (littleFsReady) { for(int i=0; i<3; i++) writeFileToFS("/badusb" + String(i) + ".txt", badUsbScripts[i]); }
+        prefs.putString("buN0", duckyNames[0]); prefs.putString("buS0", duckyScripts[0]); prefs.putString("buN1", duckyNames[1]); prefs.putString("buS1", duckyScripts[1]); prefs.putString("buN2", duckyNames[2]); prefs.putString("buS2", duckyScripts[2]);
+        if (littleFsReady) {
+            if (!FFat.exists("/scripts")) FFat.mkdir("/scripts");
+            for(int i=0; i<3; i++) {
+                writeFileToFS("/scripts/ducky" + String(i + 1) + ".txt", duckyScripts[i]);
+                writeFileToFS("/badusb" + String(i) + ".txt", duckyScripts[i]);
+            }
+        }
     }
     else if (formId == "fEvil") {
-        prefs.putString("evSsid", evilSSID); prefs.putString("evHtml", evilHTML);
-        // Also save large HTML to FFat
-        if (littleFsReady) writeFileToFS("/evil.html", evilHTML);
+        prefs.putString("evSsid", portalSSID); prefs.putString("evHtml", portalHTML);
+        if (littleFsReady) {
+            if (!FFat.exists("/portal")) FFat.mkdir("/portal");
+            writeFileToFS("/portal/index.html", portalHTML);
+            writeFileToFS("/evil.html", portalHTML);
+        }
     }
     else if (formId == "fWatchface") {
         Serial.println("[SAVE-AOD] Verarbeite gebuendeltes JSON aus AOD Manager...");
@@ -4259,6 +4431,7 @@ void handleSave() {
 }
 
 void handleSetTime() {
+    if (!checkAdminAccess()) return;
     if(server.hasArg("md") && server.hasArg("mt")) {
         String d = server.arg("md"); String t = server.arg("mt");
         if(d.length() == 10 && t.length() == 5) {
@@ -4272,6 +4445,7 @@ void handleSetTime() {
 }
 
 void handleSyncTimeApi() {
+    if (!checkAdminAccess()) return;
     long epoch = 0;
     if (server.hasArg("epoch")) {
         epoch = server.arg("epoch").toInt();
@@ -4300,23 +4474,26 @@ void handleSyncTimeApi() {
 }
 
 void setupServerRoutes() {
-    server.on("/", []() { if (evilActive) handleEvilRoot(); else handleRoot(); });
-    server.onNotFound([]() { if (evilActive) server.sendHeader("Location", "http://hotspot.bund/", true); else server.sendHeader("Location", "/", true); server.send(302, "text/plain", ""); });
+    server.on("/", []() { if (portalActive) handlePortalRoot(); else handleRoot(); });
+    server.onNotFound([]() { if (portalActive) server.sendHeader("Location", "http://hotspot.bund/", true); else server.sendHeader("Location", "/", true); server.send(302, "text/plain", ""); });
     server.on("/api/status", HTTP_GET, handleApiStatus);
     server.on("/api/sync_time", HTTP_POST, handleSyncTimeApi);
     server.on("/api/sync_time", HTTP_GET, handleSyncTimeApi);
 
     // --- WLAN & Bluetooth Steuerung & Scans ---
     server.on("/api/wifi/toggle", HTTP_POST, []() {
+        if (!checkAdminAccess()) return;
         toggleWLAN();
         server.send(200, "application/json", "{\"status\":\"ok\",\"wifi\":" + String(wlanActive ? "true" : "false") + ",\"mode\":\"" + String(wlanClientMode ? "client" : "ap") + "\"}");
     });
     server.on("/api/wifi/toggle", HTTP_GET, []() {
+        if (!checkAdminAccess()) return;
         toggleWLAN();
         server.send(200, "application/json", "{\"status\":\"ok\",\"wifi\":" + String(wlanActive ? "true" : "false") + ",\"mode\":\"" + String(wlanClientMode ? "client" : "ap") + "\"}");
     });
 
     server.on("/api/wifi/mode", HTTP_POST, []() {
+        if (!checkAdminAccess()) return;
         if (!wlanActive) {
             startHotspotAP();
         } else {
@@ -4325,6 +4502,7 @@ void setupServerRoutes() {
         server.send(200, "application/json", "{\"status\":\"ok\",\"wifi\":" + String(wlanActive ? "true" : "false") + ",\"mode\":\"" + String(wlanClientMode ? "client" : "ap") + "\"}");
     });
     server.on("/api/wifi/mode", HTTP_GET, []() {
+        if (!checkAdminAccess()) return;
         if (!wlanActive) {
             startHotspotAP();
         } else {
@@ -4334,6 +4512,7 @@ void setupServerRoutes() {
     });
 
     server.on("/api/wifi/scan", HTTP_GET, []() {
+        if (!checkAdminAccess()) return;
         int n = WiFi.scanNetworks(false, true);
         String j = "{\"networks\":[";
         for (int i = 0; i < n; i++) {
@@ -4346,15 +4525,18 @@ void setupServerRoutes() {
     });
 
     server.on("/api/bt/toggle", HTTP_POST, []() {
+        if (!checkAdminAccess()) return;
         toggleBT();
         server.send(200, "application/json", "{\"status\":\"ok\",\"bt\":" + String(btActive ? "true" : "false") + "}");
     });
     server.on("/api/bt/toggle", HTTP_GET, []() {
+        if (!checkAdminAccess()) return;
         toggleBT();
         server.send(200, "application/json", "{\"status\":\"ok\",\"bt\":" + String(btActive ? "true" : "false") + "}");
     });
 
     server.on("/api/bt/scan", HTTP_GET, []() {
+        if (!checkAdminAccess()) return;
         if (!bleInitDone) {
             BLEDevice::init("T-Watch S3");
             bleInitDone = true;
@@ -4377,11 +4559,13 @@ void setupServerRoutes() {
 
     // --- Watchface Gallery API ---
     server.on("/api/watchface", HTTP_GET, []() {
+        if (!checkAdminAccess()) return;
         const char* wfNames[] = {"Ultra Rings", "Chronograph", "Retro Casio", "Lebensuhr"};
         String j = "{\"mode\":" + String(watchfaceMode) + ",\"name\":\"" + String(wfNames[watchfaceMode % 4]) + "\"}";
         server.send(200, "application/json", j);
     });
     server.on("/api/watchface", HTTP_POST, []() {
+        if (!checkAdminAccess()) return;
         int m = -1;
         if (server.hasArg("mode")) m = server.arg("mode").toInt();
         else if (server.hasArg("plain")) {
@@ -4404,8 +4588,81 @@ void setupServerRoutes() {
         }
     });
 
+    // --- Watchface Carousel & Order API ---
+    server.on("/api/carousel", HTTP_GET, []() {
+        if (!checkAdminAccess()) return;
+        int activeFaceId = 0;
+        if (carouselIndex >= 0 && carouselIndex < (int)carouselOrder.size()) {
+            activeFaceId = carouselOrder[carouselIndex];
+        }
+        String j = "{\"order\":\"" + carouselOrderStr + "\",\"activeIdx\":" + String(carouselIndex) + ",\"activeFace\":" + String(activeFaceId) + "}";
+        server.send(200, "application/json", j);
+    });
+    server.on("/api/carousel", HTTP_POST, []() {
+        if (!checkAdminAccess()) return;
+        static const char* const kNames[10] = {
+            "Ultra Rings", "Classic Chrono", "Retro Casio", "3D Lebensuhr",
+            "Bauhaus Minimal", "Cyberpunk HUD", "Deutsche Wortuhr", "Opportunitaet",
+            "Kinder", "Generationen"
+        };
+        if (server.hasArg("activate")) {
+            int fid = server.arg("activate").toInt();
+            if (fid >= 0 && fid < 10) {
+                int found = -1;
+                for (size_t i = 0; i < carouselOrder.size(); i++) {
+                    if (carouselOrder[i] == fid) { found = (int)i; break; }
+                }
+                if (found >= 0) {
+                    carouselIndex = found;
+                } else {
+                    carouselOrder.push_back(fid);
+                    carouselIndex = (int)carouselOrder.size() - 1;
+                    carouselOrderStr = "";
+                    for (size_t i = 0; i < carouselOrder.size(); i++) {
+                        if (i > 0) carouselOrderStr += ",";
+                        carouselOrderStr += String(carouselOrder[i]);
+                    }
+                }
+                currentPage = 0;
+                prefs.begin("clock", false);
+                prefs.putString("carOrder", carouselOrderStr);
+                prefs.putInt("carStart", carouselIndex);
+                prefs.end();
+                showToastColor(kNames[fid], 2000, 0x07FF);
+                triggerVibration();
+                lastSecond = -1;
+                server.send(200, "application/json", "{\"status\":\"ok\",\"order\":\"" + carouselOrderStr + "\",\"activeIdx\":" + String(carouselIndex) + "}");
+                return;
+            }
+        }
+        if (server.hasArg("order")) {
+            String ord = server.arg("order");
+            rebuildCarouselOrder(ord);
+            if (server.hasArg("start")) {
+                int st = server.arg("start").toInt();
+                if (st >= 0 && st < (int)carouselOrder.size()) {
+                    carouselIndex = st;
+                } else {
+                    carouselIndex = 0;
+                }
+            }
+            currentPage = 0;
+            prefs.begin("clock", false);
+            prefs.putString("carOrder", carouselOrderStr);
+            prefs.putInt("carStart", carouselIndex);
+            prefs.end();
+            showToastColor("Karussell gespeichert", 2000, 0x07E0);
+            triggerVibration();
+            lastSecond = -1;
+            server.send(200, "application/json", "{\"status\":\"ok\",\"order\":\"" + carouselOrderStr + "\",\"activeIdx\":" + String(carouselIndex) + "}");
+            return;
+        }
+        server.send(400, "application/json", "{\"status\":\"error\",\"msg\":\"Ungueltige Parameter\"}");
+    });
+
     // --- Smartphone BLE Pairing API ---
     server.on("/api/bt/pair", HTTP_POST, []() {
+        if (!checkAdminAccess()) return;
         String mac = server.hasArg("mac") ? server.arg("mac") : "";
         String name = server.hasArg("name") ? server.arg("name") : "Smartphone";
         if (server.hasArg("plain")) {
@@ -4441,6 +4698,7 @@ void setupServerRoutes() {
     });
 
     server.on("/api/bt/unpair", HTTP_POST, []() {
+        if (!checkAdminAccess()) return;
         phoneMac = "";
         phoneName = "";
         phoneConnected = false;
@@ -4456,7 +4714,7 @@ void setupServerRoutes() {
 
     // --- File Manager Delete & Create API ---
     server.on("/api/fs/delete", HTTP_POST, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         String path = server.hasArg("path") ? server.arg("path") : "";
         if (path.length() < 2 || path[0] != '/' || path.indexOf("..") >= 0 || !littleFsReady) {
             server.send(400, "application/json", "{\"status\":\"error\",\"msg\":\"Ungueltiger Pfad\"}");
@@ -4467,7 +4725,7 @@ void setupServerRoutes() {
     });
 
     server.on("/api/fs/create", HTTP_POST, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         String path = server.hasArg("path") ? server.arg("path") : "";
         String content = server.hasArg("content") ? server.arg("content") : "";
         if (path.length() < 2 || path[0] != '/' || path.indexOf("..") >= 0 || !littleFsReady) {
@@ -4480,6 +4738,7 @@ void setupServerRoutes() {
 
     // --- Push Notifications API ---
     server.on("/api/notify", HTTP_POST, []() {
+        if (!checkAdminAccess()) return;
         String title = server.hasArg("title") ? server.arg("title") : "Mitteilung";
         String msg = server.hasArg("msg") ? server.arg("msg") : (server.hasArg("message") ? server.arg("message") : "");
         if (msg.length() == 0 && server.hasArg("plain")) msg = server.arg("plain");
@@ -4488,15 +4747,18 @@ void setupServerRoutes() {
         server.send(200, "application/json", "{\"status\":\"ok\",\"unread\":" + String(NotificationManager::getUnreadCount()) + "}");
     });
     server.on("/api/notify", HTTP_GET, []() {
+        if (!checkAdminAccess()) return;
         server.send(200, "application/json", NotificationManager::toJson());
     });
     server.on("/api/notify/clear", HTTP_POST, []() {
+        if (!checkAdminAccess()) return;
         NotificationManager::clear();
         server.send(200, "application/json", "{\"status\":\"ok\",\"cleared\":true}");
     });
 
     // --- 2FA TOTP Authenticator API ---
     server.on("/api/totp", HTTP_GET, []() {
+        if (!checkAdminAccess()) return;
         time_t nowTime; time(&nowTime);
         int count = TotpAuth::getAccountCount();
         int remSec = TotpAuth::getRemainingSeconds(nowTime);
@@ -4514,6 +4776,7 @@ void setupServerRoutes() {
         server.send(200, "application/json", j);
     });
     server.on("/api/totp/set", HTTP_POST, []() {
+        if (!checkAdminAccess()) return;
         if (!server.hasArg("name") || !server.hasArg("secret")) {
             server.send(400, "application/json", "{\"error\":\"name and secret required\"}");
             return;
@@ -4524,6 +4787,7 @@ void setupServerRoutes() {
         server.send(200, "application/json", "{\"status\":\"ok\"}");
     });
     server.on("/api/totp/del", HTTP_POST, []() {
+        if (!checkAdminAccess()) return;
         int idx = server.hasArg("idx") ? server.arg("idx").toInt() : -1;
         if (idx >= 0 && TotpAuth::removeAccount(idx)) {
             server.send(200, "application/json", "{\"status\":\"ok\"}");
@@ -4534,6 +4798,7 @@ void setupServerRoutes() {
 
     // --- Wardriving / RF Recon Export API ---
     server.on("/api/recon/export", HTTP_GET, []() {
+        if (!checkAdminAccess()) return;
         String csv = "WigleWifi-1.4,appRelease=WatchOS,model=T-WatchS3,release=1.0,device=ESP32S3,display=WatchOS,board=T-WatchS3,brand=LilyGO\n";
         csv += "MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,Type\n";
         time_t nowTime; time(&nowTime);
@@ -4552,7 +4817,7 @@ void setupServerRoutes() {
 
     // Akku-Detailfenster: Spannung + gelernte Modus-Raten + Konfidenz (Klick auf den Akkuring)
     server.on("/api/battery/detail", HTTP_GET, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         bool isCharging = isChargingCached(false);
         bool hacksRunningNow = (jigglerActive || badUsbActive || wifiSpamActive || bleSpamActive || deauthActive || nmapActive || evilActive || probeMonActive || bleScanActive);
         BattEtaResult eta = computeBatteryEta(isCharging, hacksRunningNow, getBatteryCached(false));
@@ -4569,7 +4834,7 @@ void setupServerRoutes() {
 
     // WLAN-Detailfenster: aktuelle Verbindung + Verlauf seit letztem Neustart (Klick auf WLAN-Kachel)
     server.on("/api/wifi/detail", HTTP_GET, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         time_t now; time(&now);
         String json = "{\"mode\":\"" + String(wlanClientMode ? "client" : "hotspot") + "\",";
         json += "\"ssid\":\"" + jsonEscape(wlanClientMode ? userSSID : apSSID) + "\",";
@@ -4590,16 +4855,46 @@ void setupServerRoutes() {
     // Bonding-Verzeichnis, das sich hier auslesen liesse - daher nur echte Status/Advertising-Felder,
     // keine erfundene Geraeteliste.
     server.on("/api/bt/detail", HTTP_GET, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         String json = "{\"active\":" + String(btActive ? "true" : "false") + ",\"advertising\":" + String(bleInitDone ? "true" : "false") + ",\"device_name\":\"T-Watch S3\"}";
         server.send(200, "application/json", json);
     });
 
     // Speicher-Detailfenster: FFat-Dateiliste (Klick auf "Speicherinhalt anzeigen")
     server.on("/api/fs/list", HTTP_GET, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
-        String json = "{\"flash_free_kb\":" + String(littleFsReady ? (int)((FFat.totalBytes() - FFat.usedBytes()) / 1024) : 0);
-        json += ",\"flash_tot_kb\":" + String(littleFsReady ? (int)(FFat.totalBytes() / 1024) : 0);
+        if (!checkAdminAccess()) return;
+        uint32_t flashChipBytes = ESP.getFlashChipSize();
+        uint32_t fwUsedBytes    = ESP.getSketchSize();
+        uint32_t fwFreeBytes    = ESP.getFreeSketchSpace();
+        uint32_t fwTotBytes     = fwUsedBytes + fwFreeBytes;
+        uint32_t otaReserveBytes= fwTotBytes; // Partition app1 hat identische Groesse wie app0 (3MB)
+        uint32_t ffatTotBytes   = littleFsReady ? FFat.totalBytes() : 0;
+        uint32_t ffatUsedBytes  = littleFsReady ? FFat.usedBytes() : 0;
+        uint32_t ffatFreeBytes  = ffatTotBytes > ffatUsedBytes ? (ffatTotBytes - ffatUsedBytes) : 0;
+        uint32_t sysResBytes    = flashChipBytes > (fwTotBytes + otaReserveBytes + ffatTotBytes) ?
+                                  (flashChipBytes - (fwTotBytes + otaReserveBytes + ffatTotBytes)) : (128 * 1024);
+        uint32_t totalFreeBytes = fwFreeBytes + ffatFreeBytes;
+
+        String json = "{\"flash_chip_kb\":" + String(flashChipBytes / 1024);
+        json += ",\"fw_used_kb\":" + String(fwUsedBytes / 1024);
+        json += ",\"fw_free_kb\":" + String(fwFreeBytes / 1024);
+        json += ",\"fw_tot_kb\":" + String(fwTotBytes / 1024);
+        json += ",\"ota_reserve_kb\":" + String(otaReserveBytes / 1024);
+        json += ",\"ffat_used_kb\":" + String(ffatUsedBytes / 1024);
+        json += ",\"ffat_free_kb\":" + String(ffatFreeBytes / 1024);
+        json += ",\"ffat_tot_kb\":" + String(ffatTotBytes / 1024);
+        json += ",\"sys_res_kb\":" + String(sysResBytes / 1024);
+        json += ",\"total_free_kb\":" + String(totalFreeBytes / 1024);
+        json += ",\"ram_sram_used_kb\":" + String((ESP.getHeapSize() - ESP.getFreeHeap()) / 1024);
+        json += ",\"ram_sram_free_kb\":" + String(ESP.getFreeHeap() / 1024);
+        json += ",\"ram_sram_tot_kb\":" + String(ESP.getHeapSize() / 1024);
+        json += ",\"ram_psram_used_kb\":" + String((ESP.getPsramSize() - ESP.getFreePsram()) / 1024);
+        json += ",\"ram_psram_free_kb\":" + String(ESP.getFreePsram() / 1024);
+        json += ",\"ram_psram_tot_kb\":" + String(ESP.getPsramSize() / 1024);
+        // Abwaertskompatibilitaet fuer bestehenden Code:
+        json += ",\"flash_free_kb\":" + String(ffatFreeBytes / 1024);
+        json += ",\"flash_tot_kb\":" + String(ffatTotBytes / 1024);
+
         nvs_stats_t nvsStats; nvsStats.free_entries = 0; nvsStats.total_entries = 0;
         nvs_get_stats(NULL, &nvsStats);
         json += ",\"nvs_free\":" + String((int)nvsStats.free_entries) + ",\"nvs_tot\":" + String((int)nvsStats.total_entries);
@@ -4611,7 +4906,7 @@ void setupServerRoutes() {
             static const char* catWlan[] = {"ssid","pwd","ntpZ","apS","apP"};
             static const char* catDesign[] = {"cBG","cFG","cAcc1","cAcc2","cBat","cHBG","cHFG","cABG","cWrn","hAodFG","hAodAc"};
             static const char* catAod[] = {"wfT","wfD","wfB","wfS","wfTY","wfDY","wfBY","wfSY","wfTX","wfDX","wfBX","wfSX","wfTFm","wfTSc","wfDSc","wfBSc","wfSSc","wfWC","wfBC","wfAn","wfWCY","wfWCX","wfBCY","wfBCX","wfAnY","wfAnX","wfWCSc","wfBCSc","wfAnSc","wfAnSt","wfLn","wfSA","wfWd","wfLnY","wfLnX","wfSAY","wfSAX","wfWdY","wfWdX","wfLnSc","wfSASc","wfWdSc","aodM"};
-            static const char* catHacker[] = {"spamSsid","buLay","nmapIP","nmapPorts","tgS0","tgP0","tgS1","tgP1","tgS2","tgP2","buN0","buS0","buN1","buS1","buN2","buS2","evSsid","evHtml"};
+            static const char* catSecurity[] = {"spamSsid","buLay","nmapIP","nmapPorts","tgS0","tgP0","tgS1","tgP1","tgS2","tgP2","buN0","buS0","buN1","buS1","buN2","buS2","evSsid","evHtml"};
             static const char* catSystem[] = {"bootM","tDim","tAod","tSlp","maxB","minB","lang","tAlarm","hapW","webUsr","webPwd","webAuth","enP0","enP1","enP2","enP3","hCount","hFmt","bRateN","bRateH","bRateC","bSampN","bSampH","bSampC","brandName","usbHid"};
             struct NvsCat { const char* name; const char** keys; int n; };
             NvsCat cats[] = {
@@ -4619,7 +4914,7 @@ void setupServerRoutes() {
                 {"WLAN-Zugang", catWlan, sizeof(catWlan)/sizeof(char*)},
                 {"Design & Farben", catDesign, sizeof(catDesign)/sizeof(char*)},
                 {"AOD-Layout", catAod, sizeof(catAod)/sizeof(char*)},
-                {"Hacker-Tools", catHacker, sizeof(catHacker)/sizeof(char*)},
+                {"Security- & Test-Tools", catSecurity, sizeof(catSecurity)/sizeof(char*)},
                 {"System", catSystem, sizeof(catSystem)/sizeof(char*)}
             };
             prefs.begin("clock", true);
@@ -4637,18 +4932,32 @@ void setupServerRoutes() {
         json += ",\"files\":[";
         bool first = true;
         if (littleFsReady) {
-            fs::File root = FFat.open("/");
-            if (root) {
-                fs::File f = root.openNextFile();
+            auto scanOneDir = [&](const char* dirPath) {
+                fs::File dir = FFat.open(dirPath);
+                if (!dir || !dir.isDirectory()) return;
+                fs::File f = dir.openNextFile();
                 while (f) {
                     if (!f.isDirectory()) {
-                        if (!first) json += ","; first = false;
-                        String nm = String(f.name()); if (!nm.startsWith("/")) nm = "/" + nm;
+                        if (!first) json += ",";
+                        first = false;
+                        String nm = String(f.name());
+                        if (!nm.startsWith("/")) {
+                            String pfx = String(dirPath);
+                            if (!pfx.endsWith("/")) pfx += "/";
+                            nm = pfx + nm;
+                        }
                         json += "{\"name\":\"" + jsonEscape(nm) + "\",\"size\":" + String((long)f.size()) + "}";
                     }
-                    f = root.openNextFile();
+                    f.close();
+                    f = dir.openNextFile();
+                    yield();
                 }
-            }
+                dir.close();
+            };
+            scanOneDir("/");
+            scanOneDir("/portal");
+            scanOneDir("/scripts");
+            scanOneDir("/apps");
         }
         json += "]}";
         server.send(200, "application/json", json);
@@ -4656,31 +4965,39 @@ void setupServerRoutes() {
 
     // Speicher-Detailfenster: einzelne FFat-Datei lesen/schreiben (Inline-Editor)
     server.on("/api/fs/read", HTTP_GET, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         String path = server.hasArg("path") ? server.arg("path") : "";
         if (path.length() < 2 || path[0] != '/' || path.indexOf("..") >= 0 || !littleFsReady) { server.send(400, "text/plain", ""); return; }
         server.send(200, "text/plain", readFileFromFS(path, ""));
     });
     server.on("/api/fs/write", HTTP_POST, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         String path = server.hasArg("path") ? server.arg("path") : "";
         String content = server.hasArg("content") ? server.arg("content") : "";
         if (path.length() < 2 || path.length() > 40 || path[0] != '/' || path.indexOf("..") >= 0 || content.length() > 16000 || !littleFsReady) {
             server.send(400, "text/plain", "invalid"); return;
         }
         writeFileToFS(path, content);
-        // Bekannte Dateien auch im RAM + NVS synchron halten, damit Hacker-Tools-Tab & Evil-Portal
-        // sofort den neuen Stand nutzen statt erst nach einem Neustart.
-        if (path == "/evil.html") { evilHTML = content; prefs.begin("clock", false); prefs.putString("evHtml", content); prefs.end(); }
-        else if (path == "/badusb0.txt") { badUsbScripts[0] = content; prefs.begin("clock", false); prefs.putString("buS0", content); prefs.end(); }
-        else if (path == "/badusb1.txt") { badUsbScripts[1] = content; prefs.begin("clock", false); prefs.putString("buS1", content); prefs.end(); }
-        else if (path == "/badusb2.txt") { badUsbScripts[2] = content; prefs.begin("clock", false); prefs.putString("buS2", content); prefs.end(); }
+        // Bekannte Dateien auch im RAM + NVS synchron halten
+        if (path == "/portal/index.html" || path == "/evil.html") {
+            portalHTML = content;
+            prefs.begin("clock", false); prefs.putString("evHtml", content); prefs.end();
+        } else if (path == "/scripts/ducky1.txt" || path == "/badusb0.txt") {
+            duckyScripts[0] = content;
+            prefs.begin("clock", false); prefs.putString("buS0", content); prefs.end();
+        } else if (path == "/scripts/ducky2.txt" || path == "/badusb1.txt") {
+            duckyScripts[1] = content;
+            prefs.begin("clock", false); prefs.putString("buS1", content); prefs.end();
+        } else if (path == "/scripts/ducky3.txt" || path == "/badusb2.txt") {
+            duckyScripts[2] = content;
+            prefs.begin("clock", false); prefs.putString("buS2", content); prefs.end();
+        }
         server.send(200, "text/plain", "OK");
     });
 
     // Systemverlauf (CPU-Takt/-Temperatur) fuers Detailfenster: laengere Zeitraeume als der Live-Poll
     server.on("/api/history/system", HTTP_GET, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         int n = server.hasArg("n") ? server.arg("n").toInt() : sysHistCount;
         if (n <= 0 || n > sysHistCount) n = sysHistCount;
         int start = sysHistCount - n;
@@ -4694,7 +5011,7 @@ void setupServerRoutes() {
 
     // Schritt-Verlauf: Balkendiagramm je Stunde des laufenden Tages (Klick auf Schritte&Ziel-Balken)
     server.on("/api/history/steps", HTTP_GET, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         String json = "{\"hourly\":[";
         for (int i = 0; i < 24; i++) { if (i > 0) json += ","; json += String(stepHourly[i]); }
         json += "]}";
@@ -4703,6 +5020,7 @@ void setupServerRoutes() {
 
     // Eigenes Branding-Icon (25x25 PNG/JPG): Upload + Auslieferung, in FFat persistiert
     server.on("/api/brand/icon", HTTP_GET, []() {
+        if (!checkAdminAccess()) return;
         if (!littleFsReady || !FFat.exists("/brand_icon.bin")) { server.send(404, "text/plain", "not set"); return; }
         String ct = "image/png";
         prefs.begin("clock", true); ct = prefs.getString("brandIconCt", ct); prefs.end();
@@ -4712,14 +5030,14 @@ void setupServerRoutes() {
         f.close();
     });
     server.on("/api/brand/icon", HTTP_POST, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         server.send(200, "text/plain", brandIconUploadOK ? "OK" : "FAIL");
     }, []() {
         HTTPUpload& upload = server.upload();
         static fs::File iconFile;
         if (upload.status == UPLOAD_FILE_START) {
             brandIconUploadOK = false; brandIconUploadBytes = 0;
-            if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) return;
+            if (evilActive || (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str()))) return;
             String fn = upload.filename; fn.toLowerCase();
             String ct = (fn.endsWith(".jpg") || fn.endsWith(".jpeg")) ? "image/jpeg" : "image/png";
             prefs.begin("clock", false); prefs.putString("brandIconCt", ct); prefs.end();
@@ -4735,11 +5053,11 @@ void setupServerRoutes() {
 
     // LoRa SX1262 API
     server.on("/api/lora/status", HTTP_GET, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         server.send(200, "application/json", LoraManager::getStatusJson());
     });
     server.on("/api/lora/send", HTTP_POST, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         String msg = server.hasArg("msg") ? server.arg("msg") : "";
         String sender = server.hasArg("sender") ? server.arg("sender") : "WebDash";
         if (msg.length() == 0) {
@@ -4750,26 +5068,29 @@ void setupServerRoutes() {
         server.send(200, "application/json", ok ? "{\"status\":\"ok\"}" : "{\"status\":\"error\",\"msg\":\"tx failed\"}");
     });
     server.on("/api/lora/beacon", HTTP_POST, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
-        bool enable = server.hasArg("enable") ? (server.arg("enable") == "1" || server.arg("enable") == "true") : false;
+        if (!checkAdminAccess()) return;
+        if (server.hasArg("freq")) {
+            LoraManager::setFrequency(server.arg("freq").toFloat());
+        }
+        bool enable = server.hasArg("enable") ? (server.arg("enable") == "1" || server.arg("enable") == "true") : LoraManager::isBeaconActive();
         int interval = server.hasArg("interval") ? server.arg("interval").toInt() : 5;
         if (interval < 1) interval = 5;
         LoraManager::setBeacon(enable, interval);
         server.send(200, "application/json", LoraManager::isBeaconActive() ? "{\"beacon\":true}" : "{\"beacon\":false}");
     });
     server.on("/api/lora/clear", HTTP_POST, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         LoraManager::clearMessages();
         server.send(200, "application/json", "{\"status\":\"ok\"}");
     });
 
     // Modulare App-Package API
     server.on("/api/apps/list", HTTP_GET, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         server.send(200, "application/json", AppManager::getPackagesJson());
     });
     server.on("/api/apps/toggle", HTTP_POST, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         if (!server.hasArg("id")) { server.send(400, "application/json", "{\"status\":\"error\",\"msg\":\"missing id\"}"); return; }
         String id = server.arg("id");
         bool enable = server.hasArg("enable") ? (server.arg("enable") == "1" || server.arg("enable") == "true") : true;
@@ -4777,18 +5098,18 @@ void setupServerRoutes() {
         server.send(200, "application/json", "{\"status\":\"ok\",\"id\":\"" + jsonEscape(id) + "\",\"enabled\":" + String(enable ? "true" : "false") + "}");
     });
     server.on("/api/apps/order", HTTP_POST, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         if (!server.hasArg("id") || !server.hasArg("order")) { server.send(400, "application/json", "{\"status\":\"error\"}"); return; }
         AppManager::setAppOrder(server.arg("id"), server.arg("order").toInt());
         server.send(200, "application/json", "{\"status\":\"ok\"}");
     });
     server.on("/api/apps/reset", HTTP_POST, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         AppManager::resetToDefaults();
         server.send(200, "application/json", "{\"status\":\"ok\"}");
     });
     server.on("/api/apps/install", HTTP_POST, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         String body = "";
         if (server.hasArg("plain")) body = server.arg("plain");
         else if (server.hasArg("json")) body = server.arg("json");
@@ -4804,7 +5125,7 @@ void setupServerRoutes() {
         }
     });
     server.on("/api/apps/uninstall", HTTP_POST, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         if (!server.hasArg("id")) { server.send(400, "application/json", "{\"status\":\"error\",\"msg\":\"missing id\"}"); return; }
         String id = server.arg("id");
         if (AppManager::uninstallPackage(id)) {
@@ -4814,7 +5135,7 @@ void setupServerRoutes() {
         }
     });
     server.on("/api/apps/export", HTTP_GET, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         if (!server.hasArg("id")) { server.send(400, "text/plain", "missing id"); return; }
         String id = server.arg("id");
         String appContent = AppManager::getPackageAppFile(id);
@@ -4828,9 +5149,10 @@ void setupServerRoutes() {
 
     server.on("/save", HTTP_POST, handleSave);
     server.on("/settime", HTTP_POST, handleSetTime);
-    server.on("/clearlog", HTTP_POST, []() { evilLog = ""; server.sendHeader("Location", "/", true); server.send(302, "text/plain", ""); }); 
-    server.on("/battery", HTTP_GET, []() { server.send(200, "text/html", getBatteryHtml()); });
+    server.on("/clearlog", HTTP_POST, []() { if (!checkAdminAccess()) return; portalLog = ""; server.sendHeader("Location", "/", true); server.send(302, "text/plain", ""); }); 
+    server.on("/battery", HTTP_GET, []() { if (!checkAdminAccess()) return; server.send(200, "text/html", getBatteryHtml()); });
     server.on("/battery/reset", HTTP_POST, []() {
+        if (!checkAdminAccess()) return;
         historyCount = 0;
         lastHistoryTime = 0;
         for (int i = 0; i < MAX_HISTORY; i++) batHistoryPct[i] = 0;
@@ -4845,18 +5167,21 @@ void setupServerRoutes() {
     });
     
     server.on("/wifiscan", HTTP_GET, []() {
+        if (!checkAdminAccess()) return;
         int n = WiFi.scanNetworks(); String json = "[";
-        for (int i = 0; i < n; ++i) { if(i>0) json += ","; String ssid = WiFi.SSID(i); ssid.replace("\"", "\\\""); json += "\"" + ssid + "\""; }
+        for (int i = 0; i < n; ++i) { if(i>0) json += ","; json += "\"" + jsonEscape(WiFi.SSID(i)) + "\""; }
         json += "]"; server.send(200, "application/json", json); WiFi.scanDelete();
     });
 
     server.on("/routerscan", HTTP_GET, []() {
+        if (!checkAdminAccess()) return;
         int n = WiFi.scanNetworks(false, true); String json = "[";
-        for (int i = 0; i < n; ++i) { if(i>0) json += ","; String ssid = WiFi.SSID(i); ssid.replace("\"", "\\\""); json += "{\"ssid\":\"" + ssid + "\",\"bssid\":\"" + WiFi.BSSIDstr(i) + "\",\"ch\":" + String(WiFi.channel(i)) + "}"; }
+        for (int i = 0; i < n; ++i) { if(i>0) json += ","; json += "{\"ssid\":\"" + jsonEscape(WiFi.SSID(i)) + "\",\"bssid\":\"" + WiFi.BSSIDstr(i) + "\",\"ch\":" + String(WiFi.channel(i)) + "}"; }
         json += "]"; server.send(200, "application/json", json); WiFi.scanDelete();
     });
 
     server.on("/deauth", HTTP_GET, []() {
+        if (!checkAdminAccess()) return;
         if(server.hasArg("mac")) {
             String bssidStr = server.arg("mac"); char* ptr;
             deauthMac[0] = strtol(bssidStr.substring(0, 2).c_str(), &ptr, 16); deauthMac[1] = strtol(bssidStr.substring(3, 5).c_str(), &ptr, 16); deauthMac[2] = strtol(bssidStr.substring(6, 8).c_str(), &ptr, 16);
@@ -4868,11 +5193,13 @@ void setupServerRoutes() {
     });
 
     server.on("/stopbad", HTTP_POST, []() {
-        killBadApps();
+        if (!checkAdminAccess()) return;
+        killSecurityTasks();
         server.send(200, "text/plain", "OK");
     });
 
     server.on("/sync", HTTP_POST, []() { 
+        if (!checkAdminAccess()) return;
         server.sendHeader("Connection", "close"); 
         server.send(200, "text/html", "<html><body style='background:#222;color:#fff;text-align:center;'><h2>Synchronisiere NTP...</h2><script>setTimeout(function(){window.location.href='/';}, 7000);</script></body></html>"); 
         WiFi.softAPdisconnect(true); 
@@ -4890,8 +5217,9 @@ void setupServerRoutes() {
         startHotspotAP(); 
         lastSecond = -1; 
     });
-    server.on("/reboot", HTTP_POST, []() { server.sendHeader("Connection", "close"); server.send(200, "text/plain", "Neustart..."); delay(1000); ESP.restart(); });
+    server.on("/reboot", HTTP_POST, []() { if (!checkAdminAccess()) return; server.sendHeader("Connection", "close"); server.send(200, "text/plain", "Neustart..."); delay(1000); ESP.restart(); });
     server.on("/matrix", HTTP_POST, []() {
+        if (!checkAdminAccess()) return;
         matrixMode = !matrixMode;
         if (matrixMode) {
             // Display kann beim Ausloesen per Web bereits gedimmt/im AOD-/Sleep-Zustand sein.
@@ -4905,35 +5233,35 @@ void setupServerRoutes() {
         } else { lastSecond = -1; }
         server.sendHeader("Location", "/"); server.send(303);
     });
-    server.on("/submit", HTTP_POST, handleEvilSubmit);
-    server.on("/tos", HTTP_GET, []() { if (evilActive) handleEvilTOS(); else server.send(404, "text/plain", "Not Found"); });
-    server.on("/imprint", HTTP_GET, []() { if (evilActive) handleEvilImprint(); else server.send(404, "text/plain", "Not Found"); });
+    server.on("/submit", HTTP_POST, handlePortalSubmit);
+    server.on("/tos", HTTP_GET, []() { if (portalActive) handlePortalTOS(); else server.send(404, "text/plain", "Not Found"); });
+    server.on("/imprint", HTTP_GET, []() { if (portalActive) handlePortalImprint(); else server.send(404, "text/plain", "Not Found"); });
 
     // Export settings as JSON
     server.on("/export", HTTP_GET, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         String j = "{";
-        j += "\"ssid\":\"" + userSSID + "\",\"pwd\":\"" + userPWD + "\",\"ntpZ\":\"" + ntpZone + "\",";
-        j += "\"apS\":\"" + apSSID + "\",\"apP\":\"" + apPWD + "\",";
+        j += "\"ssid\":\"" + jsonEscape(userSSID) + "\",\"pwd\":\"" + jsonEscape(userPWD) + "\",\"ntpZ\":\"" + jsonEscape(ntpZone) + "\",";
+        j += "\"apS\":\"" + jsonEscape(apSSID) + "\",\"apP\":\"" + jsonEscape(apPWD) + "\",";
         j += "\"tag\":" + String(gTag) + ",\"monat\":" + String(gMonat) + ",\"jahr\":" + String(gJahr) + ",\"std\":" + String(gStunde) + ",\"min\":" + String(gMinute) + ",\"alter\":" + String(zielAlter) + ",";
         j += "\"bootM\":" + String(bootMode) + ",\"aodM\":" + String(aodMode) + ",";
         j += "\"tDim\":" + String(time_dim_start) + ",\"tAod\":" + String(time_aod_start) + ",\"tSlp\":" + String(time_sleep_start) + ",";
         j += "\"maxB\":" + String(maxBright) + ",\"minB\":" + String(minBright) + ",";
-        j += "\"cBG\":\"" + hexBG + "\",\"cFG\":\"" + hexFG + "\",\"cAcc1\":\"" + hexAcc1 + "\",\"cAcc2\":\"" + hexAcc2 + "\",\"cBat\":\"" + hexBat + "\",";
-        j += "\"cHBG\":\"" + hexHeadBG + "\",\"cHFG\":\"" + hexHeadFG + "\",\"cABG\":\"" + hexAppBG + "\",\"cWrn\":\"" + hexWarn + "\",";
+        j += "\"cBG\":\"" + jsonEscape(hexBG) + "\",\"cFG\":\"" + jsonEscape(hexFG) + "\",\"cAcc1\":\"" + jsonEscape(hexAcc1) + "\",\"cAcc2\":\"" + jsonEscape(hexAcc2) + "\",\"cBat\":\"" + jsonEscape(hexBat) + "\",";
+        j += "\"cHBG\":\"" + jsonEscape(hexHeadBG) + "\",\"cHFG\":\"" + jsonEscape(hexHeadFG) + "\",\"cABG\":\"" + jsonEscape(hexAppBG) + "\",\"cWrn\":\"" + jsonEscape(hexWarn) + "\",";
         j += "\"lang\":" + String(sysLang) + ",";
         j += "\"enP0\":" + String(enP0) + ",\"enP1\":" + String(enP1) + ",\"enP2\":" + String(enP2) + ",\"enP3\":" + String(enP3) + ",";
         j += "\"tAlarm\":" + String(timerAlarmMode) + ",\"hapW\":" + String(hapticWaveform) + ",";
-        j += "\"pN\":\"" + parentName + "\",\"pD\":\"" + parentDate + "\",\"pT\":\"" + parentTime + "\",";
-        j += "\"ppN\":\"" + papaName + "\",\"ppD\":\"" + papaDate + "\",\"ppT\":\"" + papaTime + "\",";
+        j += "\"pN\":\"" + jsonEscape(parentName) + "\",\"pD\":\"" + jsonEscape(parentDate) + "\",\"pT\":\"" + jsonEscape(parentTime) + "\",";
+        j += "\"ppN\":\"" + jsonEscape(papaName) + "\",\"ppD\":\"" + jsonEscape(papaDate) + "\",\"ppT\":\"" + jsonEscape(papaTime) + "\",";
         j += "\"brandName\":\"" + jsonEscape(brandName) + "\",";
         j += "\"netS\":" + String(netSalary, 2) + ",\"pt\":" + String(partTimePct) + ",\"vac\":" + String(vacationDays) + ",\"sick\":" + String(sickDays) + ",\"wh\":" + String(workHoursPerDay, 1) + ",\"wd\":" + String(workDaysYear) + ",";
-        j += "\"c1n\":\"" + child1Name + "\",\"c1d\":\"" + child1Date + "\",\"c1t\":\"" + child1Time + "\",";
-        j += "\"c2n\":\"" + child2Name + "\",\"c2d\":\"" + child2Date + "\",\"c2t\":\"" + child2Time + "\",";
-        j += "\"c3n\":\"" + child3Name + "\",\"c3d\":\"" + child3Date + "\",\"c3t\":\"" + child3Time + "\",";
-        j += "\"evSsid\":\"" + evilSSID + "\",";
-        j += "\"spamSsid\":\"" + spamSSIDs + "\",\"buLay\":" + String(badUsbLayout) + ",\"nmapIP\":\"" + nmapBaseIP + "\",\"nmapPorts\":\"" + nmapPorts + "\",";
-        j += "\"tgS0\":\"" + targetSSIDs[0] + "\",\"tgP0\":\"" + targetPWDs[0] + "\",\"tgS1\":\"" + targetSSIDs[1] + "\",\"tgP1\":\"" + targetPWDs[1] + "\",\"tgS2\":\"" + targetSSIDs[2] + "\",\"tgP2\":\"" + targetPWDs[2] + "\",";
+        j += "\"c1n\":\"" + jsonEscape(child1Name) + "\",\"c1d\":\"" + jsonEscape(child1Date) + "\",\"c1t\":\"" + jsonEscape(child1Time) + "\",";
+        j += "\"c2n\":\"" + jsonEscape(child2Name) + "\",\"c2d\":\"" + jsonEscape(child2Date) + "\",\"c2t\":\"" + jsonEscape(child2Time) + "\",";
+        j += "\"c3n\":\"" + jsonEscape(child3Name) + "\",\"c3d\":\"" + jsonEscape(child3Date) + "\",\"c3t\":\"" + jsonEscape(child3Time) + "\",";
+        j += "\"evSsid\":\"" + jsonEscape(evilSSID) + "\",";
+        j += "\"spamSsid\":\"" + jsonEscape(spamSSIDs) + "\",\"buLay\":" + String(badUsbLayout) + ",\"nmapIP\":\"" + jsonEscape(nmapBaseIP) + "\",\"nmapPorts\":\"" + jsonEscape(nmapPorts) + "\",";
+        j += "\"tgS0\":\"" + jsonEscape(targetSSIDs[0]) + "\",\"tgP0\":\"" + jsonEscape(targetPWDs[0]) + "\",\"tgS1\":\"" + jsonEscape(targetSSIDs[1]) + "\",\"tgP1\":\"" + jsonEscape(targetPWDs[1]) + "\",\"tgS2\":\"" + jsonEscape(targetSSIDs[2]) + "\",\"tgP2\":\"" + jsonEscape(targetPWDs[2]) + "\",";
         j += "\"wfT\":" + String(wfShowTime) + ",\"wfD\":" + String(wfShowDate) + ",\"wfB\":" + String(wfShowBatt) + ",\"wfS\":" + String(wfShowSteps) + ",";
         j += "\"wfTY\":" + String(wfTimeY) + ",\"wfDY\":" + String(wfDateY) + ",\"wfBY\":" + String(wfBattY) + ",\"wfSY\":" + String(wfStepsY) + ",";
         j += "\"wfTX\":" + String(wfTimeX) + ",\"wfDX\":" + String(wfDateX) + ",\"wfBX\":" + String(wfBattX) + ",\"wfSX\":" + String(wfStepsX) + ",";
@@ -4944,7 +5272,7 @@ void setupServerRoutes() {
         j += "\"wfAnY\":" + String(wfAnalogY) + ",\"wfAnX\":" + String(wfAnalogX) + ",";
         j += "\"wfWCSc\":" + String(wfWordClockScale, 1) + ",\"wfBCSc\":" + String(wfBinClockScale, 1) + ",\"wfAnSc\":" + String(wfAnalogScale, 1) + ",";
         j += "\"wfAnSt\":" + String(wfAnalogStyle) + ",";
-        j += "\"hAodFG\":\"" + hexAodFG + "\",\"hAodAc\":\"" + hexAodAcc + "\"";
+        j += "\"hAodFG\":\"" + jsonEscape(hexAodFG) + "\",\"hAodAc\":\"" + jsonEscape(hexAodAcc) + "\"";
         j += "}";
         server.sendHeader("Content-Disposition", "attachment; filename=watchos_settings.json");
         server.send(200, "application/json", j);
@@ -4952,7 +5280,7 @@ void setupServerRoutes() {
 
     // Import settings from JSON
     server.on("/import", HTTP_POST, []() {
-        if (webAuthEnabled && webPass.length() > 0 && !server.authenticate(webUser.c_str(), webPass.c_str())) { server.requestAuthentication(); return; }
+        if (!checkAdminAccess()) return;
         String body = server.arg("plain");
         if (body.length() < 5) { server.send(400, "text/plain", "Leerer Body"); return; }
         // Minimal JSON parser - extract key:value pairs
@@ -5038,7 +5366,7 @@ void setupServerRoutes() {
 }
 
 void startHotspotAP() {
-    if (evilActive) return;
+    if (portalActive) return;
     if (!wlanActive || wlanClientMode) {
         wlanActive = true; 
         wlanClientMode = false;
@@ -5070,7 +5398,7 @@ void stopHotspotAP() {
 }
 
 void toggleWLAN() {
-    if (evilActive) toggleEvilPortal(); 
+    if (portalActive) togglePortalServer(); 
     if (!wlanActive) {
         startHotspotAP();
         showToast("Hotspot: " + apSSID, 4000);
@@ -5097,14 +5425,14 @@ void toggleWLAN() {
 
 // Schaltet den Hotspot automatisch ab, wenn er länger ungenutzt offen bleibt.
 // Spart Akku, falls man das WLAN vergisst. Betrifft nur den reinen AP-Modus
-// (Client-Modus und Evil Portal bleiben unberührt). Solange ein Gerät verbunden
+// (Client-Modus und Captive Portal bleiben unberührt). Solange ein Gerät verbunden
 // ist oder die Uhr am Strom hängt, läuft der Timer nicht.
 #define WLAN_AP_IDLE_TIMEOUT_MS (3UL * 60UL * 1000UL) // 3 Minuten (senkt Akkuverbrauch deutlich)
 void handleWlanIdleTimeout() {
     static unsigned long apIdleSince = 0;
     static unsigned long lastCheck = 0;
 
-    if (!wlanActive || wlanClientMode || evilActive) { apIdleSince = 0; return; }
+    if (!wlanActive || wlanClientMode || portalActive) { apIdleSince = 0; return; }
     if (isChargingCached(false)) { apIdleSince = 0; return; } // Am Strom niemals abschalten!
 
     unsigned long now = millis();

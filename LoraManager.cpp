@@ -79,6 +79,13 @@ static void addMessage(const char* sender, const char* text, float rssi, float s
 bool LoraManager::init() {
     if (loraReady) return true;
 
+    prefs.begin("clock", true);
+    float savedFreq = prefs.getFloat("loraFreq", 868.0f);
+    prefs.end();
+    if (savedFreq >= 150.0f && savedFreq <= 960.0f) {
+        currentFreq = savedFreq;
+    }
+
     pinMode(LORA_CS, OUTPUT);
     digitalWrite(LORA_CS, HIGH);
 
@@ -202,8 +209,12 @@ float LoraManager::getFrequency() {
 void LoraManager::setFrequency(float freq) {
     if (freq >= 150.0f && freq <= 960.0f) {
         currentFreq = freq;
+        prefs.begin("clock", false);
+        prefs.putFloat("loraFreq", currentFreq);
+        prefs.end();
         if (loraReady) {
             loraRadio.setFrequency(currentFreq);
+            loraRadio.startReceive();
         }
     }
 }

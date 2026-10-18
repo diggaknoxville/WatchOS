@@ -11,7 +11,7 @@
 #include <USBHIDKeyboard.h> 
 
 #define MAX_HISTORY 200
-#define WATCHOS_VERSION "1.3.0"
+#define WATCHOS_VERSION "1.3.1"
 
 extern XPowersAXP2101 pmu;
 extern TouchDrvFT6X36 touch;
@@ -63,6 +63,7 @@ namespace Pages {
     constexpr int Parents       = 3;
     constexpr int QuickSettings = 5;
     constexpr int AppLauncher   = 6;
+    constexpr int AppDrawer     = 6;
     constexpr int Stopwatch     = 7;
     constexpr int Timer         = 8;
     constexpr int Decibel       = 9;
@@ -118,6 +119,29 @@ extern bool wasCharging;
 extern bool hotspotPromptActive;
 extern unsigned long hotspotPromptStart;
 extern int watchfaceMode;
+
+// --- Watchface- & Karussell-System ---
+enum CarouselFaceId {
+    FACE_ULTRA_DASH = 0,   // Ultra Rings Dashboard
+    FACE_CHRONO     = 1,   // Swiss Classic Chronograph
+    FACE_CASIO      = 2,   // Retro Casio Illuminator
+    FACE_LIFETIME   = 3,   // 3D Lebenszeit Countdown
+    FACE_BAUHAUS    = 4,   // Bauhaus Minimalist Analog
+    FACE_CYBERPUNK  = 5,   // Cyberpunk Matrix Terminal
+    FACE_WORDCLOCK  = 6,   // Typografische Wortuhr
+    FACE_FINANCE    = 7,   // Finanz & Opportunitaet
+    FACE_CHILDREN   = 8,   // Kinder-Zeitleiste
+    FACE_PARENTS    = 9    // Generationen & Eltern
+};
+const int NUM_CAROUSEL_FACES = 10;
+
+extern std::vector<int> carouselOrder;
+extern int carouselIndex;
+extern String carouselOrderStr;
+
+bool isCarouselPage(int page);
+void rebuildCarouselOrder(const String &orderStr);
+
 extern String phoneMac;
 extern String phoneName;
 extern bool phoneConnected;
@@ -150,21 +174,33 @@ extern bool jigglerActive;
 extern bool usbHidActive;
 extern String usbModeSource;
 extern bool usbModeDiagPending;
-extern bool evilActive;
-extern String evilLog;
-extern String evilSSID; 
-extern String evilHTML; 
 
-extern bool badUsbActive;
+// Security & Captive Portal Telemetrie
+extern bool portalActive;
+extern String portalLog;
+extern String portalSSID; 
+extern String portalHTML; 
+extern const char* defaultEvilHTML;
+#define defaultPortalHTML defaultEvilHTML
+#define evilActive portalActive
+#define evilLog portalLog
+#define evilSSID portalSSID
+#define evilHTML portalHTML
+
+extern bool duckyActive;
+extern String duckyNames[3];
+extern String duckyScripts[3];
+extern int currentDuckyScript;
+extern int duckyLayout;
+#define badUsbActive duckyActive
+#define badUsbNames duckyNames
+#define badUsbScripts duckyScripts
+#define currentBadUsbScript currentDuckyScript
+#define badUsbLayout duckyLayout
+
 extern bool wifiSpamActive;
 extern bool bleSpamActive; 
-
-extern String badUsbNames[3];
-extern String badUsbScripts[3];
-extern int currentBadUsbScript;
-
 extern String spamSSIDs;
-extern int badUsbLayout; 
 
 extern String targetSSIDs[3];
 extern String targetPWDs[3];
@@ -214,6 +250,9 @@ extern bool webAuthEnabled;
 
 // Haptic Config
 extern int hapticWaveform;
+
+// Eltern- / Kindersicht Toggle (Page 3)
+extern int parentViewMode;
 
 // FFat (FAT-Dateisystem)
 extern bool littleFsReady;
@@ -271,4 +310,14 @@ inline String jsonEscape(const String &in) {
         }
     }
     return out;
+}
+
+// Escaped einen String HTML-sicher (inkl. einfacher und doppelter Anführungszeichen).
+inline String htmlEscape(String str) {
+    str.replace("&", "&amp;");
+    str.replace("<", "&lt;");
+    str.replace(">", "&gt;");
+    str.replace("\"", "&quot;");
+    str.replace("'", "&#39;");
+    return str;
 }

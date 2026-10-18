@@ -1,0 +1,130 @@
+name: Build WatchOS Firmware & OTA Release
+
+on:
+  push:
+    branches: [ main, master ]
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+      - '.gitignore'
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Create GitHub Release?'
+        required: true
+        type: boolean
+        default: true
+  release:
+    types: [ published ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Compile Firmware (PlatformIO)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Cache PlatformIO Core & Packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            .pio
+          key: ${{ runner.os }}-pio-${{ hashFiles('platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-pio-
+
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade platformio
+
+      - name: Compile WatchOS Firmware
+        run: |
+          pio run -e twatch-s3
+
+      - name: Prepare Release Artifacts & Checksums
+        run: |
+          mkdir -p build_output
+          BIN_SRC=".pio/build/twatch-s3/firmware.bin"
+          if [ ! -f "$BIN_SRC" ]; then
+            echo "::error ::firmware.bin was not found at $BIN_SRC"
+            exit 1
+          fi
+
+          cp "$BIN_SRC" build_output/firmware.bin
+          cp "$BIN_SRC" build_output/WatchOS-firmware.bin
+
+          cd build_output
+          sha256sum firmware.bin > firmware.bin.sha256
+          sha256sum WatchOS-firmware.bin > WatchOS-firmware.bin.sha256
+          
+          # Extract version from Globals.h if present
+          VER=$(grep -E 'WATCHOS_VERSION' ../Globals.h | head -1 | sed -E 's/.*"([^"]+)".*/\1/' || echo "2.4.0")
+          COMMIT_SHORT=$(echo "${{ github.sha }}" | cut -c1-7)
+          BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          cat <<EOF > version.json
+          {
+            "version": "$VER",
+            "commit": "$COMMIT_SHORT",
+            "build_date": "$BUILD_DATE",
+            "target": "LilyGO T-Watch S3 (ESP32-S3)",
+            "bin_file": "firmware.bin",
+            "sha256": "$(cut -d' ' -f1 firmware.bin.sha256)"
+          }
+          EOF
+          cd ..
+          ls -la build_output/
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: watchos-firmware
+          path: build_output/
+
+      - name: Update 'latest' Release
+        if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && (github.event_name != 'workflow_dispatch' || inputs.create_release == true)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "WatchOS Automated Build (Latest)"
+          body: |
+            Automated CI/CD build from commit `${{ github.sha }}`.
+            
+            - **Target:** LilyGO T-Watch S3 (ESP32-S3, 16MB Flash, 8MB PSRAM)
+            - **Date:** ${{ github.event.head_commit.timestamp || github.event.release.published_at }}
+            - **Commit:** [${{ github.sha }}](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }})
+            
+            ### Assets:
+            - `firmware.bin` (Download and flash via WatchOS OTA Web Interface)
+            - `firmware.bin.sha256` (Integrity checksum)
+            - `version.json` (Metadata)
+          draft: false
+          prerelease: false
+          files: |
+            build_output/firmware.bin
+            build_output/WatchOS-firmware.bin
+            build_output/firmware.bin.sha256
+            build_output/WatchOS-firmware.bin.sha256
+            build_output/version.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

@@ -24,8 +24,9 @@
 #include "WebManager.h"
 #include "Logic.h"
 #include "UpdateOTA.h" 
-#include "GoodApps.h" 
-#include "BadApps.h" 
+#include "SensorDriver.h"
+#include "PortalServer.h"
+#include "AppLauncher.h"
 #include "TotpAuth.h"
 #include "NotificationManager.h"
 #include "SystemEvents.h" 
@@ -77,6 +78,46 @@ unsigned long lastTouchTime = 0, lastTapTime = 0; int16_t startX = -1, startY = 
 bool isSwiping = false, wasCharging = false, bleInitDone = false; int powerState = 1; 
 bool hotspotPromptActive = false; unsigned long hotspotPromptStart = 0; int watchfaceMode = 0; 
 String phoneMac = ""; String phoneName = ""; bool phoneConnected = false; 
+
+// Carousel State
+std::vector<int> carouselOrder = {0, 1, 2, 7, 8, 9};
+int carouselIndex = 0;
+String carouselOrderStr = "0,1,2,7,8,9";
+
+bool isCarouselPage(int page) {
+    return (page >= 0 && page < NUM_CAROUSEL_FACES);
+}
+
+void rebuildCarouselOrder(const String &orderStr) {
+    std::vector<int> newOrder;
+    int start = 0;
+    while (start < (int)orderStr.length()) {
+        int comma = orderStr.indexOf(',', start);
+        String tok = (comma == -1) ? orderStr.substring(start) : orderStr.substring(start, comma);
+        tok.trim();
+        if (tok.length() > 0) {
+            int fid = tok.toInt();
+            if (fid >= 0 && fid < NUM_CAROUSEL_FACES) {
+                bool exists = false;
+                for (int ex : newOrder) { if (ex == fid) { exists = true; break; } }
+                if (!exists) newOrder.push_back(fid);
+            }
+        }
+        if (comma == -1) break;
+        start = comma + 1;
+    }
+    if (newOrder.empty()) {
+        newOrder = {0, 1, 2, 7, 8, 9};
+    }
+    carouselOrder = newOrder;
+    carouselOrderStr = "";
+    for (size_t i = 0; i < carouselOrder.size(); i++) {
+        if (i > 0) carouselOrderStr += ",";
+        carouselOrderStr += String(carouselOrder[i]);
+    }
+    if (carouselIndex >= (int)carouselOrder.size()) carouselIndex = 0;
+}
+
 int loraTabMode = 0; 
 
 bool evilActive = false;
@@ -107,8 +148,11 @@ String webUser = "admin";
 String webPass = "";
 bool webAuthEnabled = false;
 
-// Haptic Config
-int hapticWaveform = 1;
+// Haptic Config (14 = TS2200 Library A Strong Buzz 1 - 100% fuer ERM-Motor)
+int hapticWaveform = 14;
+
+// Eltern- / Kindersicht Toggle (Page 3)
+int parentViewMode = 0;
 
 // FFat (FAT-Dateisystem auf ffat-Partition)
 bool littleFsReady = false;
@@ -183,6 +227,7 @@ void setup() {
     lastTouchTime = millis(); tft.fillScreen(cBG);
     startHotspotAP();
     LoraManager::init();
+    initPortalFiles();
     AppManager::init();
     Serial.println("=== Setup fertig ===");
 }

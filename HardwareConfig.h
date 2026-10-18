@@ -8,6 +8,8 @@ void initHardware();
 void toggleUsbHid();
 void showBootSequence();
 void playBootSound(int type);
+void playSynthSound(int type, int duration);
+void playToneHz(int freqHz, int durationMs);
 int getBattery();
 int getBatteryCached(bool forceRefresh = false);
 bool isChargingCached(bool forceRefresh = false);

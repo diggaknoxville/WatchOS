@@ -2,8 +2,9 @@
 #include "Logic.h"
 #include "Globals.h"
 #include "Display.h" 
-#include "GoodApps.h"
-#include "BadApps.h" 
+#include "SensorDriver.h"
+#include "PortalServer.h"
+#include "AppLauncher.h" 
 #include "HardwareConfig.h" 
 #include "NotificationManager.h"
 #include "LoraManager.h"
@@ -45,24 +46,28 @@ void killAllApps() {
     if (probeMonActive) stopProbeMonitor();
     if (bleScanActive) stopBleScan();
     
-    if(deauthState > 0 || nmapState > 0) {
+    if (deauthState > 0 || nmapState > 0) {
         esp_wifi_set_promiscuous(false);
-        WiFi.disconnect(true);
-        WiFi.mode(WIFI_OFF);
+        if (!wlanActive && !evilActive) {
+            WiFi.disconnect(true);
+            WiFi.mode(WIFI_OFF);
+        }
         deauthState = 0; nmapState = 0;
     }
 }
 
-void killBadApps() {
-    badUsbActive = false; wifiSpamActive = false; bleSpamActive = false;
+void killSecurityTasks() {
+    duckyActive = false; wifiSpamActive = false; bleSpamActive = false;
     nmapActive = false; deauthActive = false;
     if (probeMonActive) stopProbeMonitor();
     if (bleScanActive) stopBleScan();
-    if (evilActive) { toggleEvilPortal(); }
-    if(deauthState > 0 || nmapState > 0) {
+    if (portalActive) { togglePortalServer(); }
+    if (deauthState > 0 || nmapState > 0) {
         esp_wifi_set_promiscuous(false);
-        WiFi.disconnect(true);
-        WiFi.mode(WIFI_OFF);
+        if (!wlanActive && !portalActive) {
+            WiFi.disconnect(true);
+            WiFi.mode(WIFI_OFF);
+        }
         deauthState = 0; nmapState = 0;
     }
 }
@@ -365,11 +370,11 @@ void executeNmap() {
     if (!nmapActive) { nmapState = 0; return; }
 
     // Port-Liste als Funktions-Static, damit ein neuer Scan sie neu parsen kann.
-    // Vorher blieb bei mittendrin abgebrochenem Scan die alte Liste stehen.
     static int ports[10]; static int portCount = 0;
 
     if (nmapState == 0) {
-        portCount = 0; // Bei jedem frischen Scan die Ports neu einlesen
+        portCount = 0;
+        nmapCurrentPort = 0;
         nmapLog = "Verbinde mit " + targetSSIDs[currentTargetNmap] + "...\n";
         WiFi.mode(WIFI_STA);
         WiFi.begin(targetSSIDs[currentTargetNmap].c_str(), targetPWDs[currentTargetNmap].c_str());
@@ -380,6 +385,7 @@ void executeNmap() {
         if (WiFi.status() == WL_CONNECTED) {
             nmapLog += "Verbunden!\nLokal: " + WiFi.localIP().toString() + "\nScanne...\n";
             nmapIP = 1;
+            nmapCurrentPort = 0;
             nmapState = 2;
             lastSecond = -1;
         } else if (WiFi.status() == WL_CONNECT_FAILED || WiFi.status() == WL_NO_SSID_AVAIL) {
@@ -391,10 +397,10 @@ void executeNmap() {
     } 
     else if (nmapState == 2) {
         static unsigned long lastTick = 0;
-        if(millis() - lastTick < 50) return; 
+        if (millis() - lastTick < 25) return; 
         lastTick = millis();
 
-        // Parse ports from nmapPorts string (portCount wurde in State 0 genullt)
+        // Parse ports from nmapPorts string
         if (portCount == 0) {
             String tmp = nmapPorts; int pi = 0;
             while (tmp.length() > 0 && pi < 10) {
@@ -402,7 +408,8 @@ void executeNmap() {
                 if (sep == -1) { ports[pi++] = tmp.toInt(); break; }
                 ports[pi++] = tmp.substring(0, sep).toInt(); tmp = tmp.substring(sep + 1);
             }
-            portCount = pi; nmapCurrentPort = 0;
+            portCount = max(1, pi);
+            nmapCurrentPort = 0;
         }
 
         if (nmapIP > 254) {
@@ -410,8 +417,11 @@ void executeNmap() {
             nmapState = 3;
             nmapActive = false;
             portCount = 0;
-            WiFi.disconnect(true);
-            WiFi.mode(WIFI_OFF);
+            nmapCurrentPort = 0;
+            if (!wlanActive && !evilActive) {
+                WiFi.disconnect(true);
+                WiFi.mode(WIFI_OFF);
+            }
             lastSecond = -1;
             return;
         }
@@ -419,17 +429,22 @@ void executeNmap() {
         IPAddress base;
         if (base.fromString(nmapBaseIP + "1")) {
             IPAddress target(base[0], base[1], base[2], nmapIP);
-            if (target != WiFi.localIP()) {
-                for (int p = 0; p < portCount; p++) {
-                    WiFiClient client;
-                    if (client.connect(target, ports[p], 40)) { 
-                        nmapLog += "+ " + target.toString() + ":" + String(ports[p]) + " Offen\n";
-                        client.stop();
-                        lastSecond = -1;
-                    }
+            if (target != WiFi.localIP() && nmapCurrentPort < portCount) {
+                WiFiClient client;
+                if (client.connect(target, ports[nmapCurrentPort], 35)) { 
+                    nmapLog += "+ " + target.toString() + ":" + String(ports[nmapCurrentPort]) + " Offen\n";
+                    client.stop();
+                    lastSecond = -1;
                 }
+                nmapCurrentPort++;
+                if (nmapCurrentPort >= portCount) {
+                    nmapCurrentPort = 0;
+                    nmapIP++;
+                }
+                return;
             }
         }
+        nmapCurrentPort = 0;
         nmapIP++;
     }
 }
@@ -530,41 +545,81 @@ void startProbeMonitor() {
 void stopProbeMonitor() {
     probeMonActive = false;
     esp_wifi_set_promiscuous(false);
-    WiFi.mode(WIFI_OFF);
+    if (!wlanActive && !evilActive) {
+        WiFi.mode(WIFI_OFF);
+    }
     lastSecond = -1;
 }
 
 // ---------------------------------------------------------
-// BLE Scanner
+// BLE Scanner (Lock-Free SPSC Ring Buffer for BTC_TASK -> Main Loop)
 // ---------------------------------------------------------
+#define BLE_RING_SIZE 8
+static volatile int bleRingHead = 0;
+static volatile int bleRingTail = 0;
+static char bleRingMac[BLE_RING_SIZE][18];
+static char bleRingName[BLE_RING_SIZE][33];
+static volatile int bleRingRssi[BLE_RING_SIZE];
+static volatile bool bleRingHasName[BLE_RING_SIZE];
+
 class BleScanCallbacks : public BLEAdvertisedDeviceCallbacks {
     void onResult(BLEAdvertisedDevice advertisedDevice) override {
-        String mac = String(advertisedDevice.getAddress().toString().c_str());
-        mac.toUpperCase();
+        int nextHead = (bleRingHead + 1) % BLE_RING_SIZE;
+        if (nextHead == bleRingTail) return; // ring full, drop
 
-        // Check for duplicate
+        strncpy(bleRingMac[bleRingHead], advertisedDevice.getAddress().toString().c_str(), 17);
+        bleRingMac[bleRingHead][17] = '\0';
+        for (int i = 0; bleRingMac[bleRingHead][i]; i++) {
+            bleRingMac[bleRingHead][i] = (char)toupper((unsigned char)bleRingMac[bleRingHead][i]);
+        }
+
+        bleRingRssi[bleRingHead] = advertisedDevice.getRSSI();
+        if (advertisedDevice.haveName()) {
+            strncpy(bleRingName[bleRingHead], advertisedDevice.getName().c_str(), 32);
+            bleRingName[bleRingHead][32] = '\0';
+            bleRingHasName[bleRingHead] = true;
+        } else {
+            bleRingName[bleRingHead][0] = '\0';
+            bleRingHasName[bleRingHead] = false;
+        }
+        bleRingHead = nextHead;
+    }
+};
+
+static void processBleRing() {
+    while (bleRingTail != bleRingHead) {
+        String mac = String(bleRingMac[bleRingTail]);
+        int rssi = bleRingRssi[bleRingTail];
+        bool hasName = bleRingHasName[bleRingTail];
+        String name = hasName ? String(bleRingName[bleRingTail]) : "(Unknown)";
+        bleRingTail = (bleRingTail + 1) % BLE_RING_SIZE;
+
+        bool found = false;
         for (int i = 0; i < bleScanCount; i++) {
             if (bleScanMacs[i] == mac) {
-                bleScanRssi[i] = advertisedDevice.getRSSI();
-                if (advertisedDevice.haveName()) bleScanNames[i] = String(advertisedDevice.getName().c_str());
-                return;
+                bleScanRssi[i] = rssi;
+                if (hasName) bleScanNames[i] = name;
+                found = true;
+                break;
             }
         }
-        if (bleScanCount < MAX_BLE_RESULTS) {
+        if (!found && bleScanCount < MAX_BLE_RESULTS) {
             bleScanMacs[bleScanCount] = mac;
-            bleScanRssi[bleScanCount] = advertisedDevice.getRSSI();
-            bleScanNames[bleScanCount] = advertisedDevice.haveName() ? String(advertisedDevice.getName().c_str()) : "(Unknown)";
+            bleScanRssi[bleScanCount] = rssi;
+            bleScanNames[bleScanCount] = name;
             bleScanCount++;
             lastSecond = -1;
         }
     }
-};
+}
 
 static BleScanCallbacks bleScanCb;
 
 void startBleScan() {
     bleScanCount = 0;
     bleScanScrollOffset = 0;
+    bleRingHead = 0;
+    bleRingTail = 0;
     bleScanActive = true;
     if (!bleInitDone) { BLEDevice::init("T-Watch S3"); bleInitDone = true; }
     BLEScan* pScan = BLEDevice::getScan();
@@ -587,8 +642,8 @@ void stopBleScan() {
 
 void checkBackgroundTasks(unsigned long currentMillis) {
     if (probeMonActive) processProbeRing(); // drain ISR ring buffer safely
-    // Mikrofon (I2S RX) an die Dezibel-Seite koppeln. Vorher wurde es beim
-    // normalen Zurückwischen nicht gestoppt -> unnötiger Strom-/CPU-Verbrauch.
+    if (bleScanActive) processBleRing();    // drain BLE task ring buffer safely
+    // Mikrofon (I2S RX) an die Dezibel-Seite koppeln.
     AppPackage* curApp = AppManager::getAppByPage(currentPage);
     String curTid = curApp ? (curApp->driver.length() > 0 ? curApp->driver : curApp->id) : "";
     if (curTid == "mic") { if (!micActive) startMic(); }
@@ -657,9 +712,6 @@ void checkBackgroundTasks(unsigned long currentMillis) {
     if (deauthActive) executeDeauth();
     if (nmapActive) executeNmap();
     if (isScanningAir) scanAir();
-
-    // Neue Good App Updates
-    if (diceRolling) updateDiceAnimation();
 
     if (matrixMode) {
         lastTouchTime = currentMillis; setBrightness(maxBright); int16_t mx[2], my[2];
@@ -796,14 +848,14 @@ void handlePowerManagement(unsigned long currentMillis) {
 
     // Basis-Einstufung nach Zeit
     if (curTid == "flashlight" || curTid == "battery") powerState = 1; 
-    else if (elapsed < time_dim_start) powerState = 1;      // State 1: Aktiv (Hell)
-    else if (elapsed < time_aod_start) powerState = 2;      // State 2: Dimmen
-    else if (elapsed < time_sleep_start) powerState = 3;    // State 3: AOD (Immer hier bleiben wenn am Strom!)
-    else powerState = 4;                                    // State 4: Soft Sleep Vorbereitung
+    else if (elapsed < time_dim_start) powerState = 1;                  // State 1: Aktiv (Hell)
+    else if (elapsed < time_aod_start) powerState = 2;                  // State 2: Dimmen
+    else if (elapsed < time_sleep_start) powerState = aodActive ? 3 : 4; // State 3: AOD (sofern aodActive aktiv)
+    else powerState = 4;                                                // State 4: Soft Sleep Vorbereitung
 
     // Absolute Overrides für State 4 (Schlafen)
     if (powerState == 4) {
-        if (isCharging) {
+        if (isCharging && aodActive) {
             powerState = 3;        // B: Strom -> Dauer-AOD
         } else if (hacksRunning) {
             powerState = 5;        // A: Hacks -> Stealth (Bildschirm aus, CPU an)
@@ -833,8 +885,8 @@ void handlePowerManagement(unsigned long currentMillis) {
             // Aus AOD/Sleep aufwecken: elapsed = 0 → powerState = 1 (volle Helligkeit)
             lastTouchTime = currentMillis;
         } else {
-            // Aus Aktiv/Dim: direkt in AOD springen
-            lastTouchTime = currentMillis - time_aod_start - 10;
+            // Aus Aktiv/Dim: direkt in AOD/Sleep springen
+            lastTouchTime = currentMillis - (aodActive ? time_aod_start : time_sleep_start) - 10;
         }
         lastSecond = -1;
         return; 
@@ -879,7 +931,6 @@ void handlePowerManagement(unsigned long currentMillis) {
     }
 
     // Mikrofon automatisch ausschalten wenn Bildschirm zu AOD/Sleep übergeht
-    // (Page 9 / Dezibel wird nicht mehr gerendert – I2S wäre aktiv aber nutzlos)
     if (micActive && powerState >= 3) {
         stopMic();
     }
@@ -893,9 +944,20 @@ void handlePowerManagement(unsigned long currentMillis) {
 
     // Echter Hardware Tiefschlaf (Nur in State 4 erlaubt!)
     if (powerState == 4) {
-        esp_sleep_enable_timer_wakeup(1000000); // 1 Sekunde (Touch-Wakeup reicht als primäre Quelle)
+        esp_sleep_enable_timer_wakeup(1000000); // 1 Sekunde
         esp_sleep_enable_ext0_wakeup((gpio_num_t)TOUCH_INT, 0); // Display-Touch weckt CPU auf!
-        esp_light_sleep_start(); 
+        esp_light_sleep_start();
+        if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
+            tft.writecommand(0x11);
+            delay(120);
+            lastTouchTime = millis();
+            powerState = 1;
+            lastPowerState = 1;
+            wasAwake = true;
+            setBrightness(maxBright);
+            LoraManager::setLowPower(false);
+            lastSecond = -1;
+        }
     }
 }
 
@@ -903,163 +965,14 @@ bool isPageEnabled(int p) { if(p==0) return enP0; if(p==1) return enP1; if(p==2)
 
 static void handleAppTouch(AppPackage* app, int lastX, int touchY) {
     if (!app) return;
-    String target = (app->driver.length() > 0) ? app->driver : app->id;
-    if (AppManager::hasJsScript(app) || app->uiJson.length() > 0 || (app->isCustom && target.length() == 0)) {
-        AppManager::handleDynamicAppTouch(app, lastX, touchY);
+    if (app->touchFn) {
+        app->touchFn(lastX, touchY);
         return;
     }
-    if (target == "stopwatch") {
-        if (touchY >= 150) {
-            if (lastX < 80) {
-                // Start/Stop
-                swRunning = !swRunning; triggerVibration();
-                if(swRunning) swStartTime = millis(); else swElapsed += (millis() - swStartTime);
-            } else if (lastX < 160 && swRunning && swLapCount < MAX_LAPS) {
-                // Runde
-                long lapMs = swElapsed + (millis() - swStartTime);
-                swLaps[swLapCount++] = lapMs;
-                triggerVibration();
-            } else if (lastX >= 160) {
-                // Reset
-                swRunning = false; swElapsed = 0; swLapCount = 0;
-                triggerVibration();
-            }
-            lastSecond = -1; delay(200);
-        }
-    }
-    else if (target == "timer") {
-        if (!timerRunning) {
-            if (touchY >= 80 && touchY <= 130) {
-                if (lastX < 80) timerRemaining = t1 * 60;
-                else if (lastX < 160) timerRemaining = t2 * 60;
-                else timerRemaining = t3 * 60;
-                timerRunning = true; timerLastTick = millis(); triggerVibration(); lastSecond = -1; delay(200);
-            }
-        } else {
-            if (touchY >= 150) {
-                timerRunning = false; timerRemaining = 0; triggerVibration(); lastSecond = -1; delay(200);
-            }
-        }
-    }
-    else if (target == "phishing") {
-        handleEvilTouch(lastX, touchY);
-    }
-    else if (target == "calc") {
-        handleRechnerTouch(lastX, touchY);
-    }
-    else if (target == "jiggler") {
-        handleJigglerTouch(lastX, touchY);
-    }
-    else if (target == "badusb") {
-        if (touchY >= 25 && touchY <= 75) {
-            if (lastX > 10 && lastX < 70) { currentBadUsbScript--; if(currentBadUsbScript < 0) currentBadUsbScript = 2; triggerVibration(); lastSecond = -1; delay(200); }
-            else if (lastX > 170 && lastX < 230) { currentBadUsbScript++; if(currentBadUsbScript > 2) currentBadUsbScript = 0; triggerVibration(); lastSecond = -1; delay(200); }
-        }
-        else if (touchY >= 85 && touchY <= 135 && lastX > 50 && lastX < 190) {
-            badUsbActive = !badUsbActive; triggerVibration(); lastSecond = -1; delay(200);
-        }
-    }
-    else if (target == "wifispam") {
-        if (touchY >= 80 && touchY <= 130 && lastX > 55 && lastX < 185) {
-            wifiSpamActive = !wifiSpamActive; triggerVibration(); lastSecond = -1; delay(200);
-            if(wifiSpamActive) { WiFi.mode(WIFI_AP); esp_wifi_set_promiscuous(true); } 
-            else { esp_wifi_set_promiscuous(false); WiFi.mode(WIFI_OFF); }
-        }
-    }
-    else if (target == "blespam") {
-        if (touchY >= 80 && touchY <= 130 && lastX > 55 && lastX < 185) {
-            bleSpamActive = !bleSpamActive; triggerVibration(); lastSecond = -1; delay(200);
-            if (!bleSpamActive && bleInitDone && !btActive) { BLEDevice::deinit(true); bleInitDone = false; }
-        }
-    }
-    else if (target == "nmap") {
-        if (touchY >= 25 && touchY <= 75) {
-            if (lastX > 10 && lastX < 70) { currentTargetNmap--; if(currentTargetNmap < 0) currentTargetNmap = 2; triggerVibration(); lastSecond = -1; delay(200); }
-            else if (lastX > 170 && lastX < 230) { currentTargetNmap++; if(currentTargetNmap > 2) currentTargetNmap = 0; triggerVibration(); lastSecond = -1; delay(200); }
-        }
-        else if (touchY >= 85 && touchY <= 125 && lastX > 50 && lastX < 190) {
-            if (targetSSIDs[currentTargetNmap].length() > 0) {
-                nmapActive = !nmapActive; 
-                if(nmapActive) { nmapState = 0; } else { WiFi.disconnect(true); WiFi.mode(WIFI_OFF); }
-                triggerVibration(); lastSecond = -1; delay(200);
-            }
-        }
-    }
-    else if (target == "deauth") {
-        if (touchY >= 25 && touchY <= 75) {
-            if (lastX > 10 && lastX < 70) { currentDeauthTarget--; if(currentDeauthTarget < 0) currentDeauthTarget = numScannedNetworks > 0 ? numScannedNetworks - 1 : 0; triggerVibration(); lastSecond = -1; delay(200); }
-            else if (lastX > 170 && lastX < 230) { currentDeauthTarget++; if(currentDeauthTarget >= numScannedNetworks) currentDeauthTarget = 0; triggerVibration(); lastSecond = -1; delay(200); }
-        }
-        else if (touchY >= 75 && touchY <= 110 && lastX > 50 && lastX < 190) {
-            if (numScannedNetworks > 0) {
-                deauthActive = !deauthActive; 
-                if(deauthActive) { deauthState = 0; } else { esp_wifi_set_promiscuous(false); WiFi.mode(WIFI_OFF); }
-                triggerVibration(); lastSecond = -1; delay(200);
-            }
-        }
-        else if (touchY >= 125 && touchY <= 155 && lastX > 60 && lastX < 180) {
-            isScanningAir = true; triggerVibration(); lastSecond = -1; delay(200);
-        }
-    }
-    else if (target == "probemon") {
-        if (touchY >= 145 && touchY <= 185 && lastX > 40 && lastX < 200) {
-            if (probeMonActive) stopProbeMonitor(); else startProbeMonitor();
-            triggerVibration(); lastSecond = -1; delay(200);
-        } else if (touchY >= 0 && touchY < 60) {
-            if (probeScrollOffset > 0) { probeScrollOffset--; lastSecond = -1; }
-        } else if (touchY >= 100 && touchY < 140) {
-            if (probeScrollOffset < probeCount - 4) { probeScrollOffset++; lastSecond = -1; }
-        }
-    }
-    else if (target == "blescan") {
-        if (touchY >= 145 && touchY <= 185 && lastX > 40 && lastX < 200) {
-            if (bleScanActive) stopBleScan(); else startBleScan();
-            triggerVibration(); lastSecond = -1; delay(200);
-        } else if (touchY >= 0 && touchY < 60) {
-            if (bleScanScrollOffset > 0) { bleScanScrollOffset--; lastSecond = -1; }
-        } else if (touchY >= 100 && touchY < 140) {
-            if (bleScanScrollOffset < bleScanCount - 4) { bleScanScrollOffset++; lastSecond = -1; }
-        }
-    }
-    else if (target == "dice") {
-        handleDiceTouch(lastX, touchY);
-    }
-    else if (target == "totp") {
-        handleTotpTouch(lastX, touchY);
-    }
-    else if (target == "notif") {
-        handleNotificationTouch(lastX, touchY);
-    }
-    else if (target == "lora") {
-        if (touchY >= 24 && touchY <= 50) {
-            loraTabMode = (lastX < 120) ? 0 : 1;
-            triggerVibration();
-            lastSecond = -1;
-            return;
-        }
-        if (loraTabMode == 0) {
-            if (touchY >= 160) {
-                static const char* presets[] = {"Hallo!", "OK", "Ping?", "Hilfe!"};
-                int pIdx = (lastX - 10) / 56;
-                if (pIdx >= 0 && pIdx < 4) {
-                    LoraManager::sendMessage(presets[pIdx]);
-                    lastSecond = -1;
-                    return;
-                }
-            }
-        } else {
-            if (touchY >= 150) {
-                LoraManager::setBeacon(!LoraManager::isBeaconActive(), 5);
-                triggerVibration();
-                lastSecond = -1;
-                return;
-            }
-        }
-    }
-    else {
-        AppManager::handleDynamicAppTouch(app, lastX, touchY);
-    }
-}void handleTouchInput() {
+    AppManager::handleDynamicAppTouch(app, lastX, touchY);
+}
+
+void handleTouchInput() {
     if(matrixMode) return;
     int16_t x[2], y[2]; 
     bool isTouched = (touch.getPoint(x, y, 1) > 0); 
@@ -1104,8 +1017,8 @@ static void handleAppTouch(AppPackage* app, int lastX, int touchY) {
             int touchY = y[0] - 34; if (currentPage == 11) touchY = y[0]; 
 
             // Live-Helligkeits-Slider im Control Center (Page 5) mit direktem Feedback
-            if (currentPage == 5 && touchY >= 24 && touchY <= 64 && x[0] >= 28 && x[0] <= 212) {
-                int bVal = map(x[0], 32, 208, 10, 255);
+            if (currentPage == 5 && touchY >= 22 && touchY <= 64 && x[0] >= 10 && x[0] <= 230) {
+                int bVal = map(x[0], 15, 225, 10, 255);
                 bVal = constrain(bVal, 10, 255);
                 if (abs(bVal - maxBright) > 3) {
                     maxBright = bVal;
@@ -1122,13 +1035,17 @@ static void handleAppTouch(AppPackage* app, int lastX, int touchY) {
         }
     } else if (isSwiping) {
         isSwiping = false; int dx = lastX - startX; int dy = lastY - startY;
-        bool isGoodApp = (curApp && curApp->category == CAT_PRODUCTIVITY && curApp->id != "battery" && curApp->id != "flashlight");
-        bool isBadApp  = (curApp && curApp->category == CAT_SECURITY);
-        bool isQSApp   = (curApp && (curApp->id == "battery" || curApp->id == "flashlight"));
+        bool isQSApp = (curApp && (curApp->id == "battery" || curApp->id == "flashlight"));
         
-        // --- Swipe UP to kill (in App-Pages) ---
+        // Save brightness to NVS if user just finished dragging slider on Page 5
+        if (currentPage == 5 && (startY - 34) >= 22 && (startY - 34) <= 64) {
+            prefs.begin("clock", false);
+            prefs.putInt("maxB", maxBright);
+            prefs.end();
+        }
+
+        // --- Swipe UP to kill (in App-Pages: beendet gezielt die aktuelle App) ---
         if (dy < -35 && abs(dy) > abs(dx) && isApp) {
-            // Trash-Icon Animation direkt auf TFT
             tft.fillRect(80, 0, 80, 40, TFT_RED);
             tft.setTextDatum(MC_DATUM); tft.setTextColor(TFT_WHITE, TFT_RED);
             tft.drawString("KILL", 120, 20, 2);
@@ -1138,11 +1055,9 @@ static void handleAppTouch(AppPackage* app, int lastX, int touchY) {
                 if (curApp->id == "flashlight" || curApp->driver == "flashlight") setBrightness(maxBright);
                 AppManager::stopJsApp(curApp);
             }
-            killAllApps(); triggerVibration();
+            triggerVibration();
             // Rücksprung
             if (isQSApp) slideToPage(5, 0, 1);
-            else if (isGoodApp) slideToPage(22, 0, 1);
-            else if (isBadApp) slideToPage(23, 0, 1);
             else slideToPage(6, 0, 1);
             lastTouchTime = millis(); return;
         }
@@ -1151,9 +1066,7 @@ static void handleAppTouch(AppPackage* app, int lastX, int touchY) {
             triggerVibration();
             if (curApp && (curApp->id == "mic" || curApp->driver == "mic")) stopMic();
             if (curApp && (curApp->id == "flashlight" || curApp->driver == "flashlight")) setBrightness(maxBright);
-            if (isGoodApp) slideToPage(22, (dx > 0) ? 1 : -1, 0);
-            else if (isBadApp) slideToPage(23, (dx > 0) ? 1 : -1, 0);
-            else if (isQSApp) slideToPage(5, (dx > 0) ? 1 : -1, 0);
+            if (isQSApp) slideToPage(5, (dx > 0) ? 1 : -1, 0);
             else slideToPage(6, (dx > 0) ? 1 : -1, 0);
             lastTouchTime = millis(); return;
         }
@@ -1163,8 +1076,6 @@ static void handleAppTouch(AppPackage* app, int lastX, int touchY) {
             if (curApp && (curApp->id == "mic" || curApp->driver == "mic")) stopMic();
             if (curApp && (curApp->id == "flashlight" || curApp->driver == "flashlight")) setBrightness(maxBright);
             if (isQSApp) slideToPage(5, 0, 1);
-            else if (isGoodApp) slideToPage(22, 0, 1);
-            else if (isBadApp) slideToPage(23, 0, 1);
             else slideToPage(6, 0, 1);
             lastTouchTime = millis(); return;
         }
@@ -1210,22 +1121,34 @@ static void handleAppTouch(AppPackage* app, int lastX, int touchY) {
             slideToPage(6, 0, 1);
             lastTouchTime = millis(); return;
         }
-        // --- Watchface horizontal swipe ---
+        // --- Watchface horizontal swipe (Carousel Navigation) ---
         else if (abs(dx) > 40 && abs(dx) > abs(dy)) { 
-            if (currentPage >= 0 && currentPage <= 3) { 
-                int nextP = currentPage; int checks = 0;
-                if (dx > 0) { do { nextP--; if(nextP < 0) nextP = 3; checks++; } while(nextP != currentPage && !isPageEnabled(nextP) && checks < 4); } 
-                else { do { nextP++; if(nextP > 3) nextP = 0; checks++; } while(nextP != currentPage && !isPageEnabled(nextP) && checks < 4); }
-                if(nextP != currentPage && isPageEnabled(nextP)) { triggerVibration(); slideToPage(nextP, (dx > 0) ? 1 : -1, 0); mainPage = currentPage; } 
+            if (currentPage == 0 || (currentPage >= 1 && currentPage <= 3)) { 
+                if (!carouselOrder.empty()) {
+                    if (dx > 0) {
+                        // Swipe Right -> Vorheriges Face im Karussell
+                        carouselIndex = (carouselIndex - 1 + (int)carouselOrder.size()) % (int)carouselOrder.size();
+                    } else {
+                        // Swipe Left -> Nächstes Face im Karussell
+                        carouselIndex = (carouselIndex + 1) % (int)carouselOrder.size();
+                    }
+                    triggerVibration();
+                    slideToPage(0, (dx > 0) ? 1 : -1, 0);
+                    mainPage = 0;
+                    lastTouchTime = millis();
+                    return;
+                }
             }
         } 
         else if (dy > 40 && abs(dy) > abs(dx)) { 
-            Serial.printf("[TOUCH] Swipe DOWN page=%d -> ziel: %s\n", currentPage, (currentPage >= 0 && currentPage <= 3) ? "5" : (currentPage == 6) ? "main" : "?");
-            if (currentPage >= 0 && currentPage <= 3) { triggerVibration(); slideToPage(5, 0, 1); } else if (currentPage == 6) { triggerVibration(); slideToPage(mainPage, 0, 1); } 
+            Serial.printf("[TOUCH] Swipe DOWN page=%d -> ziel: %s\n", currentPage, (currentPage == 0 || (currentPage >= 1 && currentPage <= 3)) ? "5" : (currentPage == 6) ? "main" : "?");
+            if (currentPage == 0 || (currentPage >= 1 && currentPage <= 3)) { triggerVibration(); slideToPage(5, 0, 1); } 
+            else if (currentPage == 6) { triggerVibration(); slideToPage(mainPage, 0, 1); } 
         } 
         else if (dy < -40 && abs(dy) > abs(dx)) { 
-            Serial.printf("[TOUCH] Swipe UP page=%d -> ziel: %s\n", currentPage, (currentPage >= 0 && currentPage <= 3) ? "6" : (currentPage == 5) ? "main" : "?");
-            if (currentPage >= 0 && currentPage <= 3) { triggerVibration(); slideToPage(6, 0, -1); } else if (currentPage == 5) { triggerVibration(); slideToPage(mainPage, 0, -1); } 
+            Serial.printf("[TOUCH] Swipe UP page=%d -> ziel: %s\n", currentPage, (currentPage == 0 || (currentPage >= 1 && currentPage <= 3)) ? "6" : (currentPage == 5) ? "main" : "?");
+            if (currentPage == 0 || (currentPage >= 1 && currentPage <= 3)) { triggerVibration(); slideToPage(6, 0, -1); } 
+            else if (currentPage == 5) { triggerVibration(); slideToPage(mainPage, 0, -1); } 
         }
         else if (abs(dx) <= 35 && abs(dy) <= 35) { 
             int touchY = lastY - 34; 
@@ -1237,7 +1160,9 @@ static void handleAppTouch(AppPackage* app, int lastX, int touchY) {
                     lastSecond = -1;
                     return;
                 }
-                if (watchfaceMode == 0) {
+                int activeFace = (!carouselOrder.empty() && carouselIndex >= 0 && carouselIndex < (int)carouselOrder.size()) ? carouselOrder[carouselIndex] : 0;
+                
+                if (activeFace == FACE_ULTRA_DASH) {
                     if (touchY >= 116 && touchY <= 155 && lastX >= 98) {
                         AppManager::launchAppById("battery");
                         lastSecond = -1;
@@ -1248,36 +1173,59 @@ static void handleAppTouch(AppPackage* app, int lastX, int touchY) {
                         lastSecond = -1;
                         return;
                     }
-                } else if (watchfaceMode == 1) { // Chronograph Sub-Dials
-                    // Battery Sub-dial (Right: x=145..198, y=75..130)
+                } else if (activeFace == FACE_CHRONO) {
                     if (touchY >= 75 && touchY <= 130 && lastX >= 145 && lastX <= 198) {
                         AppManager::launchAppById("battery");
                         lastSecond = -1;
                         return;
                     }
-                    // Steps Sub-dial (Left: x=42..95, y=75..130)
                     if (touchY >= 75 && touchY <= 130 && lastX >= 42 && lastX <= 95) {
                         showToastColor("Schritte: " + String(stepCount) + " / " + String(stepGoal), 2500, 0x07E0);
                         lastSecond = -1;
                         return;
                     }
-                } else if (watchfaceMode == 2) { // Retro Casio Bottom Complications
-                    // Battery Meter (Bottom Left: y>=115, x<=115)
+                } else if (activeFace == FACE_CASIO) {
                     if (touchY >= 115 && lastX <= 115) {
                         AppManager::launchAppById("battery");
                         lastSecond = -1;
                         return;
                     }
-                    // Steps Odometer (Bottom Right: y>=115, x>115)
                     if (touchY >= 115 && lastX > 115) {
                         showToastColor("Schritte: " + String(stepCount) + " / " + String(stepGoal), 2500, 0x07E0);
                         lastSecond = -1;
                         return;
                     }
+                } else if (activeFace == FACE_PARENTS) {
+                    parentViewMode = 1 - parentViewMode;
+                    triggerVibration();
+                    showToast(parentViewMode == 0 ? "Eltern-Sicht" : "Kinder-Projektion", 1500);
+                    lastSecond = -1;
+                    return;
+                } else if (activeFace == FACE_CYBERPUNK) {
+                    if (touchY >= 135 && touchY <= 165) {
+                        AppManager::launchAppById("battery");
+                        lastSecond = -1;
+                        return;
+                    }
+                    showToastColor("CPU " + String(ESP.getCpuFreqMHz()) + "MHz | Akku " + String(getBattery()) + "%", 2000, 0x07FF);
+                    lastSecond = -1;
+                    return;
+                } else if (activeFace == FACE_WORDCLOCK) {
+                    time_t nw; time(&nw); struct tm *tmN = localtime(&nw);
+                    char tBuf[16]; snprintf(tBuf, sizeof(tBuf), "%02d:%02d:%02d", tmN->tm_hour, tmN->tm_min, tmN->tm_sec);
+                    showToastColor(String(tBuf), 2000, 0xFFFF);
+                    lastSecond = -1;
+                    return;
                 }
-                // Watchfaces werden gezielt im WebDashboard ausgewaehlt (kein versehentliches Verstellen)
                 triggerVibration();
                 lastSecond = -1;
+            }
+            else if (currentPage == 3) {
+                parentViewMode = 1 - parentViewMode;
+                triggerVibration();
+                showToast(parentViewMode == 0 ? "Eltern-Sicht" : "Kinder-Projektion", 1500);
+                lastSecond = -1;
+                return;
             }
             else if (currentPage == 5) { 
                 // 1. Grab Handle / Top Bar: Swipe back up or tap to dismiss to Watchface
@@ -1287,12 +1235,15 @@ static void handleAppTouch(AppPackage* app, int lastX, int touchY) {
                     lastSecond = -1;
                     return;
                 }
-                // 2. Brightness Slider Tap: Set brightness
-                if (touchY >= 24 && touchY <= 64) {
-                    int bVal = map(lastX, 32, 208, 10, 255);
+                // 2. Brightness Slider Tap: Set brightness and persist to NVS
+                if (touchY >= 22 && touchY <= 64) {
+                    int bVal = map(lastX, 15, 225, 10, 255);
                     bVal = constrain(bVal, 10, 255);
                     maxBright = bVal;
                     setBrightness(maxBright);
+                    prefs.begin("clock", false);
+                    prefs.putInt("maxB", maxBright);
+                    prefs.end();
                     triggerVibration();
                     lastSecond = -1;
                     return;
@@ -1341,28 +1292,26 @@ static void handleAppTouch(AppPackage* app, int lastX, int touchY) {
                     }
                 }
             } 
-            else if (currentPage == 6) { 
-                if (touchY >= 30 && touchY <= 195) {
-                    if (lastX < 120) { 
-                        triggerVibration(); slideToPage(22, 1, 0);   // Good=LINKS: kommt von links
-                    } else { 
-                        triggerVibration(); slideToPage(23, -1, 0);  // Bad=RECHTS: kommt von rechts
-                    }
-                }
+            else if (currentPage == 6 || currentPage == 22 || currentPage == 23) { 
+                handleAppLauncherTouch(lastX, touchY);
             }
-            // === Menu-Page Taps (erst beim Loslassen, damit Swipe-Back funktioniert) ===
-            else if (currentPage == 22) { handleGoodMenuTouch(lastX, touchY); }
-            else if (currentPage == 23) { handleBadMenuTouch(lastX, touchY); }
             // === Dynamische App-Page Taps (nur bei echtem Tap, nicht bei Swipe) ===
             else if (curApp) {
+                if (curApp->id == "flashlight" || curApp->driver == "flashlight") {
+                    if (AppManager::getAppStateBool(curApp->id, "fullscreen", false)) {
+                        // Bei Tippen auf Vollbild-Taschenlampe: Zurueck ins Einstellungsmenue wechseln!
+                        AppManager::setAppStateBool(curApp->id, "fullscreen", false);
+                        triggerVibration();
+                        lastSecond = -1;
+                        return;
+                    }
+                }
                 if (touchY <= 0) {
                     // Oberer Header angetippt: Zurück zum Menü
                     triggerVibration();
                     if (curApp->id == "mic" || curApp->driver == "mic") stopMic();
                     if (curApp->id == "flashlight" || curApp->driver == "flashlight") setBrightness(maxBright);
-                    if (isGoodApp) slideToPage(22, -1, 0);
-                    else if (isBadApp) slideToPage(23, 1, 0);
-                    else if (isQSApp) slideToPage(5, -1, 0);
+                    if (isQSApp) slideToPage(5, -1, 0);
                     else slideToPage(6, -1, 0);
                     return;
                 }

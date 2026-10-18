@@ -251,9 +251,10 @@ WatchOS/
 ├── NotificationManager.*  # Benachrichtigungsverwaltung & Status-Badges
 ├── LoraManager.h/.cpp     # SX1262 LoRa Funkmanager (Chat, Beacon, Telemetrie)
 ├── SystemEvents.h/.cpp    # Systemweites Eventbus-System
-├── GoodApps.h/.cpp        # Produktivitäts-Apps (Stoppuhr, Rechner, Wasserwaage etc.)
-├── BadApps.h/.cpp         # Sicherheits-Werkzeuge (Deauther, Spammer, BadUSB etc.)
-├── WebManager.h/.cpp      # Modernes Web-Dashboard, REST-API, Captive Portal
+├── AppLauncher.h/.cpp     # Einheitlicher App-Drawer mit Kategorien-Registern
+├── SensorDriver.h/.cpp    # BMA423 Beschleunigungssensor, Pedometer & Wrist-Wake
+├── PortalServer.h/.cpp    # Captive Portal Webserver-Infrastruktur & Datei-Handler
+├── WebManager.h/.cpp      # Modernes Web-Dashboard, REST-API, Flash-Telemetrie
 ├── UpdateOTA.h/.cpp       # Authentifizierter OTA-Firmware-Update-Handler
 ├── platformio.ini         # PlatformIO-Projektkonfiguration
 ├── build_firmware.sh      # Linux Build-Skript mit Multi-Job-Unterstützung

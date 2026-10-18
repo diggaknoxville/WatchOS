@@ -20,6 +20,29 @@ typedef void (*AppTouchFn)(int x, int y);
 typedef bool (*AppStatusFn)();
 typedef void (*AppStopFn)();
 
+struct UiWidget {
+    String type;
+    String id;
+    String text;
+    String align;
+    String color;
+    String bg;
+    String textColor;
+    String action;
+    String keys;
+    String valueExpr;
+    String visibleExpr;
+    int x = 120;
+    int y = 50;
+    int w = 200;
+    int h = 36;
+    int size = 2;
+    int spacing = 4;
+    int maxVal = 100;
+    int rows = 4;
+    int cols = 4;
+};
+
 struct AppPackage {
     String id;              // Eindeutige ID z.B. "lora", "totp", "dice"
     String name;            // Anzeigename z.B. "LoRa Chat", "2FA Authenticator"
@@ -45,6 +68,9 @@ struct AppPackage {
     int tickIntervalMs = 0; // Tick-Intervall für onTick() in ms
     unsigned long lastTickMs = 0;
     bool jsInitialized = false;
+    bool uiParsed = false;
+    String uiTitle;
+    std::vector<UiWidget> widgets;
 };
 
 class AppManager {
@@ -84,6 +110,12 @@ public:
     static void stopJsApp(AppPackage *app);
     static void renderDynamicApp(AppPackage *app, TFT_eSprite *spr);
     static void handleDynamicAppTouch(AppPackage *app, int x, int touchY);
+
+    // App-State Zugriff (fuer Display, Notifikationen & System-Steuerung)
+    static bool getAppStateBool(const String &appId, const String &key, bool defaultVal = false);
+    static int getAppStateInt(const String &appId, const String &key, int defaultVal = 0);
+    static void setAppStateBool(const String &appId, const String &key, bool val);
+    static void setAppStateInt(const String &appId, const String &key, int val);
 
     // API & JSON Export
     static String getPackagesJson();

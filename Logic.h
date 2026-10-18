@@ -10,7 +10,8 @@ void startMic();
 void stopMic();
 int getDecibels();
 void killAllApps();
-void killBadApps();
+void killSecurityTasks();
+#define killBadApps killSecurityTasks
 void toggleBT();
 void toggleVibra();
 void checkBackgroundTasks(unsigned long currentMillis);

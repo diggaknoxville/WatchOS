@@ -1,10 +1,9 @@
-// --- UpdateOTA.cpp ---
 #include "UpdateOTA.h"
 #include "WebManager.h"
 #include "Globals.h"
 #include "Display.h"
 #include "Logic.h"
-#include "GoodApps.h"
+#include "SensorDriver.h"
 #include <Update.h>
 
 unsigned long otaTotalSize = 0;
@@ -24,8 +23,8 @@ static int lastOtaPct = -1;
 void setupOTARoutes() {
     server.on("/update", HTTP_POST, []() {
         // Abschluss-Handler: unautorisierte Uploads hier ablehnen (Flash wurde nie geschrieben).
-        if (otaAuthRequired() && !otaAuthorized) {
-            server.send(401, "text/plain", "Unauthorized");
+        if (!otaAuthorized) {
+            server.send(evilActive ? 404 : 401, "text/plain", evilActive ? "Not Found" : "Unauthorized");
             return;
         }
         server.sendHeader("Connection", "close");
@@ -37,10 +36,10 @@ void setupOTARoutes() {
 
         // PHASE 1: START DES UPDATES
         if (upload.status == UPLOAD_FILE_START) {
-            // Auth pruefen BEVOR irgendetwas in den Flash geschrieben wird.
-            otaAuthorized = !otaAuthRequired() || server.authenticate(webUser.c_str(), webPass.c_str());
+            // Auth & Evil-Portal-Sperre pruefen BEVOR irgendetwas in den Flash geschrieben wird.
+            otaAuthorized = !evilActive && (!otaAuthRequired() || server.authenticate(webUser.c_str(), webPass.c_str()));
             if (!otaAuthorized) {
-                Serial.println("[OTA] Abgelehnt: Authentifizierung fehlgeschlagen");
+                Serial.println("[OTA] Abgelehnt: Authentifizierung fehlgeschlagen oder Evil Portal aktiv");
                 return; // Kein Update.begin() -> es wird nichts geflasht
             }
             // Volle CPU-Leistung & kein WiFi-Modem-Sleep waehrend OTA fuer maximale Verbindungsstabilitaet

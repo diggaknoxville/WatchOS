@@ -3,7 +3,7 @@
 #include "Globals.h"
 #include "Display.h"
 #include "Logic.h"
-#include "GoodApps.h"
+#include "SensorDriver.h"
 #include <Wire.h>
 #include <WiFi.h>
 #include <driver/i2s.h>
@@ -77,6 +77,7 @@ String evilHTML = defaultEvilHTML;
 int diceType = 1;    // Default: d6
 int diceResult = 0;
 bool diceRolling = false;
+bool jigglerActive = false;
 bool usbHidActive = false;
 String usbModeSource = "NVS";
 bool usbModeDiagPending = false;
@@ -303,6 +304,9 @@ void loadPreferences() {
     sysLang = prefs.getInt("lang", sysLang);
     
     enP0 = prefs.getBool("enP0", true); enP1 = prefs.getBool("enP1", true); enP2 = prefs.getBool("enP2", true); enP3 = prefs.getBool("enP3", true);
+    carouselOrderStr = prefs.getString("carOrder", "0,1,2,7,8,9");
+    carouselIndex = prefs.getInt("carStart", 0);
+    rebuildCarouselOrder(carouselOrderStr);
     timerAlarmMode = prefs.getInt("tAlarm", 0);
     t1 = prefs.getInt("t1", t1); t2 = prefs.getInt("t2", t2); t3 = prefs.getInt("t3", t3);
 
@@ -346,8 +350,9 @@ void loadPreferences() {
     webPass = prefs.getString("webPwd", webPass);
     webAuthEnabled = prefs.getBool("webAuth", webAuthEnabled);
     
-    // Haptic
-    hapticWaveform = prefs.getInt("hapW", hapticWaveform);
+    // Haptic: 14 = Strong Buzz 100% (spuerbar auf ERM Motor, Wafer 1 war unspuerbar kurz)
+    hapticWaveform = prefs.getInt("hapW", 14);
+    if (hapticWaveform == 1) hapticWaveform = 14;
     bool hasUsbModeKey = prefs.isKey("usbHid");
     usbModeSource = hasUsbModeKey ? "NVS" : "Default";
     usbHidActive = prefs.getBool("usbHid", usbHidActive);
@@ -393,17 +398,20 @@ void loadPreferences() {
     Serial.printf("[NVS] loadPreferences fertig. freeEntries=%d\n", prefs.freeEntries());
     prefs.end();
     
-    // FFat: Große Strings laden (Evil HTML, BadUSB Skripte)
+    // FFat: Große Strings laden (Portal HTML, Ducky Skripte)
     if (littleFsReady) {
-        String fsHtml = readFileFromFS("/evil.html", "");
-        if (fsHtml.length() > 100) evilHTML = fsHtml;
+        String fsHtml = readFileFromFS("/portal/index.html", "");
+        if (fsHtml.length() < 100) fsHtml = readFileFromFS("/evil.html", "");
+        if (fsHtml.length() > 100) portalHTML = fsHtml;
         for (int i = 0; i < 3; i++) {
-            String fsScript = readFileFromFS("/badusb" + String(i) + ".txt", "");
-            if (fsScript.length() > 0) badUsbScripts[i] = fsScript;
+            String fsScript = readFileFromFS("/scripts/ducky" + String(i + 1) + ".txt", "");
+            if (fsScript.length() == 0) fsScript = readFileFromFS("/badusb" + String(i) + ".txt", "");
+            if (fsScript.length() > 0) duckyScripts[i] = fsScript;
         }
     }
     
-    if(currentPage == 0 && !enP0) currentPage = 1; if(currentPage == 1 && !enP1) currentPage = 2; if(currentPage == 2 && !enP2) currentPage = 3; if(currentPage == 3 && !enP3) currentPage = 0; mainPage = currentPage;
+    currentPage = 0;
+    mainPage = 0;
 }
 
 void initHardware() {
@@ -534,8 +542,25 @@ void playSynthSound(int type, int duration) {
                 int16_t wow = (int16_t)(sin(f * 0.3) * 1500); // Wow/Flutter
                 sample[i] = tape + wow;
             }
-        } i2s_write(I2S_NUM_0, sample, sizeof(sample), &bytesWritten, portMAX_DELAY);
+        } i2s_write(I2S_NUM_1, sample, sizeof(sample), &bytesWritten, portMAX_DELAY);
     }
+    i2s_zero_dma_buffer(I2S_NUM_1);
+}
+
+void playToneHz(int freqHz, int durationMs) {
+    if (!vibActive || freqHz <= 20 || durationMs <= 0) return;
+    int sampleRate = 16000;
+    size_t bytesWritten = 0;
+    int16_t sample[256];
+    int frames = max(1, (int)((sampleRate / 256) * (durationMs / 1000.0)));
+    for (int f = 0; f < frames; f++) {
+        for (int i = 0; i < 256; i++) {
+            int t = f * 256 + i;
+            sample[i] = (((t * freqHz * 2 / sampleRate) % 2 == 0) ? 10000 : -10000);
+        }
+        i2s_write(I2S_NUM_1, sample, sizeof(sample), &bytesWritten, portMAX_DELAY);
+    }
+    i2s_zero_dma_buffer(I2S_NUM_1);
 }
 
 void playBootSound(int type) { 
@@ -576,14 +601,15 @@ void bootLog(String left, String right = "", uint16_t rightCol = TFT_WHITE) { if
 void bootUpdateRight(String right, uint16_t rightCol = TFT_WHITE) { if(bootY >= 16) { cdSprite.fillRect(bootW - 80, bootY - 16, 80, 16, bBG); cdSprite.setTextDatum(TR_DATUM); cdSprite.setTextColor(rightCol, bBG); cdSprite.drawString(right, bootW - 4, bootY - 16, 2); cdSprite.pushSprite(bootTftX, bootTftY); } }
 
 void showBootSequence() {
+    // Lautsprecher dauerhaft auf I2S_NUM_1 (Standard TX), damit Audio und PDM-Mikrofon (I2S_NUM_0) nicht kollidieren
     i2s_config_t i2s_tx_config; memset(&i2s_tx_config, 0, sizeof(i2s_tx_config)); i2s_tx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX); i2s_tx_config.sample_rate = 16000; i2s_tx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_tx_config.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT; i2s_tx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_tx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; i2s_tx_config.dma_desc_num = 4; i2s_tx_config.dma_frame_num = 256; i2s_tx_config.use_apll = false;
     i2s_pin_config_t tx_pin_config; memset(&tx_pin_config, 0, sizeof(tx_pin_config)); tx_pin_config.bck_io_num = I2S_BCK_SPK; tx_pin_config.ws_io_num = I2S_WS_SPK; tx_pin_config.data_out_num = I2S_DOUT_SPK; tx_pin_config.data_in_num = -1; tx_pin_config.mck_io_num = -1;
-    i2s_driver_install(I2S_NUM_0, &i2s_tx_config, 0, NULL); i2s_set_pin(I2S_NUM_0, &tx_pin_config); i2s_zero_dma_buffer(I2S_NUM_0);
+    i2s_driver_install(I2S_NUM_1, &i2s_tx_config, 0, NULL); i2s_set_pin(I2S_NUM_1, &tx_pin_config); i2s_zero_dma_buffer(I2S_NUM_1);
 
     if (bootMode == 4) {
         WiFi.mode(WIFI_STA); WiFi.begin(userSSID.c_str(), userPWD.c_str()); int wifiRetry = 0; while (WiFi.status() != WL_CONNECTED && wifiRetry < 16) { delay(250); wifiRetry++; }
         if (WiFi.status() == WL_CONNECTED) { syncNtpTime(6); } WiFi.disconnect(true); WiFi.mode(WIFI_OFF);
-        i2s_driver_uninstall(I2S_NUM_0); i2s_config_t i2s_rx_config; memset(&i2s_rx_config, 0, sizeof(i2s_rx_config)); i2s_rx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); i2s_rx_config.sample_rate = 16000; i2s_rx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_rx_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT; i2s_rx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_rx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; i2s_rx_config.dma_desc_num = 8; i2s_rx_config.dma_frame_num = 256; i2s_rx_config.use_apll = false; i2s_pin_config_t rx_pin_config; memset(&rx_pin_config, 0, sizeof(rx_pin_config)); rx_pin_config.bck_io_num = -1; rx_pin_config.ws_io_num = I2S_WS_MIC; rx_pin_config.data_out_num = -1; rx_pin_config.data_in_num = I2S_DIN_MIC; rx_pin_config.mck_io_num = -1;
+        i2s_config_t i2s_rx_config; memset(&i2s_rx_config, 0, sizeof(i2s_rx_config)); i2s_rx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); i2s_rx_config.sample_rate = 16000; i2s_rx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_rx_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT; i2s_rx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_rx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; i2s_rx_config.dma_desc_num = 8; i2s_rx_config.dma_frame_num = 256; i2s_rx_config.use_apll = false; i2s_pin_config_t rx_pin_config; memset(&rx_pin_config, 0, sizeof(rx_pin_config)); rx_pin_config.bck_io_num = -1; rx_pin_config.ws_io_num = I2S_WS_MIC; rx_pin_config.data_out_num = -1; rx_pin_config.data_in_num = I2S_DIN_MIC; rx_pin_config.mck_io_num = -1;
         if(i2s_driver_install(I2S_NUM_0, &i2s_rx_config, 0, NULL) == ESP_OK) { i2s_set_pin(I2S_NUM_0, &rx_pin_config); i2s_stop(I2S_NUM_0); }
         cdSprite.deleteSprite(); 
         void* p = cdSprite.createSprite(240, 240 - 34); 
@@ -678,7 +704,7 @@ void showBootSequence() {
 
     uint16_t okCol = (bootMode == 0) ? TFT_WHITE : bFG; uint16_t errCol = (bootMode == 0) ? TFT_WHITE : bFG; uint16_t infCol = (bootMode == 0) ? TFT_WHITE : bFG; uint16_t waitCol = (bootMode == 0) ? TFT_WHITE : bFG;
     bootLog("LilyGo BIOS v2.0", "OK", okCol); bootLog("Copyright (C) 2026", "", okCol); bootLog("Michael Strassburger", "", okCol); bootLog("======================="); bootLog("CPU: ESP32-S3", String(ESP.getCpuFreqMHz()) + " MHz", infCol); bootLog("SRAM Base", String(ESP.getHeapSize() / 1024) + " KB", infCol); bootLog("OPI PSRAM", String(ESP.getPsramSize() / 1024) + " KB", infCol); bootLog("Flash ROM", String(ESP.getFlashChipSize() / 1024 / 1024) + " MB", infCol); WiFi.mode(WIFI_STA); bootLog("MAC", WiFi.macAddress(), infCol); bootLog("", ""); bootLog("--- System Init ---"); bootLog("I2C Bus", "OK", okCol); bootLog("PMU AXP2101", "OK", okCol); bootLog(" BATT Volt", String(pmu.getBattVoltage() / 1000.0) + "V", infCol); bootLog("Haptic DRV", "OK", okCol); bootLog("Touch FT6X36", "OK", okCol);
-    i2s_driver_uninstall(I2S_NUM_0); i2s_config_t i2s_rx_config; memset(&i2s_rx_config, 0, sizeof(i2s_rx_config)); i2s_rx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); i2s_rx_config.sample_rate = 16000; i2s_rx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_rx_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT; i2s_rx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_rx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; i2s_rx_config.dma_desc_num = 8; i2s_rx_config.dma_frame_num = 256; i2s_rx_config.use_apll = false; i2s_pin_config_t rx_pin_config; memset(&rx_pin_config, 0, sizeof(rx_pin_config)); rx_pin_config.bck_io_num = -1; rx_pin_config.ws_io_num = I2S_WS_MIC; rx_pin_config.data_out_num = -1; rx_pin_config.data_in_num = I2S_DIN_MIC; rx_pin_config.mck_io_num = -1;
+    i2s_config_t i2s_rx_config; memset(&i2s_rx_config, 0, sizeof(i2s_rx_config)); i2s_rx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); i2s_rx_config.sample_rate = 16000; i2s_rx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_rx_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT; i2s_rx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_rx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; i2s_rx_config.dma_desc_num = 8; i2s_rx_config.dma_frame_num = 256; i2s_rx_config.use_apll = false; i2s_pin_config_t rx_pin_config; memset(&rx_pin_config, 0, sizeof(rx_pin_config)); rx_pin_config.bck_io_num = -1; rx_pin_config.ws_io_num = I2S_WS_MIC; rx_pin_config.data_out_num = -1; rx_pin_config.data_in_num = I2S_DIN_MIC; rx_pin_config.mck_io_num = -1;
     if(i2s_driver_install(I2S_NUM_0, &i2s_rx_config, 0, NULL) == ESP_OK) { i2s_set_pin(I2S_NUM_0, &rx_pin_config); i2s_stop(I2S_NUM_0); bootLog("Audio Mic", "OK", okCol); } else { bootLog("Audio Mic", "FAIL", errCol); }
     bootLog("EEPROM NVRAM", "OK", okCol); WiFi.begin(userSSID.c_str(), userPWD.c_str()); int wifiRetry = 0; bootLog("WLAN", "Wait", waitCol); while (WiFi.status() != WL_CONNECTED && wifiRetry < 16) { bootUpdateRight(String(wifiRetry+1), waitCol); delay(300); wifiRetry++; }
     if (WiFi.status() == WL_CONNECTED) { 

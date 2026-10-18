@@ -1,8 +1,8 @@
 // --- Display.cpp ---
 #include "Display.h"
 #include "Globals.h" 
-#include "GoodApps.h" 
-#include "BadApps.h"
+#include "AppLauncher.h" 
+#include "SensorDriver.h"
 #include "HardwareConfig.h" 
 #include "NotificationManager.h"
 #include <WiFi.h>
@@ -31,12 +31,12 @@ time_t stringToTime(String dateStr, String timeStr) {
     return mktime(&t);
 }
 
-void draw7Segment(TFT_eSprite &spr, int x, int y, int num, int h, int w, uint16_t color) {
+void draw7Segment(TFT_eSPI &spr, int x, int y, int num, int h, int w, uint16_t color) {
     const uint8_t segs[] = {0x3F,0x06,0x5B,0x4F,0x66,0x6D,0x7D,0x07,0x7F,0x6F}; uint8_t bits = segs[num % 10]; int d = h / 10; if (d < 2) d = 2;
     if (bits & 0x01) spr.fillRect(x + d, y, w - 2*d, d, color); if (bits & 0x40) spr.fillRect(x + d, y + h/2 - d/2, w - 2*d, d, color); if (bits & 0x08) spr.fillRect(x + d, y + h - d, w - 2*d, d, color); if (bits & 0x02) spr.fillRect(x + w - d, y + d, d, h/2 - 1.5*d, color); if (bits & 0x04) spr.fillRect(x + w - d, y + h/2 + d/2, d, h/2 - 1.5*d, color); if (bits & 0x10) spr.fillRect(x, y + h/2 + d/2, d, h/2 - 1.5*d, color); if (bits & 0x20) spr.fillRect(x, y + d, d, h/2 - 1.5*d, color);          
 }
 
-int draw7SegString(TFT_eSprite &spr, String text, int x, int y, int h, int w, uint16_t color, int spacing) {
+int draw7SegString(TFT_eSPI &spr, String text, int x, int y, int h, int w, uint16_t color, int spacing) {
     int curX = x; int d = h / 10; if (d < 2) d = 2; 
     for (int i = 0; i < text.length(); i++) {
         char c = text[i];
@@ -48,7 +48,7 @@ int draw7SegString(TFT_eSprite &spr, String text, int x, int y, int h, int w, ui
             if (bits & 0x02) spr.fillRect(curX + w - d, y + d, d, h/2 - 1.5*d, color); 
             if (bits & 0x04) spr.fillRect(curX + w - d, y + h/2 + d/2, d, h/2 - 1.5*d, color); 
             if (bits & 0x10) spr.fillRect(curX, y + h/2 + d/2, d, h/2 - 1.5*d, color); 
-            if (bits & 0x20) spr.fillRect(curX, y + d, d, h/2 - 1.5*d, color); // HIER WAR DER BUG! (x statt curX)
+            if (bits & 0x20) spr.fillRect(curX, y + d, d, h/2 - 1.5*d, color);
             curX += w + spacing;
         }
     } return curX - x; 
@@ -59,33 +59,15 @@ int get7SegWidth(String text, int h, int w, int spacing) {
     for (int i = 0; i < text.length(); i++) { char c = text[i]; if (c == '.') curX += d + spacing; else if (c == ' ' || c == '|' || c == ':') curX += (w/2) + spacing; else curX += w + spacing; } return curX - spacing; 
 }
 
-inline uint16_t blendColor565(uint16_t c1, uint16_t c2, uint8_t alpha) {
-    uint8_t r1 = (c1 >> 11) & 0x1F;
-    uint8_t g1 = (c1 >> 5) & 0x3F;
-    uint8_t b1 = c1 & 0x1F;
-    uint8_t r2 = (c2 >> 11) & 0x1F;
-    uint8_t g2 = (c2 >> 5) & 0x3F;
-    uint8_t b2 = c2 & 0x1F;
-    uint8_t r = (r1 * (255 - alpha) + r2 * alpha) >> 8;
-    uint8_t g = (g1 * (255 - alpha) + g2 * alpha) >> 8;
-    uint8_t b = (b1 * (255 - alpha) + b2 * alpha) >> 8;
-    return (r << 11) | (g << 5) | b;
-}
-
 void drawGlassCard(TFT_eSprite *spr, int x, int y, int w, int h, int r, uint16_t borderCol, uint16_t fillTop, uint16_t fillBot) {
     if (!spr || spr->getPointer() == nullptr) return;
     spr->fillRoundRect(x, y, w, h, r, fillBot);
     int topBandH = h / 3;
-    if (topBandH > r) {
-        spr->fillRoundRect(x + 1, y + 1, w - 2, topBandH, r, fillTop);
-        spr->fillRect(x + 1, y + r, w - 2, topBandH - r + 2, blendColor565(fillTop, fillBot, 140));
+    if (fillTop != fillBot && topBandH > r) {
+        spr->fillRoundRect(x + 1, y + 1, w - 2, topBandH, r > 1 ? r - 1 : 1, fillTop);
+        spr->fillRect(x + 1, y + r, w - 2, topBandH - r + 1, blendColor565(fillTop, fillBot, 140));
     }
-    // Specular gloss reflection line along the top inner edge
-    spr->drawFastHLine(x + r, y + 1, w - 2 * r, 0xCE79);
-    spr->drawFastHLine(x + r, y + 2, w - 2 * r, 0x52AA);
-    // Subtle ambient shadow at the bottom
-    spr->drawFastHLine(x + r, y + h, w - 2 * r, 0x0000);
-    // Bevel border
+    // Clean crisp 1px card border
     spr->drawRoundRect(x, y, w, h, r, borderCol);
 }
 
@@ -147,8 +129,10 @@ void drawHeader(struct tm *aktuell, int akku, bool charging) {
         headSpriteReady = (p != nullptr);
     }
     
+    uint16_t hdrBg = (cHeadBG != 0) ? cHeadBG : 0x0821;
+    uint16_t hdrFg = (cHeadFG != 0) ? cHeadFG : 0x8CD1;
     TFT_eSprite &hs = headSpriteReady ? headSprite : cdSprite;
-    hs.fillRect(0, 0, 240, HEAD_H, 0x0821);
+    hs.fillRect(0, 0, 240, HEAD_H, hdrBg);
     hs.drawFastHLine(0, 0, 240, 0x2104);
     int cy = 9;
     int curX = 4;
@@ -180,16 +164,16 @@ void drawHeader(struct tm *aktuell, int akku, bool charging) {
         hs.fillCircle(wx, wy, 1, wCol);
         hs.drawCircle(wx, wy, 4, wCol);
         hs.drawCircle(wx, wy, 7, wCol);
-        hs.fillRect(wx - 8, wy + 1, 16, 8, 0x0821);
+        hs.fillRect(wx - 8, wy + 1, 16, 8, hdrBg);
         curX += 16;
     }
     
     // 3b. BACKGROUND APP INDICATOR — Zahnrad
-    bool anyAppRunning = jigglerActive || badUsbActive || wifiSpamActive || bleSpamActive || deauthActive || nmapActive || evilActive || probeMonActive || bleScanActive || swRunning || timerRunning;
+    bool anyAppRunning = jigglerActive || badUsbActive || wifiSpamActive || bleSpamActive || deauthActive || nmapActive || evilActive || probeMonActive || bleScanActive || swRunning || timerRunning || LoraManager::isBeaconActive();
     if (anyAppRunning) {
         int gx = curX + 5, gy = cy + 6;
         hs.fillCircle(gx, gy, 4, 0xFD20);
-        hs.fillCircle(gx, gy, 2, 0x0821);
+        hs.fillCircle(gx, gy, 2, hdrBg);
         hs.fillRect(gx - 1, gy - 6, 2, 3, 0xFD20);
         hs.fillRect(gx - 1, gy + 3, 2, 3, 0xFD20);
         hs.fillRect(gx - 6, gy - 1, 3, 2, 0xFD20);
@@ -198,32 +182,31 @@ void drawHeader(struct tm *aktuell, int akku, bool charging) {
     }
     
     // 4. KOPFZEILE RECHTS: Kontext-sensitiv
-    // Auf Page 0 (Zifferblatt) KEINE redundante Mini-Uhrzeit/Datum anzeigen!
     if (currentPage == 0) {
         hs.setTextDatum(TR_DATUM);
         if (wlanActive) {
-            hs.setTextColor(0x07E0, 0x0821);
+            hs.setTextColor(0x07E0, hdrBg);
             if (wlanClientMode && WiFi.status() == WL_CONNECTED) {
                 hs.drawString(WiFi.localIP().toString(), 236, cy + 1, 2);
             } else {
                 hs.drawString("AP: 192.168.4.1", 236, cy + 1, 2);
             }
         } else if (phoneMac.length() > 0) {
-            hs.setTextColor(0x551F, 0x0821);
+            hs.setTextColor(0x551F, hdrBg);
             String pInfo = phoneName.length() > 0 ? phoneName : "Phone";
             if (pInfo.length() > 10) pInfo = pInfo.substring(0, 10);
             hs.drawString(pInfo, 236, cy + 1, 2);
         } else if (charging) {
-            hs.setTextColor(0xFFE0, 0x0821);
+            hs.setTextColor(0xFFE0, hdrBg);
             hs.drawString("Laden ⚡", 236, cy + 1, 2);
         } else {
-            hs.setTextColor(0x8CD1, 0x0821);
+            hs.setTextColor(hdrFg, hdrBg);
             hs.drawString("WatchOS", 236, cy + 1, 2);
         }
     } else {
         // Auf App- und Einstellungsseiten: Saubere Uhrzeit rechts oben
         hs.setTextDatum(TR_DATUM);
-        hs.setTextColor(cAcc1, 0x0821);
+        hs.setTextColor(cAcc1, hdrBg);
         char timeBuf[12]; 
         snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", aktuell->tm_hour, aktuell->tm_min);
         hs.drawString(timeBuf, 236, cy + 1, 2);
@@ -748,113 +731,786 @@ void drawRetroCasioWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, boo
     spr->drawString(stpBuf, lx + lw - 8, by, 2);
 }
 
+void drawUltraDashboard(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg) {
+    if (!spr || spr->getPointer() == nullptr) return;
+    time_t jetzt; time(&jetzt);
+    int wday = (aktuell->tm_wday >= 0 && aktuell->tm_wday <= 6) ? aktuell->tm_wday : 0;
+    int mon  = (aktuell->tm_mon >= 0 && aktuell->tm_mon <= 11) ? aktuell->tm_mon : 0;
+    int mday = (aktuell->tm_mday >= 1 && aktuell->tm_mday <= 31) ? aktuell->tm_mday : 1;
+
+    long diff = 0;
+    if (zielZeit.tm_year > 0) {
+        time_t zt = mktime(&zielZeit);
+        if (zt != (time_t)-1 && zt > jetzt) {
+            diff = zt - jetzt;
+        }
+    }
+    int yearsLeft = (int)(diff / 31536000L);
+    int daysLeft  = (int)((diff % 31536000L) / 86400L);
+
+    // === 1. TOP PILL: Datum & Wochentag ===
+    static const char* monKurz[] = {"Jan", "Feb", "Mrz", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"};
+    char dPill[32];
+    snprintf(dPill, sizeof(dPill), "%s, %02d. %s", wochentage[wday], mday, monKurz[mon]);
+    
+    drawGlassCard(spr, 28, 4, 184, 22, 11, COLOR_BORDER_HI, COLOR_SURFACE, COLOR_BG_DARK);
+    spr->fillCircle(40, 15, 3, COLOR_CYAN_TECH);
+    spr->fillCircle(40, 15, 1, COLOR_TEXT_MAIN);
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(COLOR_ACCENT_TIME);
+    spr->drawString(dPill, 126, 15, 2);
+
+    // === 2. HERO TIME: Apple Watch Ultra Digital Clock ===
+    char tBuf[8];
+    snprintf(tBuf, sizeof(tBuf), "%02d:%02d", aktuell->tm_hour, aktuell->tm_min);
+    spr->setTextDatum(MR_DATUM);
+    spr->setTextColor(COLOR_TEXT_MAIN, cBG);
+    spr->drawString(tBuf, 148, 48, 7);
+
+    char sBuf[6];
+    snprintf(sBuf, sizeof(sBuf), ":%02d", aktuell->tm_sec);
+    spr->setTextDatum(ML_DATUM);
+    spr->setTextColor(COLOR_CYAN_TECH, cBG);
+    spr->drawString(sBuf, 152, 50, 4);
+
+    // === 3. CHROMATIC ACTIVITY RINGS ===
+    int goal = (stepGoal > 0) ? stepGoal : 8000;
+    float stepRatio = (goal > 0) ? ((float)stepCount / (float)goal) : 0.0f;
+    float batRatio  = (float)akku / 100.0f;
+    float timeRatio = (float)(aktuell->tm_hour * 60 + aktuell->tm_min) / 1440.0f;
+    drawActivityRings(spr, 48, 114, stepRatio, batRatio, timeRatio);
+
+    // === 4. COMPLICATION CARDS (Rechts neben den Ringen) ===
+    int cX = 98, cW = 132;
+    
+    // Schritte Card
+    drawGlassCard(spr, cX, 74, cW, 36, 6, COLOR_BORDER, COLOR_SURFACE, COLOR_BG_DARK);
+    spr->fillCircle(cX + 12, 88, 3, COLOR_PROD_GREEN);
+    spr->fillCircle(cX + 12, 88, 1, COLOR_TEXT_MAIN);
+    spr->setTextDatum(TL_DATUM);
+    spr->setTextColor(COLOR_TEXT_MAIN);
+    spr->drawString(String(stepCount) + " Steps", cX + 22, 78, 2);
+    int sBarW = cW - 28;
+    int sFillW = (int)(stepRatio * sBarW);
+    if (sFillW > sBarW) sFillW = sBarW;
+    spr->fillRoundRect(cX + 22, 98, sBarW, 4, 2, COLOR_SURFACE_HI);
+    if (sFillW > 1) spr->fillRoundRect(cX + 22, 98, sFillW, 4, 2, COLOR_PROD_GREEN);
+
+    // Akku & Power Card
+    drawGlassCard(spr, cX, 116, cW, 36, 6, isChg ? COLOR_AMBER_WARN : COLOR_BORDER, COLOR_SURFACE, COLOR_BG_DARK);
+    spr->fillCircle(cX + 12, 130, 3, isChg ? COLOR_AMBER_WARN : COLOR_PROD_GREEN);
+    spr->fillCircle(cX + 12, 130, 1, COLOR_TEXT_MAIN);
+    spr->setTextDatum(TL_DATUM);
+    spr->setTextColor(COLOR_TEXT_MAIN);
+    spr->drawString(String(akku) + "% Akku", cX + 22, 120, 2);
+    spr->setTextColor(COLOR_TEXT_MUTED);
+    String voltPwr = String(getBatteryVoltageCached(false), 2) + "V  " + (isChg ? "Laden ⚡" : "Akku");
+    spr->drawString(voltPwr, cX + 22, 136, 1);
+    if (isChg) {
+        int lX = cX + cW - 14, lY = 124;
+        spr->drawLine(lX + 3, lY, lX, lY + 5, COLOR_AMBER_WARN);
+        spr->drawLine(lX, lY + 5, lX + 4, lY + 5, COLOR_AMBER_WARN);
+        spr->drawLine(lX + 4, lY + 5, lX + 1, lY + 10, COLOR_TEXT_MAIN);
+    }
+
+    // === 5. BOTTOM PILL: Lebensziel-Vorschau ===
+    drawGlassCard(spr, 12, 160, 216, 26, 8, COLOR_BORDER, COLOR_SURFACE, COLOR_BG_DARK);
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(COLOR_CYAN_TECH);
+    char goalPill[44];
+    snprintf(goalPill, sizeof(goalPill), "Lebensziel: %dJ %d Tage  >", yearsLeft, daysLeft);
+    spr->drawString(goalPill, 120, 173, 2);
+}
+
+void drawLifetimeWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg) {
+    if (!spr || spr->getPointer() == nullptr) return;
+    time_t jetzt; time(&jetzt);
+    long diff = 0;
+    if (zielZeit.tm_year > 0) {
+        time_t zt = mktime(&zielZeit);
+        if (zt != (time_t)-1 && zt > jetzt) {
+            diff = zt - jetzt;
+        }
+    }
+    int vals[] = {(int)(diff / 31536000L), (int)((diff % 31536000L) / 2592000L), (int)((diff % 2592000L) / 86400L), (int)((diff % 86400L) / 3600L), (int)((diff % 3600L) / 60L), (int)(diff % 60L)};
+    const char* labs[] = {"Jahre", "Monate", "Tage", "Stunden", "Minuten", "Sekunden"};
+    int rowH = 28; 
+    int sH = 20; int sW = 12; 
+    for(int i = 0; i < 6; i++) { 
+        int y = 4 + i * (rowH + 3);
+        drawGlassCard(spr, 8, y, 196, rowH, 5, (i < 3) ? COLOR_BORDER_HI : COLOR_BORDER, COLOR_SURFACE, COLOR_BG_DARK);
+        char buf[5]; snprintf(buf, sizeof(buf), "%02d", vals[i]); 
+        draw7SegString(*spr, String(buf), 16, y + 4, sH, sW, (i < 3) ? COLOR_TEXT_MAIN : COLOR_ACCENT_TIME, 3); 
+        spr->setTextDatum(ML_DATUM); 
+        spr->setTextColor((i < 3) ? COLOR_CYAN_TECH : COLOR_TEXT_MUTED); 
+        spr->drawString(labs[i], 66, y + rowH/2, 2); 
+    }
+    
+    // Lebensziel Progress Bar Rechts mit Säule
+    float aktAlter = (float)(aktuell->tm_year + 1900 - gJahr) + (float)aktuell->tm_yday/365.0f; 
+    float prozent = (zielAlter > 0) ? (aktAlter / (float)zielAlter) : 0.0f; 
+    if (prozent > 1.0f) prozent = 1.0f;
+    if (prozent < 0.0f) prozent = 0.0f;
+    int fullBarH = 183; 
+    int fillH = (int)(fullBarH * prozent); 
+    drawGlassCard(spr, 212, 4, 20, fullBarH, 6, COLOR_BORDER, COLOR_SURFACE, COLOR_BG_DARK);
+    uint16_t pCol = (prozent > 0.8f) ? COLOR_SEC_RED : (prozent > 0.5f ? COLOR_AMBER_WARN : COLOR_PROD_GREEN);
+    if (fillH > 4) {
+        spr->fillRoundRect(214, (4 + fullBarH) - fillH, 16, fillH, 5, pCol);
+        spr->drawFastHLine(215, (4 + fullBarH) - fillH + 1, 14, COLOR_TEXT_MAIN);
+    }
+}
+
+void drawBauhausWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg) {
+    if (!spr || spr->getPointer() == nullptr) return;
+    const float DEG2RAD = 0.0174532925f;
+    int cx = 120, cy = 103;
+
+    // 1. Bauhaus Canvas: Warm Minimalist Charcoal Dial
+    spr->fillSprite(0x10A2); // Charcoal Bauhaus canvas
+    spr->drawCircle(cx, cy, 102, 0x2965); // Outer minimalist frame
+    spr->drawCircle(cx, cy, 101, 0x18C3);
+
+    // 2. Minimalist Hour Batons & Circular Accent Pips
+    for (int m = 0; m < 60; m++) {
+        float rad = (m * 6.0f) * DEG2RAD - 1.5707963f;
+        float c = cosf(rad);
+        float s = sinf(rad);
+
+        if (m % 5 == 0) {
+            int h = m / 5;
+            if (h == 0 || h == 3 || h == 6 || h == 9) {
+                // Cardinal Hours: Solid 2px baton + Cardinal Pip
+                int rIn = 82, rOut = 95;
+                spr->drawLine(cx + (int)(rIn * c), cy + (int)(rIn * s), cx + (int)(rOut * c), cy + (int)(rOut * s), TFT_WHITE);
+                spr->drawLine(cx + (int)(rIn * c) + 1, cy + (int)(rIn * s), cx + (int)(rOut * c) + 1, cy + (int)(rOut * s), TFT_WHITE);
+                // Circular Bauhaus Pip
+                int pipR = 76;
+                spr->fillCircle(cx + (int)(pipR * c), cy + (int)(pipR * s), 2, 0xF800); // Bauhaus Red pip
+            } else {
+                // Regular Hour Batons: Crisp 1px
+                int rIn = 86, rOut = 95;
+                spr->drawLine(cx + (int)(rIn * c), cy + (int)(rIn * s), cx + (int)(rOut * c), cy + (int)(rOut * s), 0xCE79);
+            }
+        } else {
+            // Fine 1px minute dots
+            int r = 94;
+            spr->drawPixel(cx + (int)(r * c), cy + (int)(r * s), 0x4208);
+        }
+    }
+
+    // 3. Typographic Cardinal Markers (Max Bill style 12, 3, 6, 9)
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(0xFFFF, 0x10A2);
+    spr->drawString("12", cx, cy - 64, 2);
+    spr->drawString("3", cx + 64, cy, 2);
+    spr->drawString("6", cx, cy + 64, 2);
+    spr->drawString("9", cx - 64, cy, 2);
+
+    // 4. Bauhaus Inscription
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(0x8410, 0x10A2);
+    spr->drawString("BAUHAUS", cx, cy - 32, 1);
+    spr->drawString("AUTOMATIK", cx, cy - 22, 1);
+    spr->drawString("GERMANY", cx, cy + 42, 1);
+
+    // 5. Date Aperture (at 3 o'clock)
+    char dBuf[6];
+    snprintf(dBuf, sizeof(dBuf), "%02d", aktuell->tm_mday);
+    drawGlassCard(spr, cx + 24, cy - 8, 22, 16, 3, 0x39E7, 0x1CE7, 0x10A2);
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(0xF800, 0x10A2); // Red date digit
+    spr->drawString(dBuf, cx + 35, cy + 1, 1);
+
+    // 6. Hands
+    // Hour Hand (Matte Black with White Core, Length 50)
+    float hRad = ((aktuell->tm_hour % 12) + aktuell->tm_min / 60.0f) * 30.0f * DEG2RAD - 1.5707963f;
+    float hLen = 50.0f;
+    spr->drawLine(cx, cy, cx + (int)(hLen * cosf(hRad)), cy + (int)(hLen * sinf(hRad)), TFT_WHITE);
+    spr->drawLine(cx - 1, cy, cx + (int)(hLen * cosf(hRad)) - 1, cy + (int)(hLen * sinf(hRad)), TFT_WHITE);
+    spr->drawLine(cx + 1, cy, cx + (int)(hLen * cosf(hRad)) + 1, cy + (int)(hLen * sinf(hRad)), 0xCE79);
+
+    // Minute Hand (Slender white baton, Length 76)
+    float mRad = (aktuell->tm_min + aktuell->tm_sec / 60.0f) * 6.0f * DEG2RAD - 1.5707963f;
+    float mLen = 76.0f;
+    spr->drawLine(cx, cy, cx + (int)(mLen * cosf(mRad)), cy + (int)(mLen * sinf(mRad)), TFT_WHITE);
+    spr->drawLine(cx + (int)(-sinf(mRad)), cy + (int)(cosf(mRad)),
+                  cx + (int)(mLen * cosf(mRad)) + (int)(-sinf(mRad)), cy + (int)(mLen * sinf(mRad)) + (int)(cosf(mRad)), 0xCE79);
+
+    // Sweeping Bauhaus Red Second Hand with circular eye
+    float sRad = aktuell->tm_sec * 6.0f * DEG2RAD - 1.5707963f;
+    float sLen = 86.0f;
+    int sx = cx + (int)(sLen * cosf(sRad));
+    int sy = cy + (int)(sLen * sinf(sRad));
+    int tailX = cx - (int)(18.0f * cosf(sRad));
+    int tailY = cy - (int)(18.0f * sinf(sRad));
+    spr->drawLine(tailX, tailY, sx, sy, 0xF800);
+    int eyeX = cx - (int)(12.0f * cosf(sRad));
+    int eyeY = cy - (int)(12.0f * sinf(sRad));
+    spr->fillCircle(eyeX, eyeY, 3, 0xF800);
+    spr->fillCircle(eyeX, eyeY, 1, 0x10A2);
+
+    // Center Pin Cap
+    spr->fillCircle(cx, cy, 4, 0xCE79);
+    spr->fillCircle(cx, cy, 2, 0xF800);
+}
+
+void drawCyberpunkWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg) {
+    if (!spr || spr->getPointer() == nullptr) return;
+
+    // 1. Matrix/Cyber Background with Grid Lines
+    spr->fillSprite(0x0000);
+    for (int y = 20; y < 200; y += 30) {
+        spr->drawFastHLine(0, y, 240, 0x0821);
+    }
+    for (int x = 20; x < 240; x += 40) {
+        spr->drawFastVLine(x, 0, 206, 0x0821);
+    }
+
+    // 2. Cyber HUD Corner Brackets
+    uint16_t hudCol = 0x07FF; // Cyan
+    spr->drawFastHLine(10, 8, 16, hudCol); spr->drawFastVLine(10, 8, 16, hudCol);
+    spr->drawFastHLine(214, 8, 16, hudCol); spr->drawFastVLine(229, 8, 16, hudCol);
+    spr->drawFastHLine(10, 192, 16, hudCol); spr->drawFastVLine(10, 176, 16, hudCol);
+    spr->drawFastHLine(214, 192, 16, hudCol); spr->drawFastVLine(229, 176, 16, hudCol);
+
+    // 3. Top Cyberpunk Terminal Header
+    spr->setTextDatum(TL_DATUM);
+    spr->setTextColor(0x07E0, 0x0000); // Neon Green
+    spr->drawString("// SYS.TERMINAL // v2.4", 20, 10, 1);
+
+    spr->setTextDatum(TR_DATUM);
+    spr->setTextColor(isChg ? 0xFFE0 : 0x07FF, 0x0000);
+    spr->drawString(isChg ? "PWR:CHG" : "SEC:MAX", 220, 10, 1);
+
+    // 4. Hero Digital Time [ 14:32:05 ]
+    char tBuf[10];
+    snprintf(tBuf, sizeof(tBuf), "%02d:%02d", aktuell->tm_hour, aktuell->tm_min);
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(0x07FF, 0x0000);
+    spr->drawString("[", 32, 54, 7);
+    spr->drawString("]", 208, 54, 7);
+    spr->setTextColor(0xFFFF, 0x0000);
+    spr->drawString(tBuf, 114, 54, 7);
+
+    char sBuf[6];
+    snprintf(sBuf, sizeof(sBuf), ":%02d", aktuell->tm_sec);
+    spr->setTextDatum(ML_DATUM);
+    spr->setTextColor(0xFD20, 0x0000); // Neon Amber
+    spr->drawString(sBuf, 168, 54, 4);
+
+    // 5. Date Strip
+    static const char* cpWday[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+    char dLine[36];
+    snprintf(dLine, sizeof(dLine), "DATE: %04d.%02d.%02d // %s", aktuell->tm_year + 1900, aktuell->tm_mon + 1, aktuell->tm_mday, cpWday[aktuell->tm_wday % 7]);
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(0x8410, 0x0000);
+    spr->drawString(dLine, 120, 92, 1);
+
+    // 6. Telemetry Status Modules (4 Grid Rows)
+    int yStart = 106;
+    int rowH = 19;
+
+    // CPU Telemetry
+    drawGlassCard(spr, 16, yStart, 208, rowH - 2, 3, 0x18C3, 0x0821, 0x0000);
+    spr->setTextDatum(TL_DATUM);
+    spr->setTextColor(0x07E0, 0x0000);
+    char cpuBuf[32];
+    snprintf(cpuBuf, sizeof(cpuBuf), "CPU: %dMHz | %.1fC", ESP.getCpuFreqMHz(), debug_rms > 0 ? (float)getDecibels() : 41.2f);
+    spr->drawString(cpuBuf, 22, yStart + 2, 1);
+    int cpuBarW = 60;
+    int cpuFill = (ESP.getCpuFreqMHz() * cpuBarW) / 240;
+    spr->drawRect(156, yStart + 3, cpuBarW, 8, 0x2104);
+    spr->fillRect(158, yStart + 5, cpuFill > 4 ? cpuFill - 4 : 0, 4, 0x07E0);
+
+    // RAM Telemetry
+    drawGlassCard(spr, 16, yStart + rowH, 208, rowH - 2, 3, 0x18C3, 0x0821, 0x0000);
+    spr->setTextDatum(TL_DATUM);
+    spr->setTextColor(0x07FF, 0x0000);
+    char ramBuf[32];
+    snprintf(ramBuf, sizeof(ramBuf), "RAM: %dK / %dK", (int)(ESP.getFreeHeap() / 1024), (int)(ESP.getHeapSize() / 1024));
+    spr->drawString(ramBuf, 22, yStart + rowH + 2, 1);
+    int ramBarW = 60;
+    int ramFill = (int)(((float)ESP.getFreeHeap() / (float)ESP.getHeapSize()) * ramBarW);
+    spr->drawRect(156, yStart + rowH + 3, ramBarW, 8, 0x2104);
+    spr->fillRect(158, yStart + rowH + 5, ramFill > 4 ? ramFill - 4 : 0, 4, 0x07FF);
+
+    // Battery / Power Telemetry
+    drawGlassCard(spr, 16, yStart + rowH * 2, 208, rowH - 2, 3, 0x18C3, 0x0821, 0x0000);
+    spr->setTextDatum(TL_DATUM);
+    spr->setTextColor(isChg ? 0xFFE0 : (akku > 30 ? 0x07E0 : 0xF800), 0x0000);
+    char pwrBuf[32];
+    snprintf(pwrBuf, sizeof(pwrBuf), "PWR: %.2fV [%d%%] %s", getBatteryVoltageCached(false), akku, isChg ? "+CHG" : "");
+    spr->drawString(pwrBuf, 22, yStart + rowH * 2 + 2, 1);
+    int pwrBarW = 60;
+    int pwrFill = (akku * pwrBarW) / 100;
+    spr->drawRect(156, yStart + rowH * 2 + 3, pwrBarW, 8, 0x2104);
+    spr->fillRect(158, yStart + rowH * 2 + 5, pwrFill > 4 ? pwrFill - 4 : 0, 4, isChg ? 0xFFE0 : 0x07E0);
+
+    // Steps Telemetry
+    drawGlassCard(spr, 16, yStart + rowH * 3, 208, rowH - 2, 3, 0x18C3, 0x0821, 0x0000);
+    spr->setTextDatum(TL_DATUM);
+    spr->setTextColor(0xFD20, 0x0000);
+    char stpBuf[32];
+    int goal = (stepGoal > 0) ? stepGoal : 8000;
+    snprintf(stpBuf, sizeof(stpBuf), "STP: %d / %d", stepCount, goal);
+    spr->drawString(stpBuf, 22, yStart + rowH * 3 + 2, 1);
+    int stpBarW = 60;
+    int stpFill = (stepCount * stpBarW) / goal;
+    if (stpFill > stpBarW) stpFill = stpBarW;
+    spr->drawRect(156, yStart + rowH * 3 + 3, stpBarW, 8, 0x2104);
+    spr->fillRect(158, yStart + rowH * 3 + 5, stpFill > 4 ? stpFill - 4 : 0, 4, 0xFD20);
+}
+
+void drawWordClockWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg) {
+    if (!spr || spr->getPointer() == nullptr) return;
+
+    // 1. Deep Matte Dark Background
+    spr->fillSprite(0x0821);
+
+    // 2. German Qlocktwo Word Logic
+    int h = aktuell->tm_hour;
+    int m = aktuell->tm_min;
+
+    // In German: from minute 25 onwards ("fünf vor halb"), the next hour is mentioned
+    int displayHour = h;
+    if (m >= 25) displayHour = (displayHour + 1) % 24;
+    displayHour = displayHour % 12;
+    if (displayHour == 0) displayHour = 12;
+
+    int minMod = m % 5; // 0, 1, 2, 3, 4 extra minute corner dots
+    int mBlock = m / 5; // 0..11
+
+    bool wES = true;
+    bool wIST = true;
+    bool wFUENF_M = (mBlock == 1 || mBlock == 5 || mBlock == 7 || mBlock == 11);
+    bool wZEHN_M = (mBlock == 2 || mBlock == 10);
+    bool wZWANZIG = (mBlock == 4 || mBlock == 8);
+    bool wVIERTEL = (mBlock == 3 || mBlock == 9);
+    bool wVOR = (mBlock == 5 || mBlock == 8 || mBlock == 9 || mBlock == 10 || mBlock == 11);
+    bool wNACH = (mBlock == 1 || mBlock == 2 || mBlock == 3 || mBlock == 4 || mBlock == 7);
+    bool wHALB = (mBlock >= 5 && mBlock <= 7);
+
+    bool wEINS = (displayHour == 1);
+    bool wZWEI = (displayHour == 2);
+    bool wDREI = (displayHour == 3);
+    bool wVIER = (displayHour == 4);
+    bool wFUENF_H = (displayHour == 5);
+    bool wSECHS = (displayHour == 6);
+    bool wSIEBEN = (displayHour == 7);
+    bool wACHT = (displayHour == 8);
+    bool wNEUN = (displayHour == 9);
+    bool wZEHN_H = (displayHour == 10);
+    bool wELF = (displayHour == 11);
+    bool wZWOELF = (displayHour == 12);
+    bool wUHR = (mBlock == 0);
+
+    uint16_t cActive = 0xFFFF; // Bright Crisp White
+    uint16_t cDim = 0x2104;    // Subtle Dim Charcoal
+
+    auto drawWord = [&](const char* text, int x, int y, bool active) {
+        spr->setTextDatum(ML_DATUM);
+        spr->setTextColor(active ? cActive : cDim, 0x0821);
+        spr->drawString(text, x, y, 2);
+    };
+
+    // Matrix Layout (7 rows, height 206px):
+    drawWord("ES", 14, 16, wES);
+    drawWord("IST", 52, 16, wIST);
+    drawWord("FÜNF", 154, 16, wFUENF_M);
+
+    drawWord("ZEHN", 14, 42, wZEHN_M);
+    drawWord("ZWANZIG", 114, 42, wZWANZIG);
+
+    drawWord("VIERTEL", 14, 68, wVIERTEL);
+    drawWord("VOR", 126, 68, wVOR);
+    drawWord("NACH", 172, 68, wNACH);
+
+    drawWord("HALB", 14, 94, wHALB);
+    drawWord("ZWÖLF", 88, 94, wZWOELF);
+    drawWord("ZWEI", 168, 94, wZWEI);
+
+    drawWord((wUHR && wEINS) ? "EIN" : "EINS", 14, 120, wEINS);
+    drawWord("DREI", 86, 120, wDREI);
+    drawWord("VIER", 158, 120, wVIER);
+
+    drawWord("SECHS", 14, 146, wSECHS);
+    drawWord("ACHT", 92, 146, wACHT);
+    drawWord("SIEBEN", 154, 146, wSIEBEN);
+
+    drawWord("NEUN", 14, 172, wNEUN);
+    drawWord("ZEHN", 76, 172, wZEHN_H);
+    drawWord("ELF", 136, 172, wELF);
+    drawWord("UHR", 182, 172, wUHR);
+
+    // 3. 4 Corner Indicator Dots for Single Minutes
+    int dotR = 3;
+    uint16_t cDotActive = 0x07FF; // Cyan Glow
+    uint16_t cDotDim = 0x18C3;
+    spr->fillCircle(8, 8, dotR, minMod >= 1 ? cDotActive : cDotDim);     // Top-Left: +1
+    spr->fillCircle(232, 8, dotR, minMod >= 2 ? cDotActive : cDotDim);   // Top-Right: +2
+    spr->fillCircle(232, 198, dotR, minMod >= 3 ? cDotActive : cDotDim); // Bottom-Right: +3
+    spr->fillCircle(8, 198, dotR, minMod >= 4 ? cDotActive : cDotDim);   // Bottom-Left: +4
+}
+
+void drawFinanceWatchface(TFT_eSprite *spr, struct tm *aktuell) {
+    if (!spr || spr->getPointer() == nullptr) return;
+    spr->setTextDatum(TC_DATUM);
+    spr->setTextColor(COLOR_TEXT_MAIN);
+    spr->drawString("Opportunitaet", 120, 8, 4);
+    
+    float dailyNet = (netSalary * 12.0) / 365.0;
+    float fraction = (millis() % 1000) / 1000.0;
+    long secToday = aktuell->tm_hour * 3600 + aktuell->tm_min * 60 + aktuell->tm_sec;
+    float earnedToday = dailyNet * ((secToday + fraction) / 86400.0);
+    
+    // Karte 1: Heutiger Verdienst
+    drawGlassCard(spr, 12, 38, 216, 68, 10, COLOR_BORDER, COLOR_SURFACE, COLOR_BG_DARK);
+    
+    spr->setTextDatum(TL_DATUM);
+    spr->setTextColor(COLOR_TEXT_MUTED);
+    spr->drawString("Heute verdient", 22, 46, 2);
+    
+    char moneyBuf[16];
+    snprintf(moneyBuf, sizeof(moneyBuf), "%.4f", earnedToday);
+    int mH = 26; int mW = 15; int mSpace = 4;
+    int totalW = get7SegWidth(String(moneyBuf), mH, mW, mSpace);
+    draw7SegString(*spr, String(moneyBuf), 22, 68, mH, mW, COLOR_PROD_GREEN, mSpace);
+    
+    spr->setTextDatum(TL_DATUM);
+    spr->setTextColor(COLOR_PROD_GREEN);
+    spr->drawString("EUR", 22 + totalW + 6, 74, 2);
+
+    // Karte 2: Echter Stundenlohn
+    float workDaysPerYear = workDaysYear - vacationDays - sickDays;
+    float workHoursPerYear = workDaysPerYear * workHoursPerDay * (partTimePct / 100.0);
+    float trueHourlyWage = 0;
+    if (workHoursPerYear > 0) trueHourlyWage = (netSalary * 12.0) / workHoursPerYear;
+    
+    drawGlassCard(spr, 12, 114, 216, 68, 10, COLOR_BORDER, COLOR_SURFACE, COLOR_BG_DARK);
+    
+    spr->setTextDatum(TL_DATUM);
+    spr->setTextColor(COLOR_TEXT_MUTED);
+    spr->drawString("Echter Stundenlohn", 22, 122, 2);
+    
+    char hrBuf[16];
+    snprintf(hrBuf, sizeof(hrBuf), "%.2f", trueHourlyWage); 
+    int hH = 24; int hW = 14; int hSpace = 3;
+    int hTotalW = get7SegWidth(String(hrBuf), hH, hW, hSpace);
+    draw7SegString(*spr, String(hrBuf), 22, 144, hH, hW, COLOR_CYAN_TECH, hSpace);
+    
+    spr->setTextDatum(TL_DATUM);
+    spr->setTextColor(COLOR_CYAN_TECH);
+    spr->drawString("EUR/h", 22 + hTotalW + 6, 150, 2);
+}
+
+void drawChildrenWatchface(TFT_eSprite *spr, struct tm *aktuell) {
+    if (!spr || spr->getPointer() == nullptr) return;
+    time_t jetzt; time(&jetzt);
+    int activeKids = 0; String kNames[3]; String kDates[3]; String kTimes[3];
+    if(child1Name.length() > 0 && child1Date.length() == 10) { kNames[activeKids] = child1Name; kDates[activeKids] = child1Date; kTimes[activeKids] = child1Time; activeKids++; }
+    if(child2Name.length() > 0 && child2Date.length() == 10) { kNames[activeKids] = child2Name; kDates[activeKids] = child2Date; kTimes[activeKids] = child2Time; activeKids++; }
+    if(child3Name.length() > 0 && child3Date.length() == 10) { kNames[activeKids] = child3Name; kDates[activeKids] = child3Date; kTimes[activeKids] = child3Time; activeKids++; }
+    if (activeKids > 0) {
+        int yName = 18, yJahre = 60, yMonate = 100, yWochen = 140, yTage = 180;
+        spr->setTextDatum(MC_DATUM); spr->setTextColor(COLOR_TEXT_MUTED);
+        if (activeKids <= 2) {
+            spr->drawString("Jahre", 120, yJahre, 2);
+            spr->drawString("Monate", 120, yMonate, 2);
+            spr->drawString("Wochen", 120, yWochen, 2);
+            spr->drawString("Tage", 120, yTage, 2);
+        }
+        for(int i=0; i<activeKids; i++) {
+            int xCenter = 120;
+            if (activeKids == 2) xCenter = (i == 0) ? 45 : 195;
+            else if (activeKids == 3) xCenter = 40 + (i * 80);
+            
+            spr->setTextDatum(MC_DATUM);
+            spr->setTextColor(COLOR_ACCENT_TIME);
+            spr->drawString(kNames[i], xCenter, yName, 4); 
+            
+            time_t bTime = stringToTime(kDates[i], kTimes[i]);
+            long diff = jetzt - bTime; if (diff < 0) diff = 0;
+            long dDays = diff / 86400; long dWeeks = dDays / 7;
+            int bYear = kDates[i].substring(0, 4).toInt();
+            int bMon = kDates[i].substring(5, 7).toInt();
+            int bDay = kDates[i].substring(8, 10).toInt();
+            int dYears = (aktuell->tm_year + 1900) - bYear;
+            if ((aktuell->tm_mon + 1) < bMon || ((aktuell->tm_mon + 1) == bMon && aktuell->tm_mday < bDay)) dYears--;
+            if (dYears < 0) dYears = 0;
+            int dMonths = ((aktuell->tm_year + 1900) - bYear) * 12 + ((aktuell->tm_mon + 1) - bMon);
+            if (aktuell->tm_mday < bDay) dMonths--;
+            if (dMonths < 0) dMonths = 0;
+            
+            spr->setTextColor(COLOR_TEXT_MAIN);
+            spr->drawString(String(dYears), xCenter, yJahre, 4);
+            spr->drawString(String(dMonths), xCenter, yMonate, 4);
+            spr->drawString(String(dWeeks), xCenter, yWochen, 4);
+            spr->drawString(String(dDays), xCenter, yTage, 4);
+        }
+    } else {
+        drawGlassCard(spr, 20, 45, 200, 116, 12, COLOR_BORDER, COLOR_SURFACE, COLOR_BG_DARK);
+        spr->fillCircle(120, 72, 14, COLOR_SURFACE_HI);
+        spr->drawCircle(120, 72, 14, COLOR_BORDER_HI);
+        spr->setTextDatum(MC_DATUM);
+        spr->setTextColor(COLOR_ACCENT_TIME);
+        spr->drawString("+", 120, 72, 2);
+        spr->setTextColor(COLOR_TEXT_MAIN);
+        spr->drawString("Keine Kinder", 120, 104, 2);
+        spr->setTextColor(COLOR_TEXT_MUTED);
+        spr->drawString("Im WebDashboard anlegen", 120, 126, 1);
+    }
+}
+
+void drawParentsWatchface(TFT_eSprite *spr, struct tm *aktuell) {
+    if (!spr || spr->getPointer() == nullptr) return;
+    time_t jetzt; time(&jetzt);
+    char uB[12]; char uT[6]; snprintf(uB, sizeof(uB), "%04d-%02d-%02d", gJahr, gMonat, gTag); snprintf(uT, sizeof(uT), "%02d:%02d", gStunde, gMinute);
+    time_t uTime = stringToTime(String(uB), String(uT));
+    time_t p1Time = (parentName.length() > 0) ? stringToTime(parentDate, parentTime) : 0;
+    time_t p2Time = (papaName.length() > 0) ? stringToTime(papaDate, papaTime) : 0;
+    const char* monateKurz[] = {"Jan", "Feb", "Mrz", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"};
+
+    // Header Switcher Pill (oben zentriert): Zeigt aktuellen Modus an
+    drawGlassCard(spr, 24, 2, 192, 20, 10, COLOR_BORDER, COLOR_SURFACE, COLOR_BG_DARK);
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(parentViewMode == 0 ? COLOR_ACCENT_TIME : COLOR_CYAN_TECH);
+    spr->drawString(parentViewMode == 0 ? "ELTERN-SICHT \u21C4 (Tippen)" : "KINDER-SICHT \u21C4 (Tippen)", 120, 12, 1);
+
+    if (parentViewMode == 0) {
+        // === MODUS 0: Wie alt waren meine Eltern, als sie so alt waren wie ich heute ===
+        if (uTime != 0 && p1Time != 0 && p2Time != 0) {
+            int64_t myAgeSec = (int64_t)jetzt - (int64_t)uTime;
+            struct tm uTm; localtime_r(&uTime, &uTm);
+
+            auto drawParentCard = [&](int yCard, const String &pName, time_t pTime, uint16_t borderCol) {
+                time_t targetDate = (time_t)((int64_t)pTime + myAgeSec);
+                struct tm tgt; localtime_r(&targetDate, &tgt);
+                int yearsThen = (tgt.tm_year + 1900) - (uTm.tm_year + 1900);
+                if (tgt.tm_mon < uTm.tm_mon || (tgt.tm_mon == uTm.tm_mon && tgt.tm_mday < uTm.tm_mday)) yearsThen--;
+                char dBuf[28];
+                snprintf(dBuf, sizeof(dBuf), "%02d. %s %04d", tgt.tm_mday, monateKurz[tgt.tm_mon], tgt.tm_year + 1900);
+
+                drawGlassCard(spr, 10, yCard, 220, 78, 10, borderCol, COLOR_SURFACE, COLOR_BG_DARK);
+                spr->setTextDatum(TL_DATUM);
+                spr->setTextColor(COLOR_TEXT_MUTED);
+                spr->drawString("Heute war fuer " + pName, 20, yCard + 7, 2);
+                spr->setTextColor(COLOR_TEXT_MAIN);
+                spr->drawString(dBuf, 20, yCard + 26, 4);
+                spr->setTextColor(borderCol);
+                if (yearsThen < 0) spr->drawString("Du: noch nicht geb.", 20, yCard + 56, 2);
+                else spr->drawString("Du warst " + String(yearsThen) + " Jahre", 20, yCard + 56, 2);
+            };
+
+            drawParentCard(26, parentName, p1Time, COLOR_ACCENT_TIME);
+            drawParentCard(108, papaName, p2Time, COLOR_CYAN_TECH);
+        } else if (uTime != 0 && (p1Time != 0 || p2Time != 0)) {
+            time_t pTime = (p1Time != 0) ? p1Time : p2Time;
+            String pName = (p1Time != 0) ? parentName : papaName;
+            int64_t myAgeSec = (int64_t)jetzt - (int64_t)uTime;
+            time_t targetDate = (time_t)((int64_t)pTime + myAgeSec);
+            struct tm tgt; localtime_r(&targetDate, &tgt);
+            char dBuf[30]; snprintf(dBuf, sizeof(dBuf), "%02d. %s %04d", tgt.tm_mday, monateKurz[tgt.tm_mon], tgt.tm_year+1900);
+            struct tm uTm; localtime_r(&uTime, &uTm);
+            int yearsThen = (tgt.tm_year + 1900) - (uTm.tm_year + 1900);
+            if (tgt.tm_mon < uTm.tm_mon || (tgt.tm_mon == uTm.tm_mon && tgt.tm_mday < uTm.tm_mday)) yearsThen--;
+            
+            drawGlassCard(spr, 12, 26, 216, 160, 12, COLOR_BORDER, COLOR_SURFACE, COLOR_BG_DARK);
+            spr->setTextDatum(MC_DATUM);
+            spr->setTextColor(COLOR_TEXT_MUTED);
+            spr->drawString("Heute war fuer " + pName, 120, 48, 2);
+            spr->drawString("in deinem Alter der", 120, 68, 2);
+            spr->setTextColor(COLOR_TEXT_MAIN);
+            spr->drawString(dBuf, 120, 102, 4);
+            spr->setTextColor(COLOR_TEXT_MUTED);
+            spr->drawString("An diesem Tag warst Du", 120, 140, 2);
+            spr->setTextColor(COLOR_ACCENT_TIME);
+            if (yearsThen < 0) spr->drawString("Noch nicht geboren", 120, 165, 2);
+            else spr->drawString(String(yearsThen) + " Jahre", 120, 165, 4);
+        } else {
+            drawGlassCard(spr, 20, 40, 200, 120, 12, COLOR_BORDER, COLOR_SURFACE, COLOR_BG_DARK);
+            spr->fillCircle(120, 70, 14, COLOR_SURFACE_HI);
+            spr->drawCircle(120, 70, 14, COLOR_BORDER_HI);
+            spr->setTextDatum(MC_DATUM);
+            spr->setTextColor(COLOR_ACCENT_TIME);
+            spr->drawString("+", 120, 70, 2);
+            spr->setTextColor(COLOR_TEXT_MAIN);
+            spr->drawString("Keine Elterndaten", 120, 102, 2);
+            spr->setTextColor(COLOR_TEXT_MUTED);
+            spr->drawString("Im WebDashboard anlegen", 120, 124, 1);
+        }
+    } else {
+        // === MODUS 1: Wie alt bin ich, wenn meine Kinder so alt sind wie ich heute ===
+        int activeKids = 0; String kNames[3]; String kDates[3]; String kTimes[3];
+        if(child1Name.length() > 0 && child1Date.length() == 10) { kNames[activeKids] = child1Name; kDates[activeKids] = child1Date; kTimes[activeKids] = child1Time; activeKids++; }
+        if(child2Name.length() > 0 && child2Date.length() == 10) { kNames[activeKids] = child2Name; kDates[activeKids] = child2Date; kTimes[activeKids] = child2Time; activeKids++; }
+        if(child3Name.length() > 0 && child3Date.length() == 10) { kNames[activeKids] = child3Name; kDates[activeKids] = child3Date; kTimes[activeKids] = child3Time; activeKids++; }
+
+        if (uTime != 0 && activeKids > 0) {
+            int64_t myAgeSec = (int64_t)jetzt - (int64_t)uTime;
+            struct tm uTm; localtime_r(&uTime, &uTm);
+            int myCurYears = (aktuell->tm_year + 1900) - (uTm.tm_year + 1900);
+            if (aktuell->tm_mon < uTm.tm_mon || (aktuell->tm_mon == uTm.tm_mon && aktuell->tm_mday < uTm.tm_mday)) myCurYears--;
+
+            if (activeKids == 1) {
+                time_t kTime = stringToTime(kDates[0], kTimes[0]);
+                time_t targetDate = (time_t)((int64_t)kTime + myAgeSec);
+                struct tm tgt; localtime_r(&targetDate, &tgt);
+                int myYearsThen = (tgt.tm_year + 1900) - (uTm.tm_year + 1900);
+                if (tgt.tm_mon < uTm.tm_mon || (tgt.tm_mon == uTm.tm_mon && tgt.tm_mday < uTm.tm_mday)) myYearsThen--;
+                char dBuf[30]; snprintf(dBuf, sizeof(dBuf), "%02d. %s %04d", tgt.tm_mday, monateKurz[tgt.tm_mon], tgt.tm_year + 1900);
+
+                drawGlassCard(spr, 12, 26, 216, 160, 12, COLOR_PROD_GREEN, COLOR_SURFACE, COLOR_BG_DARK);
+                spr->setTextDatum(MC_DATUM);
+                spr->setTextColor(COLOR_TEXT_MUTED);
+                spr->drawString("Wenn " + kNames[0] + " so alt ist", 120, 48, 2);
+                spr->drawString("wie Du heute (" + String(myCurYears) + " Jahre):", 120, 68, 2);
+                spr->setTextColor(COLOR_TEXT_MAIN);
+                spr->drawString(dBuf, 120, 102, 4);
+                spr->setTextColor(COLOR_TEXT_MUTED);
+                spr->drawString("An diesem Tag bist Du", 120, 138, 2);
+                spr->setTextColor(COLOR_PROD_GREEN);
+                spr->drawString(String(myYearsThen) + " Jahre alt", 120, 163, 4);
+            } else {
+                auto drawChildCard = [&](int yCard, int idx, uint16_t borderCol) {
+                    time_t kTime = stringToTime(kDates[idx], kTimes[idx]);
+                    time_t targetDate = (time_t)((int64_t)kTime + myAgeSec);
+                    struct tm tgt; localtime_r(&targetDate, &tgt);
+                    int myYearsThen = (tgt.tm_year + 1900) - (uTm.tm_year + 1900);
+                    if (tgt.tm_mon < uTm.tm_mon || (tgt.tm_mon == uTm.tm_mon && tgt.tm_mday < uTm.tm_mday)) myYearsThen--;
+                    char dBuf[28]; snprintf(dBuf, sizeof(dBuf), "%02d. %s %04d", tgt.tm_mday, monateKurz[tgt.tm_mon], tgt.tm_year + 1900);
+
+                    drawGlassCard(spr, 10, yCard, 220, 78, 10, borderCol, COLOR_SURFACE, COLOR_BG_DARK);
+                    spr->setTextDatum(TL_DATUM);
+                    spr->setTextColor(COLOR_TEXT_MUTED);
+                    spr->drawString("Wenn " + kNames[idx] + " so alt ist (" + String(myCurYears) + " J.):", 20, yCard + 7, 2);
+                    spr->setTextColor(COLOR_TEXT_MAIN);
+                    spr->drawString(dBuf, 20, yCard + 26, 4);
+                    spr->setTextColor(borderCol);
+                    spr->drawString("Bist Du: " + String(myYearsThen) + " Jahre alt", 20, yCard + 56, 2);
+                };
+
+                drawChildCard(26, 0, COLOR_PROD_GREEN);
+                drawChildCard(108, 1, COLOR_CYAN_TECH);
+            }
+        } else {
+            drawGlassCard(spr, 20, 40, 200, 120, 12, COLOR_BORDER, COLOR_SURFACE, COLOR_BG_DARK);
+            spr->fillCircle(120, 70, 14, COLOR_SURFACE_HI);
+            spr->drawCircle(120, 70, 14, COLOR_BORDER_HI);
+            spr->setTextDatum(MC_DATUM);
+            spr->setTextColor(COLOR_PROD_GREEN);
+            spr->drawString("+", 120, 70, 2);
+            spr->setTextColor(COLOR_TEXT_MAIN);
+            spr->drawString("Keine Kinder", 120, 102, 2);
+            spr->setTextColor(COLOR_TEXT_MUTED);
+            spr->drawString("Im WebDashboard anlegen", 120, 124, 1);
+        }
+    }
+}
+
 void drawControlCenter(TFT_eSprite *spr, struct tm *aktuell) {
     if (!spr || spr->getPointer() == nullptr) return;
 
-    // 1. TOP MINI STATUS & GRAB HANDLE (y = 0 .. 22)
-    spr->fillRoundRect(100, 2, 40, 4, 2, 0x5ACB);
+    // 1. TOP MINI STATUS & GRAB HANDLE (y = 0 .. 20)
+    spr->fillRoundRect(102, 2, 36, 3, 1, COLOR_BORDER_HI);
 
     // Left: Mini Time
     spr->setTextDatum(TL_DATUM);
-    spr->setTextColor(0xFFE0, cBG);
+    spr->setTextColor(COLOR_ACCENT_TIME, cBG);
     char tMini[8] = "--:--";
     if (aktuell) snprintf(tMini, sizeof(tMini), "%02d:%02d", aktuell->tm_hour, aktuell->tm_min);
-    spr->drawString(tMini, 12, 4, 2);
+    spr->drawString(tMini, 12, 5, 2);
 
     // Right: Battery & Connection
     spr->setTextDatum(TR_DATUM);
     int bat = getBattery();
     bool isChg = isChargingCached(false);
     String batTxt = String(bat) + "%" + (isChg ? " \xE2\x9A\xA1" : "");
-    spr->setTextColor(isChg ? 0x07FF : (bat > 20 ? 0x07E0 : 0xF800), cBG);
-    spr->drawString(batTxt, 228, 4, 2);
+    spr->setTextColor(isChg ? COLOR_CYAN_TECH : (bat > 20 ? COLOR_PROD_GREEN : COLOR_SEC_RED), cBG);
+    spr->drawString(batTxt, 228, 5, 2);
 
-    // 2. LIVE BRIGHTNESS SLIDER (y = 24 .. 62)
-    drawGlassCard(spr, 10, 24, 220, 38, 8, 0x39E7, 0x1CE7, 0x0821);
+    // 2. LIVE BRIGHTNESS CAPSULE SLIDER (y = 24 .. 62, h = 38)
+    int sX = 10, sY = 24, sW = 220, sH = 38, sR = 8;
+    spr->fillRoundRect(sX, sY, sW, sH, sR, COLOR_SURFACE);
     
-    // Sun Icons
-    spr->setTextDatum(MC_DATUM);
-    spr->setTextColor(0x8CD1);
-    spr->drawString("-", 20, 43, 2);
-    spr->setTextColor(0xFFE0);
-    spr->drawString("+", 220, 43, 2);
+    int fillW = map(maxBright, 10, 255, 12, sW);
+    fillW = constrain(fillW, 12, sW);
+    spr->fillRoundRect(sX, sY, fillW, sH, sR, blendColor565(COLOR_AMBER_WARN, COLOR_SURFACE, 170));
+    spr->drawRoundRect(sX, sY, sW, sH, sR, COLOR_BORDER_HI);
 
-    // Slider Track (x = 32 to 208, width = 176)
-    int sX = 32, sW = 176, sY = 38, sH = 10;
-    spr->fillRoundRect(sX, sY, sW, sH, 5, 0x0821);
-    spr->drawRoundRect(sX, sY, sW, sH, 5, 0x2125);
-    
-    int fillW = map(maxBright, 10, 255, 6, sW);
-    if (fillW > sW) fillW = sW;
-    if (fillW > 2) {
-        spr->fillRoundRect(sX, sY, fillW, sH, 5, 0xFFE0);
-    }
-    // Glowing thumb
-    int thumbX = sX + fillW;
-    if (thumbX > sX + sW - 5) thumbX = sX + sW - 5;
-    spr->fillCircle(thumbX, sY + sH / 2, 7, 0xFFFF);
-    spr->drawCircle(thumbX, sY + sH / 2, 7, 0xFD20);
+    // Slider Labels
+    spr->setTextDatum(ML_DATUM);
+    spr->setTextColor(COLOR_TEXT_MAIN);
+    spr->drawString("Helligkeit", sX + 14, sY + sH / 2, 2);
 
-    // Brightness percentage
     int bPct = map(maxBright, 10, 255, 4, 100);
-    spr->setTextDatum(MC_DATUM);
-    spr->setTextColor(0xFFFF);
-    spr->drawString(String(bPct) + "%", 120, 43, 1);
+    spr->setTextDatum(MR_DATUM);
+    spr->setTextColor(COLOR_TEXT_MAIN);
+    spr->drawString(String(bPct) + "%", sX + sW - 14, sY + sH / 2, 2);
 
-    // 3. FOUR APPLE-STYLE SCHNELLTOGGLES (2x2 Grid, y = 66 .. 156)
+    // 3. FOUR MODERN SCHNELLTOGGLES (2x2 Grid, y = 68 .. 154)
     int tW = 106, tH = 42;
     int c0 = 10, c1 = 124;
-    int r0 = 66, r1 = 112;
+    int r0 = 68, r1 = 114;
 
     auto drawCtrlTile = [&](int x, int y, const char* title, const String &sub, bool active, uint16_t activeCol, const char* icon) {
-        drawGlassCard(spr, x, y, tW, tH, 8, active ? activeCol : 0x2945, active ? 0x2184 : 0x1423, 0x0C12);
+        uint16_t bCol = active ? activeCol : COLOR_BORDER;
+        uint16_t fCol = active ? blendColor565(activeCol, COLOR_SURFACE, 55) : COLOR_SURFACE;
+        drawGlassCard(spr, x, y, tW, tH, 8, bCol, fCol, COLOR_BG_DARK);
         
-        spr->fillCircle(x + tW - 9, y + 9, active ? 3 : 2, active ? activeCol : 0x5ACB);
-        if (active) spr->fillCircle(x + tW - 9, y + 9, 1, 0xFFFF);
+        // Status LED dot
+        spr->fillCircle(x + tW - 10, y + 10, active ? 3 : 2, active ? activeCol : COLOR_BORDER_HI);
+        if (active) spr->fillCircle(x + tW - 10, y + 10, 1, COLOR_TEXT_MAIN);
 
         spr->setTextDatum(TL_DATUM);
-        spr->setTextColor(TFT_WHITE);
-        spr->drawString(String(icon) + " " + title, x + 6, y + 5, 2);
+        spr->setTextColor(COLOR_TEXT_MAIN);
+        spr->drawString(String(icon) + " " + title, x + 8, y + 6, 2);
 
-        spr->setTextColor(active ? activeCol : 0x8BD0);
-        spr->drawString(sub, x + 6, y + 23, 1);
+        spr->setTextColor(active ? activeCol : COLOR_TEXT_MUTED);
+        spr->drawString(sub, x + 8, y + 24, 1);
     };
 
     // Toggle 1: Hotspot / WLAN
     String wSub = wlanActive ? (wlanClientMode ? "Client" : "192.168.4.1") : "Aus";
-    drawCtrlTile(c0, r0, "Hotspot", wSub, wlanActive, wlanClientMode ? 0x07FF : 0x07E0, "WLAN");
+    drawCtrlTile(c0, r0, "Hotspot", wSub, wlanActive, wlanClientMode ? COLOR_CYAN_TECH : COLOR_PROD_GREEN, "WLAN");
 
     // Toggle 2: Stummschaltung / DND
     bool isDnd = !vibActive;
-    drawCtrlTile(c1, r0, isDnd ? "Lautlos" : "Haptik", isDnd ? "DND Aktiv" : "Vibra An", isDnd, 0xFD20, isDnd ? "DND" : "VIB");
+    drawCtrlTile(c1, r0, isDnd ? "Lautlos" : "Haptik", isDnd ? "DND Aktiv" : "Vibra An", isDnd, COLOR_AMBER_WARN, isDnd ? "DND" : "VIB");
 
     // Toggle 3: Taschenlampe (Flashlight)
-    drawCtrlTile(c0, r1, "Licht", "100% Weiss", false, 0xFFE0, "LED");
+    drawCtrlTile(c0, r1, "Licht", "100% Weiss", false, COLOR_AMBER_WARN, "LED");
 
     // Toggle 4: USB Modus
-    drawCtrlTile(c1, r1, "USB", usbHidActive ? "HID (Maus)" : "CDC (COM)", usbHidActive, 0x91F7, "USB");
+    drawCtrlTile(c1, r1, "USB", usbHidActive ? "HID (Maus)" : "CDC (COM)", usbHidActive, COLOR_CYAN_TECH, "USB");
 
-    // 4. BOTTOM ACTION PILLS (y = 158 .. 198)
-    int bRowY = 158;
+    // 4. BOTTOM ACTION PILLS (y = 160 .. 200)
+    int bRowY = 160;
     // Left: LoRa P2P Messenger
     bool loraOn = LoraManager::isReady();
-    drawGlassCard(spr, c0, bRowY, tW, 40, 8, loraOn ? 0x07FF : 0x3186, loraOn ? 0x0A66 : 0x1423, 0x0C12);
-    spr->fillCircle(c0 + tW - 9, bRowY + 9, 3, loraOn ? 0x07FF : 0x5ACB);
+    uint16_t lCol = loraOn ? COLOR_CYAN_TECH : COLOR_BORDER;
+    uint16_t lFill = loraOn ? blendColor565(COLOR_CYAN_TECH, COLOR_SURFACE, 55) : COLOR_SURFACE;
+    drawGlassCard(spr, c0, bRowY, tW, 40, 8, lCol, lFill, COLOR_BG_DARK);
+    spr->fillCircle(c0 + tW - 10, bRowY + 10, loraOn ? 3 : 2, loraOn ? COLOR_CYAN_TECH : COLOR_BORDER_HI);
+    if (loraOn) spr->fillCircle(c0 + tW - 10, bRowY + 10, 1, COLOR_TEXT_MAIN);
     spr->setTextDatum(TL_DATUM);
-    spr->setTextColor(TFT_WHITE);
-    spr->drawString("LoRa Funk", c0 + 6, bRowY + 5, 2);
-    spr->setTextColor(loraOn ? 0x07FF : 0x8CD1);
-    spr->drawString(loraOn ? "868 MHz P2P" : "SX1262 Aus", c0 + 6, bRowY + 23, 1);
+    spr->setTextColor(COLOR_TEXT_MAIN);
+    spr->drawString("LoRa Funk", c0 + 8, bRowY + 6, 2);
+    spr->setTextColor(loraOn ? COLOR_CYAN_TECH : COLOR_TEXT_MUTED);
+    spr->drawString(loraOn ? "868 MHz P2P" : "SX1262 Aus", c0 + 8, bRowY + 24, 1);
 
     // Right: Stop Apps
     bool anyRun = jigglerActive || badUsbActive || wifiSpamActive || bleSpamActive || deauthActive || nmapActive || evilActive || probeMonActive || bleScanActive || swRunning || timerRunning;
-    drawGlassCard(spr, c1, bRowY, tW, 40, 8, anyRun ? 0xF800 : 0x2945, anyRun ? 0x4800 : 0x1423, 0x0C12);
-    spr->fillCircle(c1 + tW - 9, bRowY + 9, 3, anyRun ? 0xF800 : 0x5ACB);
+    uint16_t sCol = anyRun ? COLOR_SEC_RED : COLOR_BORDER;
+    uint16_t sFill = anyRun ? blendColor565(COLOR_SEC_RED, COLOR_SURFACE, 70) : COLOR_SURFACE;
+    drawGlassCard(spr, c1, bRowY, tW, 40, 8, sCol, sFill, COLOR_BG_DARK);
+    spr->fillCircle(c1 + tW - 10, bRowY + 10, anyRun ? 3 : 2, anyRun ? COLOR_SEC_RED : COLOR_BORDER_HI);
+    if (anyRun) spr->fillCircle(c1 + tW - 10, bRowY + 10, 1, COLOR_TEXT_MAIN);
     spr->setTextDatum(TL_DATUM);
-    spr->setTextColor(TFT_WHITE);
-    spr->drawString("Stop Apps", c1 + 6, bRowY + 5, 2);
-    spr->setTextColor(anyRun ? 0xF800 : 0x8CD1);
-    spr->drawString(anyRun ? "Apps stoppen!" : "Inaktiv", c1 + 6, bRowY + 23, 1);
+    spr->setTextColor(COLOR_TEXT_MAIN);
+    spr->drawString("Stop Apps", c1 + 8, bRowY + 6, 2);
+    spr->setTextColor(anyRun ? COLOR_SEC_RED : COLOR_TEXT_MUTED);
+    spr->drawString(anyRun ? "Apps stoppen!" : "Inaktiv", c1 + 8, bRowY + 24, 1);
 }
 
 void drawLoraMessenger(TFT_eSprite *spr, struct tm *aktuell) {
@@ -880,28 +1536,28 @@ void drawLoraMessenger(TFT_eSprite *spr, struct tm *aktuell) {
     // Tab Switcher (y = 26 .. 48): [0: Chat / P2P] [1: Ping Beacon]
     int tabW = 106, tabH = 22;
     // Tab 0
-    drawGlassCard(spr, 10, 26, tabW, tabH, 4, loraTabMode == 0 ? 0x07FF : 0x2125, loraTabMode == 0 ? 0x1CE7 : 0x0821, 0x0821);
+    drawGlassCard(spr, 10, 26, tabW, tabH, 6, loraTabMode == 0 ? COLOR_CYAN_TECH : COLOR_BORDER, loraTabMode == 0 ? blendColor565(COLOR_CYAN_TECH, COLOR_SURFACE, 40) : COLOR_SURFACE, COLOR_BG_DARK);
     spr->setTextDatum(MC_DATUM);
-    spr->setTextColor(loraTabMode == 0 ? 0xFFFF : 0x8CD1);
+    spr->setTextColor(loraTabMode == 0 ? COLOR_TEXT_MAIN : COLOR_TEXT_MUTED);
     spr->drawString("Chat (P2P)", 63, 37, 2);
 
     // Tab 1
-    drawGlassCard(spr, 124, 26, tabW, tabH, 4, loraTabMode == 1 ? 0x07FF : 0x2125, loraTabMode == 1 ? 0x1CE7 : 0x0821, 0x0821);
+    drawGlassCard(spr, 124, 26, tabW, tabH, 6, loraTabMode == 1 ? COLOR_CYAN_TECH : COLOR_BORDER, loraTabMode == 1 ? blendColor565(COLOR_CYAN_TECH, COLOR_SURFACE, 40) : COLOR_SURFACE, COLOR_BG_DARK);
     spr->setTextDatum(MC_DATUM);
-    spr->setTextColor(loraTabMode == 1 ? 0xFFFF : 0x8CD1);
+    spr->setTextColor(loraTabMode == 1 ? COLOR_TEXT_MAIN : COLOR_TEXT_MUTED);
     spr->drawString("Ping Beacon", 177, 37, 2);
 
     if (loraTabMode == 0) {
         // === TAB 0: CHAT FEED & PRESETS ===
         // Message Feed Card (y = 52 .. 156, height = 104)
-        drawGlassCard(spr, 10, 52, 220, 104, 8, 0x2125, 0x0C12, 0x0821);
+        drawGlassCard(spr, 10, 52, 220, 104, 8, COLOR_BORDER, COLOR_SURFACE, COLOR_BG_DARK);
         
         int nMsgs = LoraManager::getMessageCount();
         const LoraMessage* msgs = LoraManager::getMessages();
 
         if (nMsgs == 0) {
             spr->setTextDatum(MC_DATUM);
-            spr->setTextColor(0x5ACB);
+            spr->setTextColor(COLOR_TEXT_MUTED);
             spr->drawString("Warte auf Funk-Pakete...", 120, 95, 2);
             spr->drawString("Kanal: 868.0 MHz  SF7", 120, 115, 1);
         } else {
@@ -911,15 +1567,15 @@ void drawLoraMessenger(TFT_eSprite *spr, struct tm *aktuell) {
                 const LoraMessage &m = msgs[i];
                 spr->setTextDatum(TL_DATUM);
                 if (m.isOutgoing) {
-                    spr->setTextColor(0xFFE0);
+                    spr->setTextColor(COLOR_WARN);
                     spr->drawString("> " + String(m.sender) + " (" + String(m.timeStr) + "):", 16, mY, 1);
-                    spr->setTextColor(0xFFFF);
+                    spr->setTextColor(COLOR_TEXT_MAIN);
                     spr->drawString(m.text, 22, mY + 12, 2);
                 } else {
-                    spr->setTextColor(0x07FF);
+                    spr->setTextColor(COLOR_CYAN_TECH);
                     String sig = String((int)m.rssi) + "dBm";
                     spr->drawString("< " + String(m.sender) + " [" + sig + "]:", 16, mY, 1);
-                    spr->setTextColor(0x07E0);
+                    spr->setTextColor(COLOR_PROD_GREEN);
                     spr->drawString(m.text, 22, mY + 12, 2);
                 }
                 mY += 32;
@@ -931,271 +1587,47 @@ void drawLoraMessenger(TFT_eSprite *spr, struct tm *aktuell) {
         int pW = 52, pH = 34, gap = 4;
         for (int i = 0; i < 4; i++) {
             int px = 10 + i * (pW + gap);
-            drawGlassCard(spr, px, 162, pW, pH, 6, 0x07FF, 0x1CE7, 0x0821);
+            drawGlassCard(spr, px, 162, pW, pH, 6, COLOR_BORDER, COLOR_SURFACE, COLOR_BG_DARK);
             spr->setTextDatum(MC_DATUM);
-            spr->setTextColor(0xFFFF);
+            spr->setTextColor(COLOR_TEXT_MAIN);
             spr->drawString(presets[i], px + pW / 2, 179, 1);
         }
     } else {
         // === TAB 1: PING BEACON & TELEMETRY ===
-        drawGlassCard(spr, 10, 52, 220, 96, 8, 0x2125, 0x0C12, 0x0821);
+        drawGlassCard(spr, 10, 52, 220, 96, 8, COLOR_BORDER, COLOR_SURFACE, COLOR_BG_DARK);
         
         spr->setTextDatum(TL_DATUM);
-        spr->setTextColor(0x07FF);
+        spr->setTextColor(COLOR_CYAN_TECH);
         spr->drawString("LoRa Telemetrie (SX1262)", 18, 58, 2);
 
-        spr->setTextColor(0xFFFF);
+        spr->setTextColor(COLOR_TEXT_MAIN);
         spr->drawString("TX Pakete: " + String(LoraManager::getTxCount()), 18, 76, 2);
         spr->drawString("RX Pakete: " + String(LoraManager::getRxCount()), 18, 94, 2);
         
         String sigStr = "Signal: " + String((int)LoraManager::getLastRssi()) + " dBm / SNR: " + String(LoraManager::getLastSnr(), 1) + " dB";
-        spr->setTextColor(0x8CD1);
+        spr->setTextColor(COLOR_TEXT_MUTED);
         spr->drawString(sigStr, 18, 114, 1);
         spr->drawString("Frequenz: 868.0 MHz  BW: 125 kHz", 18, 128, 1);
 
         // Big Beacon Button (y = 154 .. 198)
         bool bActive = LoraManager::isBeaconActive();
-        drawGlassCard(spr, 10, 154, 220, 44, 8, bActive ? 0xF800 : 0x07E0, bActive ? 0x4800 : 0x1463, 0x0C12);
+        uint16_t btnBorder = bActive ? COLOR_SEC_RED : COLOR_PROD_GREEN;
+        uint16_t btnFill = bActive ? blendColor565(COLOR_SEC_RED, COLOR_SURFACE, 40) : blendColor565(COLOR_PROD_GREEN, COLOR_SURFACE, 40);
+        drawGlassCard(spr, 10, 154, 220, 44, 8, btnBorder, btnFill, COLOR_BG_DARK);
         spr->setTextDatum(MC_DATUM);
-        spr->setTextColor(0xFFFF);
+        spr->setTextColor(COLOR_TEXT_MAIN);
         spr->drawString(bActive ? "BEACON STOPPEN (5s)" : "BEACON STARTEN (5s)", 120, 176, 2);
     }
 }
 
 static void renderApp(AppPackage* app, TFT_eSprite *spr, struct tm *aktuell) {
     if (!app || !spr) return;
-    String target = (app->driver.length() > 0) ? app->driver : app->id;
-    if (AppManager::hasJsScript(app) || app->uiJson.length() > 0 || (app->isCustom && target.length() == 0)) {
-        AppManager::tickDynamicApp(app, millis());
-        AppManager::renderDynamicApp(app, spr);
+    if (app->drawFn) {
+        app->drawFn(spr);
         return;
     }
-    if (target == "stopwatch") {
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Stoppuhr", 120, 0, 2); long ms = swRunning ? (swElapsed + (millis() - swStartTime)) : swElapsed;
-        char swBuf[20]; snprintf(swBuf, sizeof(swBuf), "%02d:%02d.%02d", (int)(ms/60000), (int)((ms/1000)%60), (int)((ms%1000)/10));
-        int bW = get7SegWidth(String(swBuf), 22, 12, 4); draw7SegString(*spr, String(swBuf), 120 - (bW/2), 25, 22, 12, cAcc1, 4);
-        if (swLapCount > 0) {
-            spr->setTextDatum(MC_DATUM); spr->setTextColor(cBatBG);
-            int showStart = (swLapCount > 3) ? swLapCount - 3 : 0;
-            for (int i = showStart; i < swLapCount; i++) {
-                int row = i - showStart;
-                long lapMs = swLaps[i];
-                char lapBuf[30]; snprintf(lapBuf, sizeof(lapBuf), "R%d  %02d:%02d.%02d", i+1, (int)(lapMs/60000), (int)((lapMs/1000)%60), (int)((lapMs%1000)/10));
-                spr->setTextColor((i == swLapCount - 1) ? cAcc2 : cBatBG);
-                spr->drawString(lapBuf, 120, 62 + row * 18, 2);
-            }
-        }
-        spr->setTextDatum(MC_DATUM);
-        spr->fillRoundRect(5, 150, 72, 40, 6, swRunning ? TFT_ORANGE : TFT_GREEN); spr->setTextColor(TFT_BLACK); spr->drawString(swRunning ? "Stop" : "Start", 41, 170, 2);
-        spr->fillRoundRect(84, 150, 72, 40, 6, (swRunning && swLapCount < MAX_LAPS) ? cAcc2 : cBatBG); spr->setTextColor(swRunning ? TFT_BLACK : TFT_DARKGREY); spr->drawString("Runde", 120, 170, 2);
-        spr->fillRoundRect(163, 150, 72, 40, 6, cBatBG); spr->setTextColor(cFG); spr->drawString("Reset", 199, 170, 2);
-    }
-    else if (target == "timer") {
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Timer", 120, 0, 2); spr->setTextDatum(MC_DATUM); 
-        if (!timerRunning && timerRemaining == 0) { spr->setTextColor(cAcc2); spr->drawString("Waehlen:", 120, 50, 4); spr->fillRoundRect(20, 80, 60, 50, 6, cBatBG); spr->setTextColor(cFG); spr->drawString(String(t1)+"m", 50, 105, 2); spr->fillRoundRect(90, 80, 60, 50, 6, cBatBG); spr->drawString(String(t2)+"m", 120, 105, 2); spr->fillRoundRect(160, 80, 60, 50, 6, cBatBG); spr->drawString(String(t3)+"m", 190, 105, 2); } else { char tBuf[16]; snprintf(tBuf, sizeof(tBuf), "%02d:%02d", (int)(timerRemaining/60), (int)(timerRemaining%60)); int bW = get7SegWidth(String(tBuf), 40, 24, 6); draw7SegString(*spr, String(tBuf), 120 - (bW/2), 70, 40, 24, TFT_RED, 6); spr->fillRoundRect(75, 150, 90, 40, 6, TFT_RED); spr->setTextColor(TFT_WHITE); spr->drawString("Abbruch", 120, 170, 2); }
-    }
-    else if (target == "mic") {
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Dezibel-Meter", 120, 0, 2); int db = getDecibels(); spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_WHITE); spr->drawString(String(db) + " dB", 120, 50, 6); spr->setTextColor(cBatBG); spr->drawString("RMS: " + String(debug_rms, 1), 120, 85, 2); int barH = db; if(barH > 120) barH = 120; uint16_t bCol = (db >= 90) ? TFT_RED : ((db >= 65) ? TFT_YELLOW : TFT_GREEN); spr->fillRect(60, 195 - barH, 120, barH, bCol); spr->drawRect(59, 74, 122, 122, TFT_WHITE);
-    }
-    else if (target == "battery") {
-        int batPct = getBattery();
-        float batVolt = getBatteryVoltageCached(false);
-        bool isCharging = isChargingCached(false);
-
-        drawGlassCard(spr, 8, 4, 224, 64, 8, 0x39E7, 0x1425, 0x0821);
-        spr->setTextDatum(TL_DATUM);
-        spr->setTextColor(0xFFFF);
-        char pctBuf[16]; snprintf(pctBuf, sizeof(pctBuf), "%d%%", batPct);
-        spr->drawString(pctBuf, 20, 10, 4);
-
-        spr->setTextDatum(TR_DATUM);
-        spr->setTextColor(0x07FF);
-        char vBuf[16]; snprintf(vBuf, sizeof(vBuf), "%.2f V", batVolt);
-        spr->drawString(vBuf, 220, 12, 4);
-
-        spr->setTextDatum(MC_DATUM);
-        if (isCharging) {
-            spr->fillRoundRect(20, 40, 94, 20, 10, 0x03E0);
-            spr->setTextColor(0xFFFF);
-            spr->drawString("⚡ LADEN", 67, 50, 2);
-        } else {
-            spr->fillRoundRect(20, 40, 94, 20, 10, 0x18C3);
-            spr->setTextColor(0xFD20);
-            spr->drawString("🔋 AKKU", 67, 50, 2);
-        }
-
-        String estStr = "";
-        if (isCharging) {
-            if (batPct >= 100) estStr = "100% Voll geladen";
-            else {
-                float cRate = (battRateCharging > 1.0f) ? battRateCharging : 45.0f;
-                int remMins = (int)((100.0f - batPct) / cRate * 60.0f);
-                estStr = "Voll in ca. " + String(max(1, remMins)) + "m";
-            }
-        } else {
-            float dRate = (battRateNormal > 0.2f) ? battRateNormal : 5.5f;
-            float remHours = (float)batPct / dRate;
-            estStr = "Noch ~" + String((int)remHours) + "h (" + String(dRate, 1) + "%/h)";
-        }
-        spr->setTextDatum(TR_DATUM);
-        spr->setTextColor(0x8BD0);
-        spr->drawString(estStr, 220, 42, 2);
-
-        drawGlassCard(spr, 8, 72, 224, 76, 8, 0x18C3, 0x0C61, 0x0820);
-        spr->setTextDatum(TL_DATUM);
-        spr->setTextColor(0x8BD0);
-        spr->drawString("Verlauf (letzte 24h)", 16, 76, 1);
-
-        int gx = 16, gy = 88, gw = 208, gh = 52;
-        spr->drawFastHLine(gx, gy + gh, gw, 0x2104);
-        spr->drawFastHLine(gx, gy + gh/2, gw, 0x18C3);
-
-        if (historyCount > 1) {
-            int p0 = battRawPct(batHistoryPct[0]);
-            int prevX = gx;
-            int prevY = gy + gh - (p0 * gh / 100);
-            for (int i = 1; i < historyCount; i++) {
-                int pi = battRawPct(batHistoryPct[i]);
-                int mi = battRawMode(batHistoryPct[i]);
-                int cx = gx + (i * gw) / (historyCount - 1);
-                int cy = gy + gh - (pi * gh / 100);
-                uint16_t lCol = (mi == 2) ? 0x07E0 : ((pi < 20) ? 0xF800 : 0x07FF);
-                spr->drawLine(prevX, prevY, cx, cy, lCol);
-                spr->fillCircle(cx, cy, 2, lCol);
-                prevX = cx; prevY = cy;
-            }
-        } else {
-            spr->setTextDatum(MC_DATUM);
-            spr->setTextColor(0x52AA);
-            spr->drawString("Sammle Daten...", 120, 114, 2);
-        }
-
-        drawGlassCard(spr, 8, 152, 224, 48, 8, 0x18C3, 0x0C61, 0x0820);
-        spr->setTextDatum(TL_DATUM);
-        spr->setTextColor(0x8BD0);
-        spr->drawString("Normal: ~18h", 16, 158, 2);
-        spr->drawString("Hacking-Tools: ~4-6h", 16, 176, 2);
-        spr->setTextDatum(TR_DATUM);
-        spr->setTextColor(0x07E0);
-        spr->drawString("USB 5V OK", 220, 168, 2);
-    }
-    else if (target == "flashlight") {
-        spr->fillSprite(TFT_WHITE);
-    }
-    else if (target == "phishing") {
-        showEvilPortal(spr);
-    }
-    else if (target == "calc") {
-        showRechner(spr);
-    }
-    else if (target == "jiggler") {
-        showJiggler(spr);
-    }
-    else if (target == "badusb") {
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Rubber Ducky", 120, 10, 2);
-        spr->fillRoundRect(15, 35, 30, 30, 5, cBatBG); spr->setTextColor(TFT_WHITE); spr->drawString("<", 30, 42, 2);
-        spr->fillRoundRect(195, 35, 30, 30, 5, cBatBG); spr->setTextColor(TFT_WHITE); spr->drawString(">", 210, 42, 2);
-        spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_YELLOW); spr->drawString(badUsbNames[currentBadUsbScript], 120, 50, 2);
-        spr->fillRoundRect(55, 85, 130, 45, 10, badUsbActive ? TFT_RED : cBatBG);
-        spr->setTextColor(TFT_WHITE); spr->drawString(badUsbActive ? "SCRIPT LÄUFT" : "START SCRIPT", 120, 108, 2);
-    }
-    else if (target == "wifispam") {
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("WiFi Spammer", 120, 10, 2);
-        spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_YELLOW); spr->drawString("Gefakte Netzwerke:", 120, 40, 2);
-        spr->fillRoundRect(55, 80, 130, 45, 10, wifiSpamActive ? TFT_RED : cBatBG);
-        spr->setTextColor(TFT_WHITE); spr->drawString(wifiSpamActive ? "SPAMMING (Stop)" : "START SPAM", 120, 103, 2);
-    }
-    else if (target == "blespam") {
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("BLE Spammer", 120, 10, 2);
-        spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_YELLOW); spr->drawString("Apple Popups", 120, 40, 2);
-        spr->fillRoundRect(55, 80, 130, 45, 10, bleSpamActive ? TFT_RED : cBatBG);
-        spr->setTextColor(TFT_WHITE); spr->drawString(bleSpamActive ? "SPAMMING (Stop)" : "START SPAM", 120, 103, 2);
-    }
-    else if (target == "nmap") {
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(TFT_GREEN); spr->drawString("Nmap Port 80", 120, 5, 2);
-        spr->fillRoundRect(15, 35, 30, 30, 5, cBatBG); spr->setTextColor(TFT_WHITE); spr->drawString("<", 30, 42, 2);
-        spr->fillRoundRect(195, 35, 30, 30, 5, cBatBG); spr->setTextColor(TFT_WHITE); spr->drawString(">", 210, 42, 2);
-        spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_YELLOW); 
-        spr->drawString(targetSSIDs[currentTargetNmap].length() > 0 ? targetSSIDs[currentTargetNmap] : "Leer", 120, 50, 2);
-        if (nmapState == 0 || nmapState == 3 || nmapState == 4) {
-            spr->fillRoundRect(55, 85, 130, 35, 10, nmapActive ? TFT_RED : cBatBG);
-            spr->setTextColor(TFT_WHITE); spr->drawString(nmapActive ? "STOPPING..." : "CONNECT & SCAN", 120, 103, 2);
-        } else {
-            spr->fillRoundRect(55, 85, 130, 35, 10, TFT_RED);
-            spr->setTextColor(TFT_WHITE); spr->drawString("SCANNING (Stop)", 120, 103, 2);
-            spr->setTextColor(TFT_YELLOW); spr->drawString("IP: " + String(nmapIP), 120, 140, 2);
-        }
-        spr->setTextColor(cBatBG);
-        if (nmapState == 1) spr->drawString("Verbinde...", 120, 170, 2);
-        else if (nmapState == 3) spr->drawString("Abgeschlossen!", 120, 170, 2);
-        else if (nmapState == 4) spr->drawString("Fehler!", 120, 170, 2);
-        else if (nmapLog != "") spr->drawString("Ergebnis im Webportal", 120, 170, 2);
-    }
-    else if (target == "deauth") {
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(TFT_RED); spr->drawString("WiFi Deauther", 120, 5, 2);
-        spr->fillRoundRect(15, 35, 30, 30, 5, cBatBG); spr->setTextColor(TFT_WHITE); spr->drawString("<", 30, 42, 2);
-        spr->fillRoundRect(195, 35, 30, 30, 5, cBatBG); spr->setTextColor(TFT_WHITE); spr->drawString(">", 210, 42, 2);
-        spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_YELLOW); 
-        if (numScannedNetworks > 0) spr->drawString(scannedSSIDs[currentDeauthTarget], 120, 50, 2);
-        else spr->drawString("Nichts gescannt", 120, 50, 2);
-        spr->fillRoundRect(55, 75, 130, 35, 10, deauthActive ? TFT_RED : cBatBG);
-        spr->setTextColor(TFT_WHITE); spr->drawString(deauthActive ? "ATTACKING..." : "START DEAUTH", 120, 93, 2);
-        spr->fillRoundRect(65, 125, 110, 28, 6, isScanningAir ? TFT_ORANGE : cBatBG);
-        spr->setTextColor(TFT_WHITE); spr->drawString(isScanningAir ? "Scanne..." : "Scan Umgebung", 120, 139, 2);
-        spr->setTextColor(cBatBG);
-        if (deauthState == 2) spr->drawString(scannedMACs[currentDeauthTarget], 120, 185, 2);
-    }
-    else if (target == "probemon") {
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(TFT_CYAN); spr->drawString("Probe Monitor", 120, 0, 2);
-        spr->setTextDatum(TL_DATUM); spr->setTextColor(cBatBG); spr->drawString("Gefunden: " + String(probeCount), 10, 18, 2);
-        int yStart = 35; int lineH = 28;
-        for (int i = probeScrollOffset; i < probeCount && i < probeScrollOffset + 4; i++) {
-            int yPos = yStart + (i - probeScrollOffset) * lineH;
-            spr->setTextColor(TFT_WHITE); spr->drawString(probeMacs[i].substring(0, 11), 5, yPos, 1);
-            spr->setTextColor(TFT_YELLOW); spr->drawString(probeSSIDs[i].substring(0, 14), 75, yPos, 1);
-            spr->setTextColor(TFT_GREEN); spr->drawString(String(probeRSSI[i]) + "dB", 195, yPos, 1);
-        }
-        if (probeScrollOffset > 0) { spr->setTextDatum(TC_DATUM); spr->setTextColor(cBatBG); spr->drawString("^ Hoch", 120, 25, 1); }
-        if (probeScrollOffset < probeCount - 4) { spr->setTextDatum(BC_DATUM); spr->setTextColor(cBatBG); spr->drawString("v Runter", 120, 138, 1); }
-        spr->setTextDatum(MC_DATUM);
-        spr->fillRoundRect(45, 150, 150, 35, 10, probeMonActive ? TFT_RED : TFT_CYAN);
-        spr->setTextColor(probeMonActive ? TFT_WHITE : TFT_BLACK);
-        spr->drawString(probeMonActive ? "STOP MONITOR" : "START MONITOR", 120, 168, 2);
-    }
-    else if (target == "blescan") {
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(TFT_MAGENTA); spr->drawString("BLE Scanner", 120, 0, 2);
-        spr->setTextDatum(TL_DATUM); spr->setTextColor(cBatBG); spr->drawString("Gefunden: " + String(bleScanCount), 10, 18, 2);
-        int yStart = 35; int lineH = 28;
-        for (int i = bleScanScrollOffset; i < bleScanCount && i < bleScanScrollOffset + 4; i++) {
-            int yPos = yStart + (i - bleScanScrollOffset) * lineH;
-            spr->setTextColor(TFT_WHITE); spr->drawString(bleScanNames[i].substring(0, 14), 5, yPos, 1);
-            spr->setTextColor(TFT_GREEN); spr->drawString(String(bleScanRssi[i]) + "dB", 195, yPos, 1);
-        }
-        if (bleScanScrollOffset > 0) { spr->setTextDatum(TC_DATUM); spr->setTextColor(cBatBG); spr->drawString("^ Hoch", 120, 25, 1); }
-        if (bleScanScrollOffset < bleScanCount - 4) { spr->setTextDatum(BC_DATUM); spr->setTextColor(cBatBG); spr->drawString("v Runter", 120, 138, 1); }
-        spr->setTextDatum(MC_DATUM);
-        spr->fillRoundRect(45, 150, 150, 35, 10, bleScanActive ? TFT_RED : TFT_MAGENTA);
-        spr->setTextColor(TFT_WHITE);
-        spr->drawString(bleScanActive ? "STOP SCAN" : "START SCAN", 120, 168, 2);
-    }
-    else if (target == "dice") {
-        showDice(spr);
-    }
-    else if (target == "level") {
-        showLevel(spr);
-    }
-    else if (target == "totp") {
-        showTotpAuth(spr);
-    }
-    else if (target == "notif") {
-        showNotificationCenter(spr);
-    }
-    else if (target == "lora") {
-        drawLoraMessenger(spr, aktuell);
-    }
-    else {
-        AppManager::renderDynamicApp(app, spr);
-    }
+    AppManager::tickDynamicApp(app, millis());
+    AppManager::renderDynamicApp(app, spr);
 }
 
 void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
@@ -1212,523 +1644,44 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
             aktuell = &tSafe;
         }
 
-        int wday = (aktuell->tm_wday >= 0 && aktuell->tm_wday <= 6) ? aktuell->tm_wday : 0;
-        int mon  = (aktuell->tm_mon >= 0 && aktuell->tm_mon <= 11) ? aktuell->tm_mon : 0;
-        int mday = (aktuell->tm_mday >= 1 && aktuell->tm_mday <= 31) ? aktuell->tm_mday : 1;
-
-        long diff = 0;
-        if (zielZeit.tm_year > 0) {
-            time_t zt = mktime(&zielZeit);
-            if (zt != (time_t)-1 && zt > jetzt) {
-                diff = zt - jetzt;
-            }
+        int activeFace = FACE_ULTRA_DASH;
+        if (!carouselOrder.empty()) {
+            if (carouselIndex < 0 || carouselIndex >= (int)carouselOrder.size()) carouselIndex = 0;
+            activeFace = carouselOrder[carouselIndex];
         }
-        int yearsLeft = (int)(diff / 31536000L);
-        int daysLeft  = (int)((diff % 31536000L) / 86400L);
 
-        if (watchfaceMode == 0) {
-            // === 1. TOP PILL: Datum & Wochentag (3D Glassmorphic) ===
-            static const char* monKurz[] = {"Jan", "Feb", "Mrz", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"};
-            char dPill[32];
-            snprintf(dPill, sizeof(dPill), "%s, %02d. %s", wochentage[wday], mday, monKurz[mon]);
-            
-            drawGlassCard(spr, 28, 4, 184, 22, 11, 0x3186, 0x1CE7, 0x10A2);
-            spr->fillCircle(40, 15, 3, 0x07FF); // Glowing cyan beacon
-            spr->fillCircle(40, 15, 1, 0xFFFF);
-            spr->setTextDatum(MC_DATUM);
-            spr->setTextColor(0xFFE0); // Bright Gold
-            spr->drawString(dPill, 126, 15, 2);
-
-            // === 2. HERO TIME: Apple Watch Ultra Digital Clock ===
-            char tBuf[8];
-            snprintf(tBuf, sizeof(tBuf), "%02d:%02d", aktuell->tm_hour, aktuell->tm_min);
-            spr->setTextDatum(MR_DATUM);
-            spr->setTextColor(0xFFFF, cBG);
-            spr->drawString(tBuf, 148, 48, 7);
-
-            char sBuf[6];
-            snprintf(sBuf, sizeof(sBuf), ":%02d", aktuell->tm_sec);
-            spr->setTextDatum(ML_DATUM);
-            spr->setTextColor(0x07FF, cBG); // Electric Cyan
-            spr->drawString(sBuf, 152, 50, 4);
-
-            // === 3. 3D CHROMATIC ACTIVITY RINGS ===
-            int goal = (stepGoal > 0) ? stepGoal : 8000;
-            float stepRatio = (goal > 0) ? ((float)stepCount / (float)goal) : 0.0f;
-            float batRatio  = (float)getBattery() / 100.0f;
-            float timeRatio = (float)(aktuell->tm_hour * 60 + aktuell->tm_min) / 1440.0f;
-            drawActivityRings(spr, 48, 114, stepRatio, batRatio, timeRatio);
-
-            // === 4. COMPLICATION CARDS (Rechts neben den Ringen) ===
-            int cX = 98, cW = 132;
-            
-            // Schritte Card
-            drawGlassCard(spr, cX, 74, cW, 36, 8, 0x0540, 0x1463, 0x0A22);
-            spr->fillCircle(cX + 12, 88, 4, 0x07E0); // Glowing emerald
-            spr->fillCircle(cX + 12, 88, 1, 0xFFFF);
-            spr->setTextDatum(TL_DATUM);
-            spr->setTextColor(0xFFFF);
-            spr->drawString(String(stepCount) + " Steps", cX + 22, 78, 2);
-            int sBarW = cW - 28;
-            int sFillW = (int)(stepRatio * sBarW);
-            if (sFillW > sBarW) sFillW = sBarW;
-            spr->fillRoundRect(cX + 22, 98, sBarW, 4, 2, 0x18C4);
-            if (sFillW > 1) spr->fillRoundRect(cX + 22, 98, sFillW, 4, 2, 0x07E0);
-
-            // Akku & Power Card
-            drawGlassCard(spr, cX, 116, cW, 36, 8, 0x62C0, 0x2180, 0x10A2);
-            spr->fillCircle(cX + 12, 130, 4, 0xFD20); // Glowing amber
-            spr->fillCircle(cX + 12, 130, 1, 0xFFFF);
-            spr->setTextDatum(TL_DATUM);
-            spr->setTextColor(0xFFFF);
-            spr->drawString(String(getBattery()) + "% Akku", cX + 22, 120, 2);
-            spr->setTextColor(0xFD20);
-            bool isChg = isChargingCached(false);
-            String voltPwr = String(getBatteryVoltageCached(false), 2) + "V  " + (isChg ? "Laden" : "Akku");
-            spr->drawString(voltPwr, cX + 22, 136, 1);
-            if (isChg) {
-                int lX = cX + cW - 14, lY = 124;
-                spr->drawLine(lX + 3, lY, lX, lY + 5, 0xFFE0);
-                spr->drawLine(lX, lY + 5, lX + 4, lY + 5, 0xFFE0);
-                spr->drawLine(lX + 4, lY + 5, lX + 1, lY + 10, 0xFFFF);
-            }
-
-            // === 5. BOTTOM PILL: Lebensziel-Vorschau (3D Glassmorphic) ===
-            drawGlassCard(spr, 12, 160, 216, 26, 13, 0x2A67, 0x1425, 0x0821);
-            spr->setTextDatum(MC_DATUM);
-            spr->setTextColor(0x07FF);
-            char goalPill[44];
-            snprintf(goalPill, sizeof(goalPill), "Lebensziel: %dJ %d Tage  >", yearsLeft, daysLeft);
-            spr->drawString(goalPill, 120, 173, 2);
-        } else if (watchfaceMode == 1) {
-            // === MODE 1: CLASSIC SWISS CHRONOGRAPH ===
-            drawChronographWatchface(spr, aktuell, getBattery(), isChargingCached(false));
-        } else if (watchfaceMode == 2) {
-            // === MODE 2: RETRO CASIO F-91W / ILLUMINATOR ===
-            drawRetroCasioWatchface(spr, aktuell, getBattery(), isChargingCached(false));
-        } else {
-            // === MODE 3: MODERNISIERTE LEBENSUHR MIT 3D CARDS ===
-            int vals[] = {(int)(diff / 31536000L), (int)((diff % 31536000L) / 2592000L), (int)((diff % 2592000L) / 86400L), (int)((diff % 86400L) / 3600L), (int)((diff % 3600L) / 60L), (int)(diff % 60L)};
-            const char* labs[] = {"Jahre", "Monate", "Tage", "Stunden", "Minuten", "Sekunden"};
-            int rowH = 28; 
-            int sH = 20; int sW = 12; 
-            for(int i = 0; i < 6; i++) { 
-                int y = 4 + i * (rowH + 3);
-                drawGlassCard(spr, 8, y, 196, rowH, 6, (i < 3) ? 0x62C0 : 0x2184, 0x1CE7, 0x10A2);
-                char buf[5]; snprintf(buf, sizeof(buf), "%02d", vals[i]); 
-                draw7SegString(*spr, String(buf), 16, y + 4, sH, sW, (i < 3) ? 0xFFFF : 0xFFE0, 3); 
-                spr->setTextDatum(ML_DATUM); 
-                spr->setTextColor((i < 3) ? 0x07FF : 0x8BD0); 
-                spr->drawString(labs[i], 66, y + rowH/2, 2); 
-            }
-            
-            // Lebensziel Progress Bar Rechts mit 3D Säule
-            float aktAlter = (float)(aktuell->tm_year + 1900 - gJahr) + (float)aktuell->tm_yday/365.0f; 
-            float prozent = (zielAlter > 0) ? (aktAlter / (float)zielAlter) : 0.0f; 
-            if (prozent > 1.0f) prozent = 1.0f;
-            if (prozent < 0.0f) prozent = 0.0f;
-            int fullBarH = 183; 
-            int fillH = (int)(fullBarH * prozent); 
-            drawGlassCard(spr, 212, 4, 18, fullBarH, 9, 0x3186, 0x1CE7, 0x0821);
-            uint16_t pCol = (prozent > 0.8f) ? TFT_RED : (prozent > 0.5f ? TFT_ORANGE : 0x07E0);
-            if (fillH > 4) {
-                spr->fillRoundRect(214, (4 + fullBarH) - fillH, 14, fillH, 7, pCol);
-                spr->drawFastHLine(215, (4 + fullBarH) - fillH + 1, 12, 0xFFFF); // Specular head
-            }
+        switch (activeFace) {
+            case FACE_ULTRA_DASH: drawUltraDashboard(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_CHRONO:     drawChronographWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_CASIO:      drawRetroCasioWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_LIFETIME:   drawLifetimeWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_BAUHAUS:    drawBauhausWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_CYBERPUNK:  drawCyberpunkWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_WORDCLOCK:  drawWordClockWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_FINANCE:    drawFinanceWatchface(spr, aktuell); break;
+            case FACE_CHILDREN:   drawChildrenWatchface(spr, aktuell); break;
+            case FACE_PARENTS:    drawParentsWatchface(spr, aktuell); break;
+            default:              drawUltraDashboard(spr, aktuell, getBattery(), isChargingCached(false)); break;
         }
     } 
-    else if (page == 1) {
-        spr->setTextDatum(TC_DATUM);
-        spr->setTextColor(0xFFE0); // Gold
-        spr->drawString("Opportunitaet", 120, 10, 4);
-        
-        float dailyNet = (netSalary * 12.0) / 365.0;
-        float fraction = (millis() % 1000) / 1000.0;
-        long secToday = aktuell->tm_hour * 3600 + aktuell->tm_min * 60 + aktuell->tm_sec;
-        float earnedToday = dailyNet * ((secToday + fraction) / 86400.0);
-        
-        // 3D Glass-Karte: Heutiger Verdienst
-        drawGlassCard(spr, 12, 40, 216, 64, 10, 0x62C0, 0x2180, 0x10A2);
-        
-        spr->setTextDatum(TL_DATUM);
-        spr->setTextColor(0xAD55);
-        spr->drawString("Heute verdient", 22, 46, 2);
-        
-        char moneyBuf[16];
-        snprintf(moneyBuf, sizeof(moneyBuf), "%.4f", earnedToday);
-        int mH = 26; int mW = 15; int mSpace = 4;
-        int totalW = get7SegWidth(String(moneyBuf), mH, mW, mSpace);
-        draw7SegString(*spr, String(moneyBuf), 22, 68, mH, mW, 0xFFFF, mSpace);
-        
-        spr->setTextDatum(TL_DATUM);
-        spr->setTextColor(0x07E0); // Emerald EUR
-        spr->drawString("EUR", 22 + totalW + 6, 74, 2);
-
-        // 3D Glass-Karte: Echter Stundenlohn
-        float workDaysPerYear = workDaysYear - vacationDays - sickDays;
-        float workHoursPerYear = workDaysPerYear * workHoursPerDay * (partTimePct / 100.0);
-        float trueHourlyWage = 0;
-        if (workHoursPerYear > 0) trueHourlyWage = (netSalary * 12.0) / workHoursPerYear;
-        
-        drawGlassCard(spr, 12, 112, 216, 64, 10, 0x0540, 0x1CE7, 0x10A2);
-        
-        spr->setTextDatum(TL_DATUM);
-        spr->setTextColor(0xAD55);
-        spr->drawString("Echter Stundenlohn", 22, 118, 2);
-        
-        char hrBuf[16];
-        snprintf(hrBuf, sizeof(hrBuf), "%.2f", trueHourlyWage); 
-        int hH = 24; int hW = 14; int hSpace = 3;
-        int hTotalW = get7SegWidth(String(hrBuf), hH, hW, hSpace);
-        draw7SegString(*spr, String(hrBuf), 22, 140, hH, hW, 0x07FF, hSpace);
-        
-        spr->setTextDatum(TL_DATUM);
-        spr->setTextColor(0x07FF);
-        spr->drawString("EUR/h", 22 + hTotalW + 6, 146, 2);
+    else if (page == 1 || page == FACE_FINANCE) {
+        drawFinanceWatchface(spr, aktuell);
     }
-    else if (page == 2) {
-        int activeKids = 0; String kNames[3]; String kDates[3]; String kTimes[3];
-        if(child1Name.length() > 0 && child1Date.length() == 10) { kNames[activeKids] = child1Name; kDates[activeKids] = child1Date; kTimes[activeKids] = child1Time; activeKids++; }
-        if(child2Name.length() > 0 && child2Date.length() == 10) { kNames[activeKids] = child2Name; kDates[activeKids] = child2Date; kTimes[activeKids] = child2Time; activeKids++; }
-        if(child3Name.length() > 0 && child3Date.length() == 10) { kNames[activeKids] = child3Name; kDates[activeKids] = child3Date; kTimes[activeKids] = child3Time; activeKids++; }
-        if (activeKids > 0) {
-            int yName = 18, yJahre = 60, yMonate = 100, yWochen = 140, yTage = 180; spr->setTextDatum(MC_DATUM); spr->setTextColor(cBatBG);
-            if (activeKids <= 2) { spr->drawString("Jahre", 120, yJahre, 2); spr->drawString("Monate", 120, yMonate, 2); spr->drawString("Wochen", 120, yWochen, 2); spr->drawString("Tage", 120, yTage, 2); }
-            for(int i=0; i<activeKids; i++) {
-                int xCenter = 120; if (activeKids == 2) xCenter = (i == 0) ? 45 : 195; else if (activeKids == 3) xCenter = 40 + (i * 80);
-                spr->setTextDatum(MC_DATUM); spr->setTextColor(cFG); spr->drawString(kNames[i], xCenter, yName, 4); 
-                time_t bTime = stringToTime(kDates[i], kTimes[i]); long diff = jetzt - bTime; if (diff < 0) diff = 0;
-                long dDays = diff / 86400; long dWeeks = dDays / 7;
-                int bYear = kDates[i].substring(0, 4).toInt(); int bMon = kDates[i].substring(5, 7).toInt(); int bDay = kDates[i].substring(8, 10).toInt();
-                int dYears = (aktuell->tm_year + 1900) - bYear; if ((aktuell->tm_mon + 1) < bMon || ((aktuell->tm_mon + 1) == bMon && aktuell->tm_mday < bDay)) dYears--; if (dYears < 0) dYears = 0;
-                int dMonths = ((aktuell->tm_year + 1900) - bYear) * 12 + ((aktuell->tm_mon + 1) - bMon); if (aktuell->tm_mday < bDay) dMonths--; if (dMonths < 0) dMonths = 0;
-                spr->setTextColor(cAcc2); spr->drawString(String(dYears), xCenter, yJahre, 4); spr->drawString(String(dMonths), xCenter, yMonate, 4); spr->drawString(String(dWeeks), xCenter, yWochen, 4); spr->drawString(String(dDays), xCenter, yTage, 4);
-            }
-        } else { spr->setTextDatum(MC_DATUM); spr->setTextColor(cBatBG); spr->drawString("Keine Kinder", 120, 103, 2); spr->drawString("eingetragen", 120, 123, 2); }
+    else if (page == 2 || page == FACE_CHILDREN) {
+        drawChildrenWatchface(spr, aktuell);
     }
-    else if (page == 3) {
-        char uB[12]; char uT[6]; snprintf(uB, sizeof(uB), "%04d-%02d-%02d", gJahr, gMonat, gTag); snprintf(uT, sizeof(uT), "%02d:%02d", gStunde, gMinute);
-        time_t uTime = stringToTime(String(uB), String(uT)); time_t pTime = stringToTime(parentDate, parentTime);
-        if(uTime != 0 && pTime != 0) {
-            int64_t myAgeSec = (int64_t)jetzt - (int64_t)uTime;
-            time_t targetDate = (time_t)((int64_t)pTime + myAgeSec);
-            struct tm tgt;
-            localtime_r(&targetDate, &tgt);
-            const char* monate[] = {"Januar", "Februar", "Maerz", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"};
-            char dBuf[30]; snprintf(dBuf, sizeof(dBuf), "%02d. %s %04d", tgt.tm_mday, monate[tgt.tm_mon], tgt.tm_year+1900);
-            struct tm uTm;
-            localtime_r(&uTime, &uTm);
-            int yearsThen = (tgt.tm_year + 1900) - (uTm.tm_year + 1900);
-            if (tgt.tm_mon < uTm.tm_mon || (tgt.tm_mon == uTm.tm_mon && tgt.tm_mday < uTm.tm_mday)) yearsThen--;
-            spr->setTextDatum(MC_DATUM); spr->setTextColor(cBatBG); spr->drawString("Heute war für " + parentName, 120, 30, 2); spr->drawString("in deinem Alter der", 120, 50, 2);
-            spr->setTextColor(cFG); spr->drawString(dBuf, 120, 85, 4); spr->setTextColor(cBatBG); spr->drawString("An diesem Tag warst Du", 120, 135, 2);
-            if (yearsThen < 0) { spr->setTextColor(cAcc2); spr->drawString("Noch nicht", 120, 160, 4); spr->drawString("geboren.", 120, 185, 4); } else { spr->setTextColor(cAcc2); spr->drawString(String(yearsThen) + " Jahre", 120, 175, 4); }
-        } else { spr->setTextDatum(MC_DATUM); spr->setTextColor(cBatBG); spr->drawString("Daten fehlen", 120, 100, 2); }
+    else if (page == 3 || page == FACE_PARENTS) {
+        drawParentsWatchface(spr, aktuell);
     }
-    // === Page 4 reserviert (nicht mehr in Watchface-Rotation) ===
     else if (page == 4) {
-        // Leer — AOD wird nur im Web-Dashboard konfiguriert
+        // Reserviert
     }
     else if (page == 5) {
         drawControlCenter(spr, aktuell);
     }
-    else if (page == 6) { 
-        spr->setTextDatum(TC_DATUM);
-        spr->setTextColor(0xFFFF);
-        spr->drawString("Apps & Packages", 120, 2, 2);
-        
-        // PRODUCTIVITY APPS CARD (Links) - 3D Glass
-        drawGlassCard(spr, 12, 26, 104, 170, 12, 0x07E0, 0x1463, 0x0A22);
-        
-        spr->setTextDatum(MC_DATUM);
-        spr->fillCircle(64, 54, 14, tft.color565(15, 45, 20));
-        spr->drawCircle(64, 54, 14, 0x07E0);
-        spr->fillCircle(64, 54, 1, 0xFFFF);
-        spr->setTextColor(0x07E0);
-        spr->drawString("+", 64, 54, 4);
-        
-        spr->setTextColor(0x07E0);
-        spr->drawString("PROD", 64, 88, 4);
-        spr->setTextColor(0xFFFF);
-        int prodCount = AppManager::getAppCount(CAT_PRODUCTIVITY, true);
-        char prodBuf[20]; snprintf(prodBuf, sizeof(prodBuf), "%d Apps", prodCount);
-        spr->drawString(prodBuf, 64, 114, 2);
-        spr->setTextColor(0x8BD0);
-        spr->drawString("Stoppuhr, LoRa", 64, 138, 1);
-        spr->drawString("2FA, Rechner", 64, 150, 1);
-        spr->drawString("Timer, Waage", 64, 162, 1);
-
-        // SECURITY APPS CARD (Rechts) - 3D Glass
-        drawGlassCard(spr, 124, 26, 104, 170, 12, TFT_RED, 0x3841, 0x1800);
-        
-        spr->setTextDatum(MC_DATUM);
-        spr->fillCircle(176, 54, 14, tft.color565(55, 15, 15));
-        spr->drawCircle(176, 54, 14, TFT_RED);
-        spr->fillCircle(176, 54, 1, 0xFFFF);
-        spr->setTextColor(TFT_RED);
-        spr->drawString("!", 176, 54, 4);
-        
-        spr->setTextColor(TFT_RED);
-        spr->drawString("SEC", 176, 88, 4);
-        spr->setTextColor(0xFFFF);
-        int secCount = AppManager::getAppCount(CAT_SECURITY, true);
-        char secBuf[20]; snprintf(secBuf, sizeof(secBuf), "%d Apps", secCount);
-        spr->drawString(secBuf, 176, 114, 2);
-        spr->setTextColor(0x8BD0);
-        spr->drawString("Rubber Ducky", 176, 138, 1);
-        spr->drawString("WiFi/BLE Spam", 176, 150, 1);
-        spr->drawString("Deauth, Portal", 176, 162, 1);
-        
-        bool anyBadRun = badUsbActive || wifiSpamActive || bleSpamActive || deauthActive || nmapActive || evilActive || probeMonActive || bleScanActive;
-        if (anyBadRun) {
-            spr->fillCircle(176, 185, 4, TFT_RED);
-            spr->fillCircle(176, 185, 1, 0xFFFF);
-            spr->setTextColor(TFT_RED);
-            spr->drawString("AKTIV", 176, 177, 1);
-        }
+    else if (page == 6 || page == 22 || page == 23) { 
+        renderAppLauncher(spr);
     }
-    else if (page == 7) { 
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Stoppuhr", 120, 0, 2); long ms = swRunning ? (swElapsed + (millis() - swStartTime)) : swElapsed;
-        char swBuf[20]; snprintf(swBuf, sizeof(swBuf), "%02d:%02d.%02d", (int)(ms/60000), (int)((ms/1000)%60), (int)((ms%1000)/10));
-        int bW = get7SegWidth(String(swBuf), 22, 12, 4); draw7SegString(*spr, String(swBuf), 120 - (bW/2), 25, 22, 12, cAcc1, 4);
-        // Rundenzeiten anzeigen (letzte 3)
-        if (swLapCount > 0) {
-            spr->setTextDatum(MC_DATUM); spr->setTextColor(cBatBG);
-            int showStart = (swLapCount > 3) ? swLapCount - 3 : 0;
-            for (int i = showStart; i < swLapCount; i++) {
-                int row = i - showStart;
-                long lapMs = swLaps[i];
-                char lapBuf[30]; snprintf(lapBuf, sizeof(lapBuf), "R%d  %02d:%02d.%02d", i+1, (int)(lapMs/60000), (int)((lapMs/1000)%60), (int)((lapMs%1000)/10));
-                spr->setTextColor((i == swLapCount - 1) ? cAcc2 : cBatBG);
-                spr->drawString(lapBuf, 120, 62 + row * 18, 2);
-            }
-        }
-        // Buttons: Start/Stop | Runde | Reset
-        spr->setTextDatum(MC_DATUM);
-        spr->fillRoundRect(5, 150, 72, 40, 6, swRunning ? TFT_ORANGE : TFT_GREEN); spr->setTextColor(TFT_BLACK); spr->drawString(swRunning ? "Stop" : "Start", 41, 170, 2);
-        spr->fillRoundRect(84, 150, 72, 40, 6, (swRunning && swLapCount < MAX_LAPS) ? cAcc2 : cBatBG); spr->setTextColor(swRunning ? TFT_BLACK : TFT_DARKGREY); spr->drawString("Runde", 120, 170, 2);
-        spr->fillRoundRect(163, 150, 72, 40, 6, cBatBG); spr->setTextColor(cFG); spr->drawString("Reset", 199, 170, 2);
-    }
-    else if (page == 8) { 
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Timer", 120, 0, 2); spr->setTextDatum(MC_DATUM); 
-        if (!timerRunning && timerRemaining == 0) { spr->setTextColor(cAcc2); spr->drawString("Waehlen:", 120, 50, 4); spr->fillRoundRect(20, 80, 60, 50, 6, cBatBG); spr->setTextColor(cFG); spr->drawString(String(t1)+"m", 50, 105, 2); spr->fillRoundRect(90, 80, 60, 50, 6, cBatBG); spr->drawString(String(t2)+"m", 120, 105, 2); spr->fillRoundRect(160, 80, 60, 50, 6, cBatBG); spr->drawString(String(t3)+"m", 190, 105, 2); } else { char tBuf[16]; snprintf(tBuf, sizeof(tBuf), "%02d:%02d", (int)(timerRemaining/60), (int)(timerRemaining%60)); int bW = get7SegWidth(String(tBuf), 40, 24, 6); draw7SegString(*spr, String(tBuf), 120 - (bW/2), 70, 40, 24, TFT_RED, 6); spr->fillRoundRect(75, 150, 90, 40, 6, TFT_RED); spr->setTextColor(TFT_WHITE); spr->drawString("Abbruch", 120, 170, 2); }
-    }
-    else if (page == 9) { 
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Dezibel-Meter", 120, 0, 2); int db = getDecibels(); spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_WHITE); spr->drawString(String(db) + " dB", 120, 50, 6); spr->setTextColor(cBatBG); spr->drawString("RMS: " + String(debug_rms, 1), 120, 85, 2); int barH = db; if(barH > 120) barH = 120; uint16_t bCol = (db >= 90) ? TFT_RED : ((db >= 65) ? TFT_YELLOW : TFT_GREEN); spr->fillRect(60, 195 - barH, 120, barH, bCol); spr->drawRect(59, 74, 122, 122, TFT_WHITE);
-    }
-    else if (page == 10) {
-        int batPct = getBattery();
-        float batVolt = getBatteryVoltageCached(false);
-        bool isCharging = isChargingCached(false);
-
-        // 1. Top 3D Glass Hero Card (y=4, h=64)
-        drawGlassCard(spr, 8, 4, 224, 64, 8, 0x39E7, 0x1425, 0x0821);
-
-        spr->setTextDatum(TL_DATUM);
-        spr->setTextColor(0xFFFF);
-        char pctBuf[16]; snprintf(pctBuf, sizeof(pctBuf), "%d%%", batPct);
-        spr->drawString(pctBuf, 20, 10, 4);
-
-        spr->setTextDatum(TR_DATUM);
-        spr->setTextColor(0x07FF);
-        char vBuf[16]; snprintf(vBuf, sizeof(vBuf), "%.2f V", batVolt);
-        spr->drawString(vBuf, 220, 12, 4);
-
-        // Status Pill inside Card
-        spr->setTextDatum(MC_DATUM);
-        if (isCharging) {
-            spr->fillRoundRect(20, 40, 94, 20, 10, 0x03E0);
-            spr->setTextColor(0xFFFF);
-            spr->drawString("⚡ LADEN", 67, 50, 2);
-        } else {
-            spr->fillRoundRect(20, 40, 94, 20, 10, 0x18C3);
-            spr->setTextColor(0xFD20);
-            spr->drawString("🔋 AKKU", 67, 50, 2);
-        }
-
-        // Restlaufzeit / ETA
-        String estStr = "";
-        if (isCharging) {
-            if (batPct >= 100) estStr = "100% Voll geladen";
-            else {
-                float cRate = (battRateCharging > 1.0f) ? battRateCharging : 45.0f;
-                int remMins = (int)((100.0f - batPct) / cRate * 60.0f);
-                estStr = "Voll in ca. " + String(max(1, remMins)) + "m";
-            }
-        } else {
-            float dRate = (battRateNormal > 0.2f) ? battRateNormal : 5.5f;
-            float remHours = (float)batPct / dRate;
-            estStr = "Noch ~" + String((int)remHours) + "h (" + String(dRate, 1) + "%/h)";
-        }
-        spr->setTextDatum(TR_DATUM);
-        spr->setTextColor(0xFFE0);
-        spr->drawString(estStr, 220, 42, 2);
-
-        // 2. Middle 3D Battery Graph Card (y=72, h=76)
-        drawGlassCard(spr, 8, 72, 224, 76, 8, 0x2104, 0x1082, 0x0000);
-        int gX = 18, gY = 78, gW = 204, gH = 62;
-        spr->drawFastHLine(gX, gY, gW, 0x18C3);
-        spr->drawFastHLine(gX, gY + gH / 2, gW, 0x18C3);
-        spr->drawFastHLine(gX, gY + gH - 1, gW, 0x18C3);
-
-        if (historyCount > 1) {
-            float stepX = (float)gW / max(1, historyCount - 1);
-            for (int i = 0; i < historyCount - 1; i++) {
-                uint16_t raw1 = batHistoryPct[i]; uint16_t raw2 = batHistoryPct[i + 1];
-                int p1 = battRawPct(raw1);
-                int p2 = battRawPct(raw2);
-                int m1 = battRawMode(raw1);
-                int px1 = gX + (int)(i * stepX);
-                int px2 = gX + (int)((i + 1) * stepX);
-                int py1 = gY + gH - (p1 * gH / 100);
-                int py2 = gY + gH - (p2 * gH / 100);
-                if (py1 < gY) py1 = gY; if (py1 > gY + gH - 1) py1 = gY + gH - 1;
-                if (py2 < gY) py2 = gY; if (py2 > gY + gH - 1) py2 = gY + gH - 1;
-
-                uint16_t col = (m1 == 2) ? 0x07FF : ((p1 >= 50) ? 0x07E0 : (p1 >= 25 ? 0xFD20 : 0xF800));
-                spr->fillTriangle(px1, gY + gH - 1, px2, gY + gH - 1, px1, py1, blendColor565(col, 0x0000, 100));
-                spr->fillTriangle(px1, py1, px2, py2, px2, gY + gH - 1, blendColor565(col, 0x0000, 100));
-                spr->drawLine(px1, py1, px2, py2, col);
-            }
-            int lastPx = gX + gW - 2;
-            int lastP = batPct;
-            int lastPy = gY + gH - (lastP * gH / 100);
-            spr->fillCircle(lastPx, lastPy, 4, 0x07FF);
-            spr->fillCircle(lastPx, lastPy, 2, 0xFFFF);
-        } else {
-            spr->setTextDatum(MC_DATUM);
-            spr->setTextColor(0x5ACB);
-            spr->drawString("Historie sammelt Daten...", 120, gY + gH / 2, 2);
-        }
-
-        // 3. Bottom Steps / Health Complication Card (y=152, h=50)
-        drawGlassCard(spr, 8, 152, 224, 50, 8, 0x1442, 0x0A22, 0x0821);
-        spr->setTextDatum(TL_DATUM);
-        spr->setTextColor(0x8CD1);
-        spr->drawString("Schritte heute", 20, 157, 2);
-
-        spr->setTextDatum(TR_DATUM);
-        spr->setTextColor(0x07E0);
-        spr->drawString(String(stepCount) + " / " + String(stepGoal), 220, 157, 2);
-
-        int sBarW = 200;
-        float sProg = (stepGoal > 0) ? min(1.0f, (float)stepCount / (float)stepGoal) : 0.0f;
-        int sFill = (int)(sBarW * sProg);
-        spr->fillRoundRect(20, 180, sBarW, 8, 4, 0x18C3);
-        if (sFill > 2) {
-            spr->fillRoundRect(20, 180, sFill, 8, 4, 0x07E0);
-            spr->drawFastHLine(21, 181, sFill - 2, 0xFFFF);
-        }
-    }
-    else if (page == 11) { spr->fillSprite(TFT_WHITE); }
-    else if (page == 12) { showEvilPortal(spr); } 
-    else if (page == 13) { showRechner(spr); }
-    else if (page == 14) { showJiggler(spr); }
-    else if (page == 15) { 
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("Rubber Ducky", 120, 10, 2);
-        spr->fillRoundRect(15, 35, 30, 30, 5, cBatBG); spr->setTextColor(TFT_WHITE); spr->drawString("<", 30, 42, 2);
-        spr->fillRoundRect(195, 35, 30, 30, 5, cBatBG); spr->setTextColor(TFT_WHITE); spr->drawString(">", 210, 42, 2);
-        spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_YELLOW); spr->drawString(badUsbNames[currentBadUsbScript], 120, 50, 2);
-        spr->fillRoundRect(55, 85, 130, 45, 10, badUsbActive ? TFT_RED : cBatBG);
-        spr->setTextColor(TFT_WHITE); spr->drawString(badUsbActive ? "SCRIPT LÄUFT" : "START SCRIPT", 120, 108, 2);
-    }
-    else if (page == 16) { 
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("WiFi Spammer", 120, 10, 2);
-        spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_YELLOW); spr->drawString("Gefakte Netzwerke:", 120, 40, 2);
-        spr->fillRoundRect(55, 80, 130, 45, 10, wifiSpamActive ? TFT_RED : cBatBG);
-        spr->setTextColor(TFT_WHITE); spr->drawString(wifiSpamActive ? "SPAMMING (Stop)" : "START SPAM", 120, 103, 2);
-    }
-    else if (page == 17) { 
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(cFG); spr->drawString("BLE Spammer", 120, 10, 2);
-        spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_YELLOW); spr->drawString("Apple Popups", 120, 40, 2);
-        spr->fillRoundRect(55, 80, 130, 45, 10, bleSpamActive ? TFT_RED : cBatBG);
-        spr->setTextColor(TFT_WHITE); spr->drawString(bleSpamActive ? "SPAMMING (Stop)" : "START SPAM", 120, 103, 2);
-    }
-    else if (page == 18) {
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(TFT_GREEN); spr->drawString("Nmap Port 80", 120, 5, 2);
-        spr->fillRoundRect(15, 35, 30, 30, 5, cBatBG); spr->setTextColor(TFT_WHITE); spr->drawString("<", 30, 42, 2);
-        spr->fillRoundRect(195, 35, 30, 30, 5, cBatBG); spr->setTextColor(TFT_WHITE); spr->drawString(">", 210, 42, 2);
-        
-        spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_YELLOW); 
-        spr->drawString(targetSSIDs[currentTargetNmap].length() > 0 ? targetSSIDs[currentTargetNmap] : "Leer", 120, 50, 2);
-
-        if (nmapState == 0 || nmapState == 3 || nmapState == 4) {
-            spr->fillRoundRect(55, 85, 130, 35, 10, nmapActive ? TFT_RED : cBatBG);
-            spr->setTextColor(TFT_WHITE); spr->drawString(nmapActive ? "STOPPING..." : "CONNECT & SCAN", 120, 103, 2);
-        } else {
-            spr->fillRoundRect(55, 85, 130, 35, 10, TFT_RED);
-            spr->setTextColor(TFT_WHITE); spr->drawString("SCANNING (Stop)", 120, 103, 2);
-            spr->setTextColor(TFT_YELLOW); spr->drawString("IP: " + String(nmapIP), 120, 140, 2);
-        }
-        
-        spr->setTextColor(cBatBG);
-        if (nmapState == 1) spr->drawString("Verbinde...", 120, 170, 2);
-        else if (nmapState == 3) spr->drawString("Abgeschlossen!", 120, 170, 2);
-        else if (nmapState == 4) spr->drawString("Fehler!", 120, 170, 2);
-        else if (nmapLog != "") spr->drawString("Ergebnis im Webportal", 120, 170, 2);
-        
-    }
-    else if (page == 19) {
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(TFT_RED); spr->drawString("WiFi Deauther", 120, 5, 2);
-        spr->fillRoundRect(15, 35, 30, 30, 5, cBatBG); spr->setTextColor(TFT_WHITE); spr->drawString("<", 30, 42, 2);
-        spr->fillRoundRect(195, 35, 30, 30, 5, cBatBG); spr->setTextColor(TFT_WHITE); spr->drawString(">", 210, 42, 2);
-        
-        spr->setTextDatum(MC_DATUM); spr->setTextColor(TFT_YELLOW); 
-        if (numScannedNetworks > 0) spr->drawString(scannedSSIDs[currentDeauthTarget], 120, 50, 2);
-        else spr->drawString("Nichts gescannt", 120, 50, 2);
-
-        spr->fillRoundRect(55, 75, 130, 35, 10, deauthActive ? TFT_RED : cBatBG);
-        spr->setTextColor(TFT_WHITE); spr->drawString(deauthActive ? "ATTACKING..." : "START DEAUTH", 120, 93, 2);
-
-        spr->fillRoundRect(65, 125, 110, 28, 6, isScanningAir ? TFT_ORANGE : cBatBG);
-        spr->setTextColor(TFT_WHITE); spr->drawString(isScanningAir ? "Scanne..." : "Scan Umgebung", 120, 139, 2);
-
-        spr->setTextColor(cBatBG);
-        if (deauthState == 2) spr->drawString(scannedMACs[currentDeauthTarget], 120, 185, 2);
-
-    }
-    else if (page == 20) {
-        // Probe Request Monitor
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(TFT_CYAN); spr->drawString("Probe Monitor", 120, 0, 2);
-        spr->setTextDatum(TL_DATUM); spr->setTextColor(cBatBG); spr->drawString("Gefunden: " + String(probeCount), 10, 18, 2);
-        int yStart = 35; int lineH = 28;
-        for (int i = probeScrollOffset; i < probeCount && i < probeScrollOffset + 4; i++) {
-            int yPos = yStart + (i - probeScrollOffset) * lineH;
-            spr->setTextColor(TFT_WHITE); spr->drawString(probeMacs[i].substring(0, 11), 5, yPos, 1);
-            spr->setTextColor(TFT_YELLOW); spr->drawString(probeSSIDs[i].substring(0, 14), 75, yPos, 1);
-            spr->setTextColor(TFT_GREEN); spr->drawString(String(probeRSSI[i]) + "dB", 195, yPos, 1);
-        }
-        if (probeScrollOffset > 0) { spr->setTextDatum(TC_DATUM); spr->setTextColor(cBatBG); spr->drawString("^ Hoch", 120, 25, 1); }
-        if (probeScrollOffset < probeCount - 4) { spr->setTextDatum(BC_DATUM); spr->setTextColor(cBatBG); spr->drawString("v Runter", 120, 138, 1); }
-        spr->setTextDatum(MC_DATUM);
-        spr->fillRoundRect(45, 150, 150, 35, 10, probeMonActive ? TFT_RED : TFT_CYAN);
-        spr->setTextColor(probeMonActive ? TFT_WHITE : TFT_BLACK);
-        spr->drawString(probeMonActive ? "STOP MONITOR" : "START MONITOR", 120, 168, 2);
-    }
-    else if (page == 21) {
-        // BLE Scanner
-        spr->setTextDatum(TC_DATUM); spr->setTextColor(TFT_MAGENTA); spr->drawString("BLE Scanner", 120, 0, 2);
-        spr->setTextDatum(TL_DATUM); spr->setTextColor(cBatBG); spr->drawString("Gefunden: " + String(bleScanCount), 10, 18, 2);
-        int yStart = 35; int lineH = 28;
-        for (int i = bleScanScrollOffset; i < bleScanCount && i < bleScanScrollOffset + 4; i++) {
-            int yPos = yStart + (i - bleScanScrollOffset) * lineH;
-            spr->setTextColor(TFT_WHITE); spr->drawString(bleScanNames[i].substring(0, 14), 5, yPos, 1);
-            spr->setTextColor(TFT_GREEN); spr->drawString(String(bleScanRssi[i]) + "dB", 195, yPos, 1);
-        }
-        if (bleScanScrollOffset > 0) { spr->setTextDatum(TC_DATUM); spr->setTextColor(cBatBG); spr->drawString("^ Hoch", 120, 25, 1); }
-        if (bleScanScrollOffset < bleScanCount - 4) { spr->setTextDatum(BC_DATUM); spr->setTextColor(cBatBG); spr->drawString("v Runter", 120, 138, 1); }
-        spr->setTextDatum(MC_DATUM);
-        spr->fillRoundRect(45, 150, 150, 35, 10, bleScanActive ? TFT_RED : TFT_MAGENTA);
-        spr->setTextColor(TFT_WHITE);
-        spr->drawString(bleScanActive ? "STOP SCAN" : "START SCAN", 120, 168, 2);
-    }
-    else if (page == 22) { renderGoodMenu(spr); }
-    else if (page == 23) { renderBadMenu(spr); }
-    else if (page == 24) { showDice(spr); }
-    else if (page == 25) { showLevel(spr); }
-    else if (page == 26) { showTotpAuth(spr); }
-    else if (page == 27) { showNotificationCenter(spr); }
-    else if (page == Pages::LoraMessenger) { drawLoraMessenger(spr, aktuell); }
     else {
         AppPackage* curApp = AppManager::getAppByPage(page);
         if (curApp != nullptr) {
@@ -1736,21 +1689,21 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
         }
     }
     
-    // Page indicator dots for watchfaces (pages 0-3 only, Page 4 = AOD Manager Info)
-    if (page >= 0 && page <= 3) {
+    // Page indicator dots for Watchface Carousel (Page 0)
+    if (page == 0) {
         int dotY = spr->height() - 7;
-        int enabledPages[4]; int numEnabled = 0;
-        if (enP0) enabledPages[numEnabled++] = 0;
-        if (enP1) enabledPages[numEnabled++] = 1;
-        if (enP2) enabledPages[numEnabled++] = 2;
-        if (enP3) enabledPages[numEnabled++] = 3;
-        if (numEnabled > 1) {
-            int totalW = numEnabled * 16;
+        int numItems = (int)carouselOrder.size();
+        if (numItems > 1) {
+            int dotSpacing = (numItems > 7) ? 12 : 16;
+            int totalW = (numItems - 1) * dotSpacing + 12;
             int startX = 120 - totalW / 2;
-            for (int i = 0; i < numEnabled; i++) {
-                int dotX = startX + i * 16;
-                if (enabledPages[i] == page) spr->fillRoundRect(dotX, dotY - 2, 12, 4, 2, cAcc1);
-                else spr->fillCircle(dotX + 6, dotY, 2, cBatBG);
+            for (int i = 0; i < numItems; i++) {
+                int dotX = startX + i * dotSpacing;
+                if (i == carouselIndex) {
+                    spr->fillRoundRect(dotX, dotY - 2, 12, 4, 2, cAcc1);
+                } else {
+                    spr->fillCircle(dotX + 3, dotY, 2, cBatBG);
+                }
             }
         }
         // Notification Pill / Badge on Watchfaces if unread notifications exist
@@ -1765,7 +1718,17 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
         }
     }
 
-    if (millis() < toastEndTime) { int tW = spr->textWidth(toastMsg, 2) + 40; int tX = (240 - tW) / 2; spr->fillRoundRect(tX, 165, tW, 30, 15, toastColor); spr->setTextColor(TFT_WHITE, toastColor); spr->drawCentreString(toastMsg, 120, 173, 2); }
+    if (millis() < toastEndTime) {
+        int tW = spr->textWidth(toastMsg, 2) + 28;
+        if (tW < 80) tW = 80;
+        if (tW > 230) tW = 230;
+        int tX = (240 - tW) / 2;
+        spr->fillRoundRect(tX, 8, tW, 24, 12, toastColor);
+        spr->drawRoundRect(tX, 8, tW, 24, 12, COLOR_TEXT_MAIN);
+        spr->setTextDatum(MC_DATUM);
+        spr->setTextColor(COLOR_TEXT_MAIN, toastColor);
+        spr->drawString(toastMsg, 120, 20, 2);
+    }
 }
 
 void slideToPage(int newPage, int dx, int dy) {
@@ -1785,10 +1748,20 @@ void slideToPage(int newPage, int dx, int dy) {
     struct tm *aktuell = localtime(&jetzt);
     bool isCharging = isChargingCached(false);
 
-    if (currentPage != 11) drawHeader(aktuell, getBattery(), isCharging);
-    cdSprite.fillSprite(currentPage == 11 ? TFT_WHITE : cBG);
+    AppPackage* curSlideApp = AppManager::getAppByPage(currentPage);
+    bool isSlideFlash = (curSlideApp && (curSlideApp->id == "flashlight" || curSlideApp->driver == "flashlight"));
+    bool isSlideFs = isSlideFlash ? AppManager::getAppStateBool(curSlideApp->id, "fullscreen", true) : false;
+    if (isSlideFs) {
+        setBrightness(255);
+        tft.fillScreen(TFT_WHITE);
+        Serial.printf("[SLIDE] OK (FLASHLIGHT VOLLBILD) -> page %d (heap=%d)\n", currentPage, ESP.getFreeHeap());
+        return;
+    }
+
+    drawHeader(aktuell, getBattery(), isCharging);
+    cdSprite.fillSprite(cBG);
     renderPage(currentPage, &cdSprite, aktuell);
-    if (currentPage != 11) cdSprite.pushSprite(0, HEAD_H); else cdSprite.pushSprite(0, 0);
+    cdSprite.pushSprite(0, HEAD_H);
 
     Serial.printf("[SLIDE] OK -> page %d (heap=%d)\n", currentPage, ESP.getFreeHeap());
 }
@@ -1796,29 +1769,60 @@ void slideToPage(int newPage, int dx, int dy) {
 void renderUI(unsigned long currentMillis) {
     time_t jetzt; time(&jetzt); struct tm *aktuell = localtime(&jetzt); bool isCharging = isChargingCached(false); static unsigned long lastFrame = 0;
 
-    bool isAppActive = (AppManager::getAppByPage(currentPage) != nullptr);
-    bool fastRefresh = (currentPage == 1 || currentPage == 7 || currentPage == 9 || currentPage == 25 || isAppActive); 
+    AppPackage* curApp = AppManager::getAppByPage(currentPage);
+    bool isFlashlight = (curApp && (curApp->id == "flashlight" || curApp->driver == "flashlight"));
+    bool isFsLight = false;
+    int fsMode = 0;
+    int strobeTog = 1;
+
+    if (isFlashlight) {
+        AppManager::tickDynamicApp(curApp, currentMillis);
+        isFsLight = AppManager::getAppStateBool(curApp->id, "fullscreen", true);
+        fsMode = AppManager::getAppStateInt(curApp->id, "curModeIdx", 0);
+        strobeTog = AppManager::getAppStateInt(curApp->id, "strobeToggle", 1);
+    }
+
+    bool isAppActive = (curApp != nullptr);
+    bool isFinanceActive = (currentPage == 1 || (currentPage == 0 && !carouselOrder.empty() && carouselIndex >= 0 && carouselIndex < (int)carouselOrder.size() && carouselOrder[carouselIndex] == FACE_FINANCE));
+    bool fastRefresh = (isFinanceActive || isAppActive || isFlashlight); 
     bool forceRender = (aktuell->tm_sec != lastSecond) 
-                    || (fastRefresh && (currentMillis - lastFrame > 50)) 
+                    || (fastRefresh && (currentMillis - lastFrame > (isFlashlight ? 40 : 50))) 
                     || (currentMillis < toastEndTime) 
                     || (hotspotPromptActive && (currentMillis - lastFrame > 40))
-                    || (currentPage >= 13 && currentPage <= 25)
                     || (isAppActive && (currentMillis - lastFrame > 50));
     if (forceRender) { 
+        lastSecond = aktuell->tm_sec; 
+        lastFrame = currentMillis; 
+
+        // Vollbild-Flutlicht (Reines 240x240 Displaylicht ohne Header & Buttons)
+        if (isFsLight) {
+            uint16_t lightColor = TFT_WHITE;
+            if (fsMode == 1) {
+                lightColor = 0xFFDE; // warmes gedaempftes Weiss
+                setBrightness(75);
+            } else if (fsMode == 2) {
+                lightColor = (strobeTog == 1) ? TFT_WHITE : TFT_BLACK;
+                setBrightness((strobeTog == 1) ? 255 : 5);
+            } else {
+                lightColor = TFT_WHITE;
+                setBrightness(255);
+            }
+            tft.fillScreen(lightColor);
+            return;
+        }
+
         if (cdSprite.getPointer() == nullptr) {
             Serial.println("[RENDER] cdSprite ist NULL - recreate!");
             void* p = cdSprite.createSprite(240, 240 - HEAD_H);
             if (!p) { Serial.println("[RENDER] KRITISCH: cdSprite alloc FAIL!"); return; }
         }
-        lastSecond = aktuell->tm_sec; 
-        lastFrame = currentMillis; 
-        if(currentPage != 11) drawHeader(aktuell, getBattery(), isCharging); 
-        cdSprite.fillSprite(currentPage == 11 ? TFT_WHITE : cBG); 
+        drawHeader(aktuell, getBattery(), isCharging); 
+        cdSprite.fillSprite(cBG); 
         renderPage(currentPage, &cdSprite, aktuell); 
         if (hotspotPromptActive) {
             drawHotspotPrompt(&cdSprite);
         }
-        if(currentPage != 11) cdSprite.pushSprite(0, HEAD_H); else cdSprite.pushSprite(0, 0); 
+        cdSprite.pushSprite(0, HEAD_H); 
     }
 }
 
@@ -1875,11 +1879,12 @@ void renderAOD() {
             int px = wfTimeX + offX, py = wfTimeY + offY;
             tft.setTextDatum(MC_DATUM); tft.setTextColor(cAodFG, TFT_BLACK);
             if (wfTimeFmt == 1) {
-                // 7-Segment: Basis 40px Höhe bei Scale 1.0
-                int sH = (int)(40 * wfTimeScale); int sW = (int)(sH * 0.6); int sp = (int)(sH * 0.15);
+                // Echte 7-Segment-Darstellung direkt auf tft (TFT_eSPI)
+                int sH = max(14, (int)(40 * wfTimeScale));
+                int sW = max(8, (int)(sH * 0.55));
+                int sp = max(2, (int)(sH * 0.15));
                 int totalW = get7SegWidth(String(aodBuf), sH, sW, sp);
-                // 7seg braucht einen Sprite — zeichne als text fallback im AOD
-                tft.drawString(aodBuf, px, py, wfTimeScale >= 1.2 ? 7 : (wfTimeScale >= 0.7 ? 6 : 4));
+                draw7SegString(tft, String(aodBuf), px - totalW / 2, py - sH / 2, sH, sW, cAodFG, sp);
             } else {
                 // Digital: Basis Font 6 (~36px) bei Scale 1.0, stufenlos per setTextSize für >1.0
                 if (wfTimeScale <= 0.6) { tft.setTextSize(1); tft.drawString(aodBuf, px, py, 4); }
@@ -1903,16 +1908,16 @@ void renderAOD() {
         if (wfShowBatt) {
             int px = wfBattX + offX, py = wfBattY + offY;
             tft.setTextDatum(MC_DATUM);
+            int bFont = (wfBattScale < 0.7) ? 2 : 4;
             if (isCharging) {
-                // Lade-Modus: Prozent pulsierend anzeigen (ohne Blitz)
                 uint8_t bri = 100 + animPhase * 50; // 100..250 pulsierend
                 uint16_t pulseCol = tft.color565(bri, bri, 0);
                 tft.setTextColor(pulseCol, TFT_BLACK);
-                tft.drawString(String(batPct) + "%", px, py, 4);
+                tft.drawString(String(batPct) + "%", px, py, bFont);
             } else {
                 uint16_t bCol = (batPct > 50) ? TFT_GREEN : (batPct > 20) ? TFT_YELLOW : TFT_RED;
                 tft.setTextColor(bCol, TFT_BLACK);
-                tft.drawString(String(batPct) + "%", px, py, 4);
+                tft.drawString(String(batPct) + "%", px, py, bFont);
             }
         }
 
@@ -1920,7 +1925,8 @@ void renderAOD() {
         if (wfShowSteps) {
             int px = wfStepsX + offX, py = wfStepsY + offY;
             tft.setTextDatum(MC_DATUM); tft.setTextColor(cAodAcc, TFT_BLACK);
-            tft.drawString("Schritte: " + String(stepCount), px, py, 2);
+            int sFont = (wfStepsScale >= 1.3) ? 4 : ((wfStepsScale < 0.7) ? 1 : 2);
+            tft.drawString("Schritte: " + String(stepCount), px, py, sFont);
         }
 
         // === Wortuhr ===

@@ -4,6 +4,7 @@
 #include "Display.h"
 #include "Globals.h"
 #include "Logic.h"
+#include "SystemEvents.h"
 #include <time.h>
 
 static WatchNotification items[MAX_NOTIFICATIONS];
@@ -39,6 +40,7 @@ void NotificationManager::add(const char* title, const char* message) {
     itemCount++;
 
     newAlertFlag = true;
+    SystemEvents::post(SYS_EVT_NOTIFICATION, &n);
 
     // Haptisches Feedback & Display-Toast
     triggerVibration();
@@ -99,8 +101,8 @@ String NotificationManager::toJson() {
         if (i > 0) json += ",";
         json += "{\"id\":" + String(n.id) + ",";
         json += "\"time\":" + String((long)n.timestamp) + ",";
-        json += "\"title\":\"" + String(n.title) + "\",";
-        json += "\"msg\":\"" + String(n.message) + "\",";
+        json += "\"title\":\"" + jsonEscape(String(n.title)) + "\",";
+        json += "\"msg\":\"" + jsonEscape(String(n.message)) + "\",";
         json += "\"read\":" + String(n.read ? "true" : "false") + "}";
     }
     json += "]}";

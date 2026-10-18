@@ -6,8 +6,9 @@
 #include "NotificationManager.h"
 #include "LoraManager.h"
 #include "TotpAuth.h"
-#include "GoodApps.h"
-#include "BadApps.h"
+#include "SensorDriver.h"
+#include "PortalServer.h"
+#include "AppLauncher.h"
 #include <esp_wifi.h>
 #include <WiFi.h>
 #include <BLEDevice.h>
@@ -302,20 +303,15 @@ static void syncSystemGlobalsFromState(AppPackage *app) {
         swRunning = isRun;
     } else if (app->id == "timer" || app->driver == "timer") {
         timerRunning = isRun;
-        if (st.count("remainingSec")) {
-            timerRemaining = (long)st["remainingSec"].asNum();
-        } else if (!isRun) {
-            timerRemaining = 0;
-        }
     } else if (app->id == "jiggler" || app->driver == "jiggler") {
         jigglerActive = isRun;
-    } else if (app->id == "phishing" || app->driver == "phishing") {
-        evilActive = isRun;
-    } else if (app->id == "badusb" || app->driver == "badusb") {
-        badUsbActive = isRun;
+    } else if (app->id == "phishing" || app->id == "portal" || app->driver == "phishing" || app->driver == "portal") {
+        portalActive = isRun;
+    } else if (app->id == "badusb" || app->id == "ducky" || app->driver == "badusb" || app->driver == "ducky") {
+        duckyActive = isRun;
     } else if (app->id == "wifispam" || app->driver == "wifispam") {
         wifiSpamActive = isRun;
-    } else if (app->id == "blespam" || app->driver == "blespam") {
+    } else if (app->id == "blespam" || app->id == "bletest" || app->driver == "blespam" || app->driver == "bletest") {
         bleSpamActive = isRun;
     } else if (app->id == "nmap" || app->driver == "nmap") {
         nmapActive = isRun;
@@ -480,6 +476,28 @@ struct JsVM {
             if (args.size() >= 2) playSynthSound((int)args[0].asNum(), (int)args[1].asNum());
             return JsVal(1);
         }
+        if (fnName == "Watch.beep") {
+            int freq = args.size() >= 1 ? (int)args[0].asNum() : 1000;
+            int dur  = args.size() >= 2 ? (int)args[1].asNum() : 150;
+            playToneHz(freq, dur);
+            return JsVal(1);
+        }
+        if (fnName == "Watch.getTimerPreset") {
+            int idx = args.empty() ? 1 : (int)args[0].asNum();
+            if (idx == 1) return JsVal((double)t1);
+            if (idx == 2) return JsVal((double)t2);
+            return JsVal((double)t3);
+        }
+        if (fnName == "Watch.getEvilSsid") {
+            return JsVal(evilSSID);
+        }
+        if (fnName == "Watch.getMaxBright") {
+            return JsVal((double)maxBright);
+        }
+        if (fnName == "Watch.restoreBrightness") {
+            setBrightness(maxBright);
+            return JsVal(1);
+        }
         if (fnName == "Watch.formatTimeMs") {
             long ms = args.empty() ? 0 : (long)max(0.0, args[0].asNum());
             char buf[24];
@@ -505,7 +523,11 @@ struct JsVM {
         if (fnName == "Watch.jiggle") {
             int dx = args.size() >= 1 ? (int)args[0].asNum() : 2;
             int dy = args.size() >= 2 ? (int)args[1].asNum() : 0;
-            if (usbHidActive) Mouse.move(dx, dy);
+            if (!usbHidActive) {
+                toggleUsbHid();
+                return JsVal(0);
+            }
+            Mouse.move(dx, dy);
             return JsVal(1);
         }
         if (fnName == "Watch.loraSend") {
@@ -513,8 +535,7 @@ struct JsVM {
             return JsVal(1);
         }
         if (fnName == "Watch.back") {
-            if (app && app->category == CAT_PRODUCTIVITY) slideToPage(Pages::GoodAppsMenu, -1, 0);
-            else slideToPage(Pages::BadAppsMenu, -1, 0);
+            slideToPage(Pages::AppLauncher, -1, 0);
             return JsVal(1);
         }
         if (fnName == "Watch.evalCalc") {
@@ -564,6 +585,11 @@ struct JsVM {
         }
         if (fnName == "Watch.loraIsReady") return JsVal(LoraManager::isReady() ? 1.0 : 0.0);
         if (fnName == "Watch.loraGetRssi") return JsVal((double)LoraManager::getLastRssi());
+        if (fnName == "Watch.loraGetFreq") return JsVal((double)LoraManager::getFrequency());
+        if (fnName == "Watch.loraSetFreq") {
+            if (!args.empty()) LoraManager::setFrequency((float)args[0].asNum());
+            return JsVal((double)LoraManager::getFrequency());
+        }
         if (fnName == "Watch.loraMsgCount") return JsVal((double)LoraManager::getMessageCount());
         if (fnName == "Watch.loraGetMsgText") {
             int idx = args.empty() ? 0 : (int)args[0].asNum();
@@ -627,6 +653,10 @@ struct JsVM {
         }
         if (fnName == "Watch.isBadUsbActive") return JsVal(badUsbActive ? 1.0 : 0.0);
         if (fnName == "Watch.toggleBadUsb") {
+            if (!usbHidActive) {
+                toggleUsbHid();
+                return JsVal(0);
+            }
             badUsbActive = !badUsbActive;
             return JsVal(1);
         }
@@ -636,7 +666,8 @@ struct JsVM {
             return JsVal(1);
         }
         if (fnName == "Watch.getBadUsbName") {
-            int idx = args.empty() ? currentBadUsbScript : (int)args[0].asNum();
+            int idx = constrain(args.empty() ? currentBadUsbScript : (int)args[0].asNum(), 0, 2);
+            if (badUsbNames[idx].length() > 0) return JsVal(badUsbNames[idx]);
             if (idx == 0) return JsVal("Rickroll");
             if (idx == 1) return JsVal("Fake Update");
             return JsVal("Info Dump");
@@ -645,7 +676,7 @@ struct JsVM {
         if (fnName == "Watch.toggleWiFiSpam") {
             wifiSpamActive = !wifiSpamActive;
             if (wifiSpamActive) { WiFi.mode(WIFI_AP); esp_wifi_set_promiscuous(true); }
-            else { esp_wifi_set_promiscuous(false); WiFi.mode(WIFI_OFF); }
+            else { esp_wifi_set_promiscuous(false); if (!wlanActive && !evilActive) WiFi.mode(WIFI_OFF); }
             return JsVal(1);
         }
         if (fnName == "Watch.isBleSpamActive") return JsVal(bleSpamActive ? 1.0 : 0.0);
@@ -659,7 +690,7 @@ struct JsVM {
             if (!args.empty()) currentTargetNmap = constrain((int)args[0].asNum(), 0, 2);
             if (targetSSIDs[currentTargetNmap].length() > 0) {
                 nmapActive = !nmapActive;
-                if (nmapActive) nmapState = 0; else { WiFi.disconnect(true); WiFi.mode(WIFI_OFF); }
+                if (nmapActive) nmapState = 0; else { WiFi.disconnect(true); if (!wlanActive && !evilActive) WiFi.mode(WIFI_OFF); }
             }
             return JsVal(1);
         }
@@ -680,7 +711,7 @@ struct JsVM {
         if (fnName == "Watch.toggleDeauth") {
             if (numScannedNetworks > 0) {
                 deauthActive = !deauthActive;
-                if (deauthActive) deauthState = 0; else { esp_wifi_set_promiscuous(false); WiFi.mode(WIFI_OFF); }
+                if (deauthActive) deauthState = 0; else { esp_wifi_set_promiscuous(false); if (!wlanActive && !evilActive) WiFi.mode(WIFI_OFF); }
             }
             return JsVal(1);
         }
@@ -1173,8 +1204,62 @@ struct JsVM {
     }
 };
 
+static void parseUiWidgets(AppPackage *app) {
+    if (!app || app->uiParsed) return;
+    app->uiParsed = true;
+    app->widgets.clear();
+    String json = app->uiJson;
+    if (json.length() == 0) return;
+
+    app->uiTitle = jsonExtractString(json, "title", "");
+    int pos = 1;
+    while ((pos = json.indexOf('{', pos)) != -1) {
+        int end = findMatchingBracket(json, pos);
+        if (end == -1) break;
+        String elem = json.substring(pos, end + 1);
+        pos = end + 1;
+
+        String type = jsonExtractString(elem, "type", "");
+        if (type.length() == 0) continue;
+
+        UiWidget w;
+        w.type        = type;
+        w.id          = jsonExtractString(elem, "id", "");
+        w.text        = jsonExtractString(elem, "text", jsonExtractString(elem, "label", ""));
+        w.align       = jsonExtractString(elem, "align", "center");
+        w.visibleExpr = jsonExtractString(elem, "visible", "1");
+        w.x           = jsonExtractInt(elem, "x", (type == "button") ? 20 : 120);
+        w.y           = jsonExtractInt(elem, "y", 50);
+        w.w           = jsonExtractInt(elem, "w", 200);
+        w.h           = jsonExtractInt(elem, "h", 36);
+        w.size        = jsonExtractInt(elem, "size", jsonExtractInt(elem, "font", 2));
+        w.color       = jsonExtractString(elem, "color", "#ffffff");
+        w.bg          = jsonExtractString(elem, "bg", (type == "lcd") ? "#111822" : "#181c24");
+        String bdr    = jsonExtractString(elem, "border", "");
+        if ((type == "card" || type == "rect") && bdr.length() > 0 && jsonExtractString(elem, "bg", "").length() == 0) {
+            w.bg = w.color;
+            w.color = bdr;
+        }
+        if (type == "7segment") {
+            w.h       = jsonExtractInt(elem, "h", jsonExtractInt(elem, "size", 22));
+            w.w       = jsonExtractInt(elem, "w", max(8, w.h * 6 / 11));
+            w.spacing = jsonExtractInt(elem, "spacing", max(2, w.h / 5));
+        }
+        w.textColor = jsonExtractString(elem, "text_color", "");
+        w.action    = jsonExtractString(elem, "action", "");
+        w.valueExpr = jsonExtractString(elem, "value", "0");
+        w.maxVal    = max(1, jsonExtractInt(elem, "max", 100));
+        w.rows      = max(1, jsonExtractInt(elem, "rows", 4));
+        w.cols      = max(1, jsonExtractInt(elem, "cols", 4));
+        w.keys      = jsonExtractString(elem, "keys", "7,8,9,/,4,5,6,*,1,2,3,-,C,0,=, +");
+        app->widgets.push_back(w);
+    }
+}
+
 static void ensureJsAppInitialized(AppPackage *app) {
-    if (!app || app->jsInitialized) return;
+    if (!app) return;
+    if (!app->uiParsed) parseUiWidgets(app);
+    if (app->jsInitialized) return;
     app->jsInitialized = true;
     parseInitialStateFromLogic(app->id, app->logicJson);
     if (app->jsScript.length() > 0 && app->jsScript.indexOf("function onInit") != -1) {
@@ -1257,26 +1342,47 @@ void AppManager::tickBackgroundApps(unsigned long now) {
     }
 }
 
-void AppManager::stopJsApp(AppPackage *pkg) {
-    if (!pkg) return;
-    if (appStates.count(pkg->id)) {
-        auto &st = appStates[pkg->id];
-        if (pkg->jsScript.indexOf("function reset") != -1) {
-            runJsAction(pkg, "reset()");
-        } else if (pkg->jsScript.indexOf("function cancel") != -1) {
-            runJsAction(pkg, "cancel()");
-        } else if (pkg->jsScript.indexOf("function stop") != -1) {
-            runJsAction(pkg, "stop()");
+void AppManager::stopJsApp(AppPackage *app) {
+    if (!app) return;
+    if (app->jsScript.length() > 0) {
+        if (app->jsScript.indexOf("function onStop") != -1) {
+            runJsAction(app, "onStop()");
+        } else if (app->jsScript.indexOf("function reset") != -1) {
+            runJsAction(app, "reset()");
+        } else if (app->jsScript.indexOf("function cancel") != -1) {
+            runJsAction(app, "cancel()");
         }
-        st["running"] = JsVal(0);
-        st["isIdle"] = JsVal(1);
-        syncSystemGlobalsFromState(pkg);
+    }
+    if (appStates.count(app->id)) {
+        appStates[app->id]["running"] = JsVal(0);
+    }
+    syncSystemGlobalsFromState(app);
+
+    // Spezifische Hardware-Ressource dieser App freigeben, ohne andere Hintergrund-Apps zu beenden
+    String tid = app->driver.length() > 0 ? app->driver : app->id;
+    if (tid == "mic") stopMic();
+    else if (tid == "flashlight") setBrightness(maxBright);
+    else if (tid == "probemon" && probeMonActive) stopProbeMonitor();
+    else if (tid == "blescan" && bleScanActive) stopBleScan();
+    else if ((tid == "phishing" || tid == "portal") && portalActive) togglePortalServer();
+    else if (tid == "wifispam" || tid == "deauth" || tid == "nmap") {
+        esp_wifi_set_promiscuous(false);
+        if (!wlanActive && !portalActive) {
+            WiFi.disconnect(true);
+            WiFi.mode(WIFI_OFF);
+        }
+        deauthState = 0;
+        nmapState = 0;
     }
 }
 
 void AppManager::stopAllJsApps() {
     for (auto &pkg : registry) {
-        stopJsApp(&pkg);
+        if (appStates.count(pkg.id) && appStates[pkg.id].count("running")) {
+            if (appStates[pkg.id]["running"].asBool()) {
+                stopJsApp(&pkg);
+            }
+        }
     }
 }
 
@@ -1406,7 +1512,7 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   "category": "productivity",
   "color": "#00ff00",
   "icon": "TI",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "WatchOS",
   "description": "Countdown-Timer mit Schnellwahltasten und Alarmton (JS)",
   "driver": "timer",
@@ -1426,7 +1532,7 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
       {
         "type": "button",
         "id": "p1",
-        "text": "3m",
+        "text": "{p1Lbl}",
         "x": 20,
         "y": 80,
         "w": 60,
@@ -1434,12 +1540,12 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
         "color": "#333333",
         "text_color": "#ffffff",
         "visible": "{isIdle}",
-        "action": "start(3)"
+        "action": "startPreset(1)"
       },
       {
         "type": "button",
         "id": "p2",
-        "text": "5m",
+        "text": "{p2Lbl}",
         "x": 90,
         "y": 80,
         "w": 60,
@@ -1447,12 +1553,12 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
         "color": "#333333",
         "text_color": "#ffffff",
         "visible": "{isIdle}",
-        "action": "start(5)"
+        "action": "startPreset(2)"
       },
       {
         "type": "button",
         "id": "p3",
-        "text": "10m",
+        "text": "{p3Lbl}",
         "x": 160,
         "y": 80,
         "w": 60,
@@ -1460,7 +1566,7 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
         "color": "#333333",
         "text_color": "#ffffff",
         "visible": "{isIdle}",
-        "action": "start(10)"
+        "action": "startPreset(3)"
       },
       {
         "type": "7segment",
@@ -1477,27 +1583,14 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
         "type": "button",
         "id": "cancel",
         "text": "Abbruch",
-        "x": 20,
-        "y": 145,
-        "w": 95,
+        "x": 75,
+        "y": 150,
+        "w": 90,
         "h": 40,
-        "color": "#ff3333",
+        "color": "#ff0000",
         "text_color": "#ffffff",
         "visible": "{running}",
         "action": "cancel()"
-      },
-      {
-        "type": "button",
-        "id": "btn_reset",
-        "text": "Neustart",
-        "x": 125,
-        "y": 145,
-        "w": 95,
-        "h": 40,
-        "color": "#ff9900",
-        "text_color": "#000000",
-        "visible": "{running}",
-        "action": "reset()"
       }
     ]
   },
@@ -1509,9 +1602,12 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
       "isIdle": 1,
       "endTime": 0,
       "remainingSec": 0,
-      "timeStr": "00:00"
+      "timeStr": "00:00",
+      "p1Lbl": "3m",
+      "p2Lbl": "5m",
+      "p3Lbl": "10m"
     },
-    "script": "function start(mins) {\n  Watch.vibrate();\n  state.remainingSec = mins * 60;\n  state.endTime = Watch.millis() + (mins * 60000);\n  state.running = 1;\n  state.isIdle = 0;\n  state.timeStr = Watch.formatTimeSec(state.remainingSec);\n}\n\nfunction onTick() {\n  if (state.running == 1) {\n    var leftMs = state.endTime - Watch.millis();\n    if (leftMs <= 0) {\n      state.running = 0;\n      state.isIdle = 1;\n      state.remainingSec = 0;\n      state.endTime = 0;\n      state.timeStr = '00:00';\n      Watch.alarm();\n      Watch.toast('Timer abgelaufen!');\n    } else {\n      state.remainingSec = Math.ceil(leftMs / 1000);\n      state.timeStr = Watch.formatTimeSec(state.remainingSec);\n    }\n  }\n}\n\nfunction cancel() {\n  Watch.vibrate();\n  state.running = 0;\n  state.isIdle = 1;\n  state.remainingSec = 0;\n  state.endTime = 0;\n  state.timeStr = '00:00';\n}\n\nfunction reset() {\n  cancel();\n}"
+    "script": "function onInit() {\n  state.p1Lbl = String(Watch.getTimerPreset(1)) + 'm';\n  state.p2Lbl = String(Watch.getTimerPreset(2)) + 'm';\n  state.p3Lbl = String(Watch.getTimerPreset(3)) + 'm';\n}\n\nfunction startPreset(idx) {\n  var mins = Watch.getTimerPreset(idx);\n  start(mins);\n}\n\nfunction start(mins) {\n  Watch.vibrate();\n  state.remainingSec = mins * 60;\n  state.endTime = Watch.millis() + (mins * 60000);\n  state.running = 1;\n  state.isIdle = 0;\n  state.timeStr = Watch.formatTimeSec(state.remainingSec);\n}\n\nfunction onTick() {\n  if (state.running == 1) {\n    var leftMs = state.endTime - Watch.millis();\n    if (leftMs <= 0) {\n      state.running = 0;\n      state.isIdle = 1;\n      state.remainingSec = 0;\n      state.timeStr = '00:00';\n      Watch.alarm();\n      Watch.toast('Timer abgelaufen!');\n    } else {\n      state.remainingSec = Math.ceil(leftMs / 1000);\n      state.timeStr = Watch.formatTimeSec(state.remainingSec);\n    }\n  }\n}\n\nfunction cancel() {\n  Watch.vibrate();\n  state.running = 0;\n  state.isIdle = 1;\n  state.remainingSec = 0;\n  state.timeStr = '00:00';\n}"
   }
 })rawliteral";
     }
@@ -2219,7 +2315,7 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   "category": "productivity",
   "color": "#31ff00",
   "icon": "BA",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "WatchOS",
   "description": "Detaillierte Telemetrie und Ladehistorie (JS)",
   "driver": "battery",
@@ -2230,9 +2326,9 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
         "type": "7segment",
         "id": "pct_seg",
         "text": "{pctStr}",
-        "y": 18,
-        "h": 26,
-        "w": 14,
+        "y": 16,
+        "h": 24,
+        "w": 13,
         "spacing": 5,
         "color": "{pctColor}"
       },
@@ -2241,7 +2337,7 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
         "id": "volt_lbl",
         "text": "{voltStr} V  |  {chgStr}",
         "x": 120,
-        "y": 64,
+        "y": 58,
         "size": 2,
         "color": "#00ffff"
       },
@@ -2249,24 +2345,22 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
         "type": "progress",
         "id": "bat_bar",
         "x": 20,
-        "y": 85,
+        "y": 72,
         "w": 200,
-        "h": 12,
+        "h": 8,
         "value": "{pctVal}",
         "max": 100,
         "color": "{pctColor}"
       },
       {
-        "type": "card",
-        "id": "mode_card",
-        "text": "Laufzeit: ~18-24h (Normal)",
+        "type": "battery_graph",
+        "id": "bat_graph",
         "x": 15,
-        "y": 105,
+        "y": 84,
         "w": 210,
-        "h": 32,
-        "color": "#888888",
-        "bg": "#101620",
-        "size": 2
+        "h": 54,
+        "color": "#00ffff",
+        "bg": "#101620"
       },
       {
         "type": "button",
@@ -2292,10 +2386,10 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
       "chgStr": "AKKU",
       "pctColor": "#00ff00",
       "ecoActive": 0,
-      "ecoBtnText": "ECO-MODUS (40%)",
+      "ecoBtnText": "ECO-MODUS (40)",
       "ecoBtnColor": "#00ffff"
     },
-    "script": "function onTick() {\n  var p = Watch.getBattery();\n  var v = Watch.getBattVolt();\n  var chg = Watch.isCharging();\n  state.pctVal = p;\n  state.pctStr = (p < 10 ? '00' : (p < 100 ? '0' : '')) + String(p);\n  state.voltStr = String(v);\n  state.chgStr = (chg == 1) ? 'LADEN (USB)' : 'AKKUBETRIEB';\n  if (p <= 15) {\n    state.pctColor = '#ff3333';\n  } else if (p <= 35) {\n    state.pctColor = '#ffea00';\n  } else {\n    state.pctColor = '#00ff00';\n  }\n}\n\nfunction toggleEco() {\n  Watch.vibrate();\n  if (state.ecoActive == 0) {\n    state.ecoActive = 1;\n    Watch.setBrightness(40);\n    state.ecoBtnText = 'NORMAL-MODUS (180)';\n    state.ecoBtnColor = '#ffea00';\n    Watch.toast('Eco-Modus AN (40)');\n  } else {\n    state.ecoActive = 0;\n    Watch.setBrightness(180);\n    state.ecoBtnText = 'ECO-MODUS (40%)';\n    state.ecoBtnColor = '#00ffff';\n    Watch.toast('Normal-Modus (180)');\n  }\n}"
+    "script": "function onTick() {\n  var p = Watch.getBattery();\n  var v = Watch.getBattVolt();\n  var chg = Watch.isCharging();\n  state.pctVal = p;\n  state.pctStr = (p < 10 ? '00' : (p < 100 ? '0' : '')) + String(p);\n  state.voltStr = String(v);\n  state.chgStr = (chg == 1) ? 'LADEN (USB)' : 'AKKUBETRIEB';\n  if (p <= 15) {\n    state.pctColor = '#ff3333';\n  } else if (p <= 35) {\n    state.pctColor = '#ffea00';\n  } else {\n    state.pctColor = '#00ff00';\n  }\n}\n\nfunction toggleEco() {\n  Watch.vibrate();\n  if (state.ecoActive == 0) {\n    state.ecoActive = 1;\n    Watch.setBrightness(40);\n    state.ecoBtnText = 'NORMAL-MODUS (' + Watch.getMaxBright() + ')';\n    state.ecoBtnColor = '#ffea00';\n    Watch.toast('Eco-Modus AN (40)');\n  } else {\n    state.ecoActive = 0;\n    Watch.restoreBrightness();\n    state.ecoBtnText = 'ECO-MODUS (40)';\n    state.ecoBtnColor = '#00ffff';\n    Watch.toast('Normal-Modus (' + Watch.getMaxBright() + ')');\n  }\n}"
   }
 })rawliteral";
     }
@@ -2306,9 +2400,9 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   "category": "productivity",
   "color": "#ffffff",
   "icon": "FL",
-  "version": "1.1.0",
+  "version": "1.3.0",
   "author": "WatchOS",
-  "description": "Helles Display-Flutlicht mit wählbaren Modi (JS)",
+  "description": "Vollbild Display-Flutlicht mit Strobo und Daemmer-Modus (JS)",
   "driver": "flashlight",
   "ui": {
     "title": "Taschenlampe",
@@ -2317,21 +2411,21 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
         "type": "card",
         "id": "mode_card",
         "text": "{curMode}",
-        "x": 20,
-        "y": 20,
-        "w": 200,
-        "h": 45,
+        "x": 12,
+        "y": 16,
+        "w": 216,
+        "h": 42,
         "color": "{modeColor}",
-        "bg": "#181818",
+        "bg": "#161b22",
         "size": 2
       },
       {
         "type": "button",
         "id": "btn_max",
-        "text": "WEISS MAX (100%)",
-        "x": 20,
-        "y": 75,
-        "w": 200,
+        "text": "WEISS VOLLBILD (100%)",
+        "x": 12,
+        "y": 66,
+        "w": 216,
         "h": 36,
         "color": "#ffffff",
         "text_color": "#000000",
@@ -2341,10 +2435,10 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
         "type": "button",
         "id": "btn_dim",
         "text": "GEDÄMPFT (30%)",
-        "x": 20,
-        "y": 115,
-        "w": 95,
-        "h": 34,
+        "x": 12,
+        "y": 108,
+        "w": 104,
+        "h": 36,
         "color": "#ffb600",
         "text_color": "#000000",
         "action": "setDim()"
@@ -2352,11 +2446,11 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
       {
         "type": "button",
         "id": "btn_strobe",
-        "text": "STROBE",
-        "x": 125,
-        "y": 115,
-        "w": 95,
-        "h": 34,
+        "text": "STROBO (10Hz)",
+        "x": 124,
+        "y": 108,
+        "w": 104,
+        "h": 36,
         "color": "{strobeBtnCol}",
         "text_color": "#000000",
         "action": "toggleStrobe()"
@@ -2364,12 +2458,12 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
       {
         "type": "button",
         "id": "btn_off",
-        "text": "AUSSCHALTEN",
-        "x": 20,
-        "y": 155,
-        "w": 200,
-        "h": 36,
-        "color": "#ff3333",
+        "text": "✕ BEENDEN",
+        "x": 12,
+        "y": 152,
+        "w": 216,
+        "h": 34,
+        "color": "#ef4444",
         "text_color": "#ffffff",
         "action": "turnOff()"
       }
@@ -2377,36 +2471,38 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   },
   "logic": {
     "lang": "javascript",
-    "tick_ms": 100,
+    "tick_ms": 60,
     "state": {
-      "curMode": "Weiss Max (255)",
+      "curMode": "Weiss Vollbild (255)",
       "modeColor": "#ffffff",
+      "curModeIdx": 0,
       "strobeActive": 0,
-      "strobeToggle": 0,
-      "strobeBtnCol": "#00ffff"
+      "strobeToggle": 1,
+      "strobeBtnCol": "#38bdf8",
+      "fullscreen": 1
     },
-    "script": "function onInit() {\n  Watch.setBrightness(255);\n}\n\nfunction setWhite() {\n  Watch.vibrate();\n  state.strobeActive = 0;\n  state.curMode = 'Weiss Max (255)';\n  state.modeColor = '#ffffff';\n  state.strobeBtnCol = '#00ffff';\n  Watch.setBrightness(255);\n}\n\nfunction setDim() {\n  Watch.vibrate();\n  state.strobeActive = 0;\n  state.curMode = 'Gedaempft (75)';\n  state.modeColor = '#ffb600';\n  state.strobeBtnCol = '#00ffff';\n  Watch.setBrightness(75);\n}\n\nfunction toggleStrobe() {\n  Watch.vibrate();\n  state.strobeActive = 1 - state.strobeActive;\n  if (state.strobeActive == 1) {\n    state.curMode = 'SOS Stroboskop';\n    state.modeColor = '#ff3333';\n    state.strobeBtnCol = '#ff3333';\n  } else {\n    setWhite();\n  }\n}\n\nfunction onTick() {\n  if (state.strobeActive == 1) {\n    state.strobeToggle = 1 - state.strobeToggle;\n    Watch.setBrightness(state.strobeToggle == 1 ? 255 : 5);\n  }\n}\n\nfunction turnOff() {\n  Watch.vibrate();\n  Watch.setBrightness(160);\n  Watch.back();\n}"
+    "script": "function onInit() {\n  state.fullscreen = 1;\n  state.curModeIdx = 0;\n  state.strobeActive = 0;\n  Watch.setBrightness(255);\n}\n\nfunction setWhite() {\n  Watch.vibrate();\n  state.curModeIdx = 0;\n  state.strobeActive = 0;\n  state.curMode = 'Weiss Vollbild (255)';\n  state.modeColor = '#ffffff';\n  state.strobeBtnCol = '#38bdf8';\n  state.fullscreen = 1;\n  Watch.setBrightness(255);\n}\n\nfunction setDim() {\n  Watch.vibrate();\n  state.curModeIdx = 1;\n  state.strobeActive = 0;\n  state.curMode = 'Gedaempft (75)';\n  state.modeColor = '#ffb600';\n  state.strobeBtnCol = '#38bdf8';\n  state.fullscreen = 1;\n  Watch.setBrightness(75);\n}\n\nfunction toggleStrobe() {\n  Watch.vibrate();\n  state.curModeIdx = 2;\n  state.strobeActive = 1;\n  state.curMode = 'Stroboskop (10 Hz)';\n  state.modeColor = '#38bdf8';\n  state.strobeBtnCol = '#38bdf8';\n  state.fullscreen = 1;\n}\n\nfunction onTick() {\n  if (state.strobeActive == 1) {\n    state.strobeToggle = 1 - state.strobeToggle;\n    Watch.setBrightness(state.strobeToggle == 1 ? 255 : 5);\n  }\n}\n\nfunction turnOff() {\n  Watch.vibrate();\n  state.fullscreen = 0;\n  Watch.restoreBrightness();\n  Watch.back();\n}"
   }
 })rawliteral";
     }
-    if (id == "phishing") {
+    if (id == "portal" || id == "phishing") {
         return R"rawliteral({
-  "id": "phishing",
-  "name": "Phishing",
+  "id": "portal",
+  "name": "Portal",
   "category": "security",
-  "color": "#ff0000",
-  "icon": "EV",
-  "version": "1.1.0",
+  "color": "#ef4444",
+  "icon": "CP",
+  "version": "1.2.0",
   "author": "WatchOS",
-  "description": "Captive Portal zur Demonstration von Phishing (JS)",
-  "driver": "phishing",
+  "description": "Captive Portal zur Demonstration und Authentifizierungs-Tests (JS)",
+  "driver": "portal",
   "ui": {
-    "title": "Evil Portal Phishing",
+    "title": "Captive Portal",
     "elements": [
       {
         "type": "label",
         "id": "ssid_lbl",
-        "text": "SSID: Free_WiFi_Login",
+        "text": "SSID: {ssidStr}",
         "x": 120,
         "y": 18,
         "size": 2,
@@ -2455,29 +2551,30 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
     "tick_ms": 500,
     "state": {
       "running": 0,
+      "ssidStr": "Free_WiFi_Login",
       "statusStr": "INAKTIV (Gestoppt)",
       "statusColor": "#777777",
       "logStr": "Keine Zugriffe",
       "btnText": "PORTAL STARTEN",
       "btnColor": "#ff0000"
     },
-    "script": "function onTick() {\n  var act = Watch.isEvilActive();\n  state.running = act;\n  if (act == 1) {\n    var cnt = Watch.getEvilCount();\n    state.statusStr = 'PORTAL AKTIV (' + cnt + ' Opfer)';\n    state.statusColor = '#00ff00';\n    state.btnText = 'PORTAL STOPPEN';\n    state.btnColor = '#ff6600';\n    state.logStr = Watch.getEvilLast();\n  } else {\n    state.statusStr = 'INAKTIV (Gestoppt)';\n    state.statusColor = '#777777';\n    state.btnText = 'PORTAL STARTEN';\n    state.btnColor = '#ff0000';\n  }\n}\n\nfunction toggle() {\n  Watch.vibrate();\n  Watch.toggleEvilPortal();\n  onTick();\n}"
+    "script": "function onInit() {\n  state.ssidStr = Watch.getEvilSsid();\n}\n\nfunction onTick() {\n  state.ssidStr = Watch.getEvilSsid();\n  var act = Watch.isEvilActive();\n  state.running = act;\n  if (act == 1) {\n    var cnt = Watch.getEvilCount();\n    state.statusStr = 'PORTAL AKTIV (' + cnt + ' Opfer)';\n    state.statusColor = '#00ff00';\n    state.btnText = 'PORTAL STOPPEN';\n    state.btnColor = '#ff6600';\n    state.logStr = Watch.getEvilLast();\n  } else {\n    state.statusStr = 'INAKTIV (Gestoppt)';\n    state.statusColor = '#777777';\n    state.btnText = 'PORTAL STARTEN';\n    state.btnColor = '#ff0000';\n  }\n}\n\nfunction toggle() {\n  Watch.vibrate();\n  Watch.toggleEvilPortal();\n  onTick();\n}"
   }
 })rawliteral";
     }
-    if (id == "badusb") {
+    if (id == "ducky" || id == "badusb") {
         return R"rawliteral({
-  "id": "badusb",
-  "name": "Ducky",
+  "id": "ducky",
+  "name": "USB Ducky",
   "category": "security",
-  "color": "#ffff00",
+  "color": "#facc15",
   "icon": "DU",
   "version": "1.3.0",
   "author": "WatchOS",
-  "description": "Rubber Ducky USB HID Tastatur-Emulation (JS)",
-  "driver": "badusb",
+  "description": "Automatisierte USB Tastatur-Makros (JS)",
+  "driver": "ducky",
   "ui": {
-    "title": "Rubber Ducky",
+    "title": "USB Ducky",
     "elements": [
       {
         "type": "card",
@@ -2624,19 +2721,19 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   }
 })rawliteral";
     }
-    if (id == "blespam") {
+    if (id == "bletest" || id == "blespam") {
         return R"rawliteral({
-  "id": "blespam",
-  "name": "BLE Spam",
+  "id": "bletest",
+  "name": "BLE Test",
   "category": "security",
-  "color": "#ff00ff",
-  "icon": "BS",
+  "color": "#e879f9",
+  "icon": "BT",
   "version": "1.1.0",
   "author": "WatchOS",
-  "description": "BLE Advertisement Flooding & Notification Popups (JS)",
-  "driver": "blespam",
+  "description": "BLE Advertisement & Device Discovery Test (JS)",
+  "driver": "bletest",
   "ui": {
-    "title": "BLE Advertisement Spam",
+    "title": "BLE Adv Test",
     "elements": [
       {
         "type": "card",
@@ -3059,6 +3156,7 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
 
 void AppManager::init() {
     registry.clear();
+    registry.reserve(32);
     appStates.clear();
     prodMenuPage = 0;
     secMenuPage = 0;
@@ -3074,7 +3172,12 @@ void AppManager::init() {
     };
 
     Preferences p;
-    p.begin("packages", true);
+    p.begin("packages", false);
+    int defAppsVer = p.getInt("defAppsVer", 0);
+    bool forceDefaultUpdate = (defAppsVer < 6);
+    if (forceDefaultUpdate) {
+        p.putInt("defAppsVer", 6);
+    }
 
     auto add = [&](const char* id, const char* name, AppCategory cat, uint16_t col, const char* icon, const char* ver, const char* desc, AppStatusFn statusFn = nullptr) {
         if (isUninstalled(id)) return;
@@ -3105,21 +3208,24 @@ void AppManager::init() {
         pkg.jsScript = stripJsComments(rawJs);
         pkg.tickIntervalMs = jsonExtractInt(pkg.logicJson, "tick_ms", 50);
         pkg.jsInitialized = false;
+        pkg.uiParsed = false;
 
         registry.push_back(pkg);
+        parseUiWidgets(&registry.back());
 
         // Auf FFat sicherstellen und alte Engine-Stub-Dateien für JS-Apps automatisch aktualisieren
         if (littleFsReady) {
             if (!FFat.exists("/apps")) FFat.mkdir("/apps");
             String path = "/apps/" + String(id) + ".app";
-            bool needWrite = !FFat.exists(path);
+            bool needWrite = forceDefaultUpdate || !FFat.exists(path);
             if (!needWrite && pkg.jsScript.length() > 0) {
                 fs::File rf = FFat.open(path, "r");
                 if (rf) {
                     String existingContent = rf.readString();
                     rf.close();
-                    if (existingContent.indexOf("\"script\"") == -1 && existingContent.indexOf("\"engine\"") != -1) {
-                        needWrite = true; // Migration von altem Engine-Verweis auf echtes JS-Paket
+                    if ((existingContent.indexOf("\"script\"") == -1 && existingContent.indexOf("\"engine\"") != -1) ||
+                        (id == "flashlight" && existingContent.indexOf("\"fullscreen\"") == -1)) {
+                        needWrite = true; // Migration von altem Engine-Verweis oder Upgrade auf Vollbild-Lampe
                     }
                 }
             }
@@ -3135,7 +3241,7 @@ void AppManager::init() {
 
     // --- Productivity Apps ---
     add("stopwatch",   "Stoppuhr",   CAT_PRODUCTIVITY, cAcc1,      "SW", "1.1.0", "Präzisions-Stoppuhr mit Rundenzeiten (JS)", [](){ return swRunning; });
-    add("timer",       "Timer",      CAT_PRODUCTIVITY, cAcc2,      "TI", "1.1.0", "Countdown-Timer mit Alarmton (JS)", [](){ return timerRunning; });
+    add("timer",       "Timer",      CAT_PRODUCTIVITY, cAcc2,      "TI", "1.2.0", "Countdown-Timer mit Alarmton (JS)", [](){ return timerRunning; });
     add("mic",         "Dezibel",    CAT_PRODUCTIVITY, TFT_GREEN,  "DB", "1.1.0", "Schallpegelmesser mit I2S-Mikrofon (JS)", [](){ return micActive; });
     add("calc",        "Rechner",    CAT_PRODUCTIVITY, cFG,        "CA", "1.1.0", "Taschenrechner mit Touch-Bedienung (JS)", nullptr);
     add("jiggler",     "Jiggler",    CAT_PRODUCTIVITY, TFT_CYAN,   "MJ", "1.1.0", "USB HID Mouse Mover gegen Bildschirmschoner (JS)", [](){ return jigglerActive; });
@@ -3144,18 +3250,35 @@ void AppManager::init() {
     add("totp",        "2FA TOTP",   CAT_PRODUCTIVITY, 0x07FF,     "2F", "1.2.0", "Zwei-Faktor-Authenticator nach RFC 6238 (JS)", nullptr);
     add("lora",        "LoRa Funk",  CAT_PRODUCTIVITY, 0x07FF,     "RF", "2.1.0", "Off-Grid P2P Messenger & Beacon auf 868MHz (JS)", [](){ return LoraManager::isBeaconActive(); });
     add("notif",       "Mitteilung", CAT_PRODUCTIVITY, 0x9DFF,     "NT", "1.1.0", "Push-Mitteilungszentrale vom Smartphone (JS)", nullptr);
-    add("battery",     "Akku-Info",  CAT_PRODUCTIVITY, 0x37E0,     "BA", "1.1.0", "Detaillierte Telemetrie und Ladehistorie (JS)", nullptr);
-    add("flashlight",  "Lampe",      CAT_PRODUCTIVITY, TFT_WHITE,  "FL", "1.1.0", "Helles Display-Flutlicht mit wählbaren Modi (JS)", nullptr);
+    add("battery",     "Akku-Info",  CAT_SYSTEM,       0x37E0,     "BA", "1.2.0", "Detaillierte Telemetrie und Ladehistorie (JS)", nullptr);
+    add("flashlight",  "Lampe",      CAT_SYSTEM,       TFT_WHITE,  "FL", "1.2.0", "Helles Display-Flutlicht mit wählbaren Modi (JS)", nullptr);
 
-    // --- Security Apps ---
-    add("phishing",    "Phishing",   CAT_SECURITY, TFT_RED,     "EV", "1.1.0", "Captive Portal zur Demonstration von Phishing (JS)", [](){ return evilActive; });
-    add("badusb",      "Ducky",      CAT_SECURITY, TFT_YELLOW,  "DU", "1.3.0", "Rubber Ducky USB HID Tastatur-Emulation (JS)", [](){ return badUsbActive; });
-    add("wifispam",    "WiFi Spam",  CAT_SECURITY, TFT_RED,     "WS", "1.1.0", "Aussenden von hunderten gefälschten WiFi-Beacons (JS)", [](){ return wifiSpamActive; });
-    add("blespam",     "BLE Spam",   CAT_SECURITY, TFT_MAGENTA, "BS", "1.1.0", "BLE Advertisement Flooding & Notification Popups (JS)", [](){ return bleSpamActive; });
-    add("nmap",        "Nmap",       CAT_SECURITY, TFT_GREEN,   "NM", "1.1.0", "Multi-Port Netzwerk-Portscanner (JS)", [](){ return nmapActive; });
-    add("deauth",      "Deauth",     CAT_SECURITY, TFT_RED,     "DA", "1.1.0", "802.11 Deauthentication Frame Generator (JS)", [](){ return deauthActive; });
+    // --- Security & Audit Apps ---
+    add("portal",      "Portal",     CAT_SECURITY, TFT_RED,     "CP", "1.2.0", "Captive Portal zur Demonstration und Authentifizierungs-Tests (JS)", [](){ return portalActive; });
+    add("ducky",       "USB Ducky",  CAT_SECURITY, TFT_YELLOW,  "DU", "1.3.0", "Automatisierte USB Tastatur-Makros (JS)", [](){ return duckyActive; });
+    add("wifispam",    "Beacon Sim", CAT_SECURITY, TFT_RED,     "BS", "1.1.0", "WiFi Beacon Simulation & Multi-SSID Test (JS)", [](){ return wifiSpamActive; });
+    add("bletest",     "BLE Test",   CAT_SECURITY, TFT_MAGENTA, "BT", "1.1.0", "BLE Advertisement & Device Flooding Test (JS)", [](){ return bleSpamActive; });
+    add("nmap",        "Port Scan",  CAT_SECURITY, TFT_GREEN,   "NM", "1.1.0", "Multi-Port Netzwerk-Portscanner (JS)", [](){ return nmapActive; });
+    add("deauth",      "Deauth",     CAT_SECURITY, TFT_RED,     "DA", "1.1.0", "802.11 Deauthentication Frame Audit (JS)", [](){ return deauthActive; });
     add("probemon",    "Probe Mon",  CAT_SECURITY, TFT_CYAN,    "PM", "1.1.0", "Erfassen von Probe Requests mobiler Geräte (JS)", [](){ return probeMonActive; });
     add("blescan",     "BLE Scan",   CAT_SECURITY, TFT_MAGENTA, "BC", "1.1.0", "BLE Umgebungsscanner & Device Discovery (JS)", [](){ return bleScanActive; });
+
+    // Initialisiere Portal-HTML und Ducky-Skripte auf FFat, falls noch nicht vorhanden
+    if (littleFsReady) {
+        if (!FFat.exists("/portal")) FFat.mkdir("/portal");
+        if (!FFat.exists("/portal/index.html")) {
+            fs::File f = FFat.open("/portal/index.html", "w");
+            if (f) { f.print(portalHTML.length() > 50 ? portalHTML : defaultEvilHTML); f.close(); }
+        }
+        if (!FFat.exists("/scripts")) FFat.mkdir("/scripts");
+        for (int i = 0; i < 3; i++) {
+            String sp = "/scripts/ducky" + String(i + 1) + ".txt";
+            if (!FFat.exists(sp)) {
+                fs::File sf = FFat.open(sp, "w");
+                if (sf) { sf.print(duckyScripts[i]); sf.close(); }
+            }
+        }
+    }
 
     p.end();
     loadInstalledPackages();
@@ -3262,6 +3385,9 @@ bool AppManager::installPackageFromJson(const String &jsonStr, String &outId, St
         existing->jsScript = jsScript;
         existing->tickIntervalMs = tickMs;
         existing->jsInitialized = false;
+        existing->uiParsed = false;
+        existing->widgets.clear();
+        parseUiWidgets(existing);
         setAppEnabled(id, true);
         reassignDynamicPages();
         return true;
@@ -3285,12 +3411,14 @@ bool AppManager::installPackageFromJson(const String &jsonStr, String &outId, St
     pkg.jsScript = jsScript;
     pkg.tickIntervalMs = tickMs;
     pkg.jsInitialized = false;
+    pkg.uiParsed = false;
     pkg.order = (int)registry.size() + 1;
     pkg.drawFn = nullptr;
     pkg.touchFn = nullptr;
     pkg.statusFn = nullptr;
     pkg.stopFn = nullptr;
     registry.push_back(pkg);
+    parseUiWidgets(&registry.back());
     reassignDynamicPages();
 
     setAppEnabled(id, true);
@@ -3421,7 +3549,7 @@ void AppManager::launchApp(int pageId) {
     if (hasJsScript(p)) ensureJsAppInitialized(p);
     if (p->id == "mic" || p->driver == "mic") startMic();
     if (p->category == CAT_SECURITY) {
-        killBadApps();
+        killSecurityTasks();
     }
     slideToPage(p->pageId, 0, -1);
 }
@@ -3459,14 +3587,13 @@ void AppManager::setAppOrder(const String &id, int order) {
 }
 
 // ============================================================================
-// Dynamisches UI-Rendering & Touch-Dispatching (inkl. JS-Binding)
+// Dynamisches UI-Rendering & Touch-Dispatching (inkl. JS-Binding & Widget-Cache)
 // ============================================================================
 void AppManager::renderDynamicApp(AppPackage *app, TFT_eSprite *spr) {
     if (!app || !spr) return;
     ensureJsAppInitialized(app);
 
-    String json = app->uiJson;
-    if (json.length() == 0) {
+    if (app->uiJson.length() == 0) {
         spr->setTextDatum(MC_DATUM);
         spr->setTextColor(app->color);
         spr->drawString(app->name, 120, 75, 4);
@@ -3481,43 +3608,36 @@ void AppManager::renderDynamicApp(AppPackage *app, TFT_eSprite *spr) {
         return;
     }
 
+    parseUiWidgets(app);
+
     // Titel oben zeichnen (sofern in ui.title gesetzt)
-    String uiTitle = interpolateStateVars(app->id, jsonExtractString(json, "title", ""));
+    String uiTitle = interpolateStateVars(app->id, app->uiTitle);
     if (uiTitle.length() > 0) {
         spr->setTextDatum(TC_DATUM);
         spr->setTextColor(cFG);
         spr->drawString(uiTitle, 120, 0, 2);
     }
 
-    // Alle Objekt-Elemente { ... } in uiJson iterieren
-    int pos = 1; // Erstes äußeres '{' von ui überspringen
-    while ((pos = json.indexOf('{', pos)) != -1) {
-        int end = findMatchingBracket(json, pos);
-        if (end == -1) break;
-        String elem = json.substring(pos, end + 1);
-        pos = end + 1;
-
-        String type = jsonExtractString(elem, "type", "");
-        if (type.length() == 0) continue;
-
-        String visStr = interpolateStateVars(app->id, jsonExtractString(elem, "visible", "1"));
+    // Über gecachte Widgets iterieren (O(1) ohne JSON-Reparsing pro Frame)
+    for (const auto &wEl : app->widgets) {
+        String visStr = interpolateStateVars(app->id, wEl.visibleExpr);
         if (visStr == "0" || visStr.equalsIgnoreCase("false")) continue;
 
-        String id      = jsonExtractString(elem, "id", "");
-        String rawText = jsonExtractString(elem, "text", "");
-        String text    = interpolateStateVars(app->id, rawText);
-        int x          = jsonExtractInt(elem, "x", 120);
-        int y          = jsonExtractInt(elem, "y", 50);
-        int w          = jsonExtractInt(elem, "w", 200);
-        int h          = jsonExtractInt(elem, "h", 36);
-        int size       = jsonExtractInt(elem, "size", 2);
-        String colStr  = interpolateStateVars(app->id, jsonExtractString(elem, "color", "#ffffff"));
-        uint16_t col   = parseHexColor(colStr);
+        const String &type = wEl.type;
+        const String &id   = wEl.id;
+        String text        = interpolateStateVars(app->id, wEl.text);
+        int x              = wEl.x;
+        int y              = wEl.y;
+        int w              = wEl.w;
+        int h              = wEl.h;
+        int size           = wEl.size;
+        String colStr      = interpolateStateVars(app->id, wEl.color);
+        uint16_t col       = parseHexColor(colStr);
 
         if (type == "7segment") {
-            int segH = jsonExtractInt(elem, "h", 22);
-            int segW = jsonExtractInt(elem, "w", 12);
-            int segSp = jsonExtractInt(elem, "spacing", 4);
+            int segH = wEl.h > 0 ? wEl.h : 22;
+            int segW = wEl.w > 0 ? wEl.w : 12;
+            int segSp = wEl.spacing > 0 ? wEl.spacing : 4;
             if (text.length() == 0 && appStates[app->id].count("timeStr")) {
                 text = appStates[app->id]["timeStr"].asStr();
             }
@@ -3526,9 +3646,8 @@ void AppManager::renderDynamicApp(AppPackage *app, TFT_eSprite *spr) {
         }
         else if (type == "label" || type == "text") {
             if (text.length() == 0) continue;
-            String align = jsonExtractString(elem, "align", "center");
-            if (align == "left") spr->setTextDatum(ML_DATUM);
-            else if (align == "right") spr->setTextDatum(MR_DATUM);
+            if (wEl.align == "left") spr->setTextDatum(ML_DATUM);
+            else if (wEl.align == "right") spr->setTextDatum(MR_DATUM);
             else spr->setTextDatum(MC_DATUM);
             spr->setTextColor(col);
             spr->drawString(text, x, y, size > 0 ? size : 2);
@@ -3543,7 +3662,7 @@ void AppManager::renderDynamicApp(AppPackage *app, TFT_eSprite *spr) {
             spr->drawString(valStr, x, y, size > 0 ? size : 4);
         }
         else if (type == "lcd") {
-            String bgStr = interpolateStateVars(app->id, jsonExtractString(elem, "bg", "#111822"));
+            String bgStr = interpolateStateVars(app->id, wEl.bg);
             uint16_t bgCol = parseHexColor(bgStr);
             spr->fillRoundRect(x, y, w, h, 6, bgCol);
             spr->drawRoundRect(x, y, w, h, 6, col);
@@ -3552,7 +3671,7 @@ void AppManager::renderDynamicApp(AppPackage *app, TFT_eSprite *spr) {
             spr->drawString(text, x + w - 10, y + h / 2, size > 0 ? size : 4);
         }
         else if (type == "card" || type == "rect") {
-            String bgStr = interpolateStateVars(app->id, jsonExtractString(elem, "bg", "#181c24"));
+            String bgStr = interpolateStateVars(app->id, wEl.bg);
             uint16_t bgCol = parseHexColor(bgStr);
             spr->fillRoundRect(x, y, w, h, 8, bgCol);
             spr->drawRoundRect(x, y, w, h, 8, col);
@@ -3562,8 +3681,40 @@ void AppManager::renderDynamicApp(AppPackage *app, TFT_eSprite *spr) {
                 spr->drawString(text, x + w / 2, y + h / 2, size > 0 ? size : 2);
             }
         }
+        else if (type == "battery_graph") {
+            String bgStr = interpolateStateVars(app->id, wEl.bg);
+            uint16_t bgCol = parseHexColor(bgStr);
+            spr->fillRoundRect(x, y, w, h, 6, bgCol);
+            spr->drawRoundRect(x, y, w, h, 6, 0x3186);
+            int innerX = x + 6;
+            int innerY = y + 6;
+            int innerW = max(10, w - 12);
+            int innerH = max(10, h - 14);
+            int nSamp = min(96, historyCount);
+            int startIdx = max(0, historyCount - nSamp);
+            if (nSamp >= 2) {
+                for (int i = 0; i < nSamp - 1; i++) {
+                    uint16_t r1 = batHistoryPct[startIdx + i];
+                    uint16_t r2 = batHistoryPct[startIdx + i + 1];
+                    int v1 = battRawPct(r1);
+                    int v2 = battRawPct(r2);
+                    int mode = battRawMode(r2);
+                    uint16_t segCol = (mode == 2) ? 0x05FF : ((mode == 1) ? 0xF800 : col);
+                    int x1 = innerX + (i * innerW) / (nSamp - 1);
+                    int x2 = innerX + ((i + 1) * innerW) / (nSamp - 1);
+                    int y1 = innerY + innerH - (constrain(v1, 0, 100) * innerH) / 100;
+                    int y2 = innerY + innerH - (constrain(v2, 0, 100) * innerH) / 100;
+                    spr->drawLine(x1, y1, x2, y2, segCol);
+                }
+            }
+            spr->setTextDatum(BL_DATUM);
+            spr->setTextColor(0x8410);
+            spr->drawString("-24h", x + 6, y + h - 2, 1);
+            spr->setTextDatum(BR_DATUM);
+            spr->drawString("Jetzt", x + w - 6, y + h - 2, 1);
+        }
         else if (type == "button") {
-            String txtColStr = interpolateStateVars(app->id, jsonExtractString(elem, "text_color", ""));
+            String txtColStr = interpolateStateVars(app->id, wEl.textColor);
             uint16_t txtCol = txtColStr.length() >= 7 ? parseHexColor(txtColStr) : (col == 0x3186 || colStr == "#333333" || colStr == "#ff0000" ? TFT_WHITE : TFT_BLACK);
             spr->fillRoundRect(x, y, w, h, 6, col);
             spr->setTextDatum(MC_DATUM);
@@ -3571,20 +3722,20 @@ void AppManager::renderDynamicApp(AppPackage *app, TFT_eSprite *spr) {
             spr->drawString(text, x + w / 2, y + h / 2, size > 0 ? size : 2);
         }
         else if (type == "progress" || type == "bar") {
-            double val = interpolateStateVars(app->id, jsonExtractString(elem, "value", "0")).toDouble();
-            double mx = max(1.0, (double)jsonExtractInt(elem, "max", 100));
+            double val = text.toDouble();
+            double mx = max(1.0, (double)wEl.maxVal);
             float ratio = constrain((float)(val / mx), 0.0f, 1.0f);
             spr->fillRoundRect(x, y, w, h, 4, 0x18C3);
             int fillW = (int)(w * ratio);
             if (fillW > 2) spr->fillRoundRect(x, y, fillW, h, 4, col);
         }
         else if (type == "keypad") {
-            int rows = max(1, jsonExtractInt(elem, "rows", 4));
-            int cols = max(1, jsonExtractInt(elem, "cols", 4));
-            String keysStr = jsonExtractString(elem, "keys", "7,8,9,/,4,5,6,*,1,2,3,-,C,0,=, +");
+            int rows = max(1, wEl.rows);
+            int cols = max(1, wEl.cols);
+            const String &keysStr = wEl.keys;
             int cellW = w / cols;
             int cellH = h / rows;
-            int kIdx = 0, kStart = 0;
+            int kStart = 0;
             for (int r = 0; r < rows; r++) {
                 for (int c = 0; c < cols; c++) {
                     int comma = keysStr.indexOf(',', kStart);
@@ -3602,7 +3753,6 @@ void AppManager::renderDynamicApp(AppPackage *app, TFT_eSprite *spr) {
                     spr->setTextDatum(MC_DATUM);
                     spr->setTextColor(TFT_WHITE);
                     spr->drawString(kLabel, bx + bw / 2, by + bh / 2, 2);
-                    kIdx++;
                 }
             }
         }
@@ -3616,34 +3766,26 @@ void AppManager::handleDynamicAppTouch(AppPackage *app, int x, int touchY) {
     if (app->uiJson.length() == 0) {
         if (touchY >= 150 && touchY <= 205) {
             triggerVibration();
-            if (app->category == CAT_PRODUCTIVITY) slideToPage(Pages::GoodAppsMenu, -1, 0);
-            else slideToPage(Pages::BadAppsMenu, -1, 0);
+            slideToPage(Pages::AppLauncher, -1, 0);
         }
         return;
     }
 
-    String json = app->uiJson;
-    int pos = 1;
-    while ((pos = json.indexOf('{', pos)) != -1) {
-        int end = findMatchingBracket(json, pos);
-        if (end == -1) break;
-        String elem = json.substring(pos, end + 1);
-        pos = end + 1;
+    parseUiWidgets(app);
 
-        String type = jsonExtractString(elem, "type", "");
-        if (type.length() == 0) continue;
-
-        String visStr = interpolateStateVars(app->id, jsonExtractString(elem, "visible", "1"));
+    for (const auto &wEl : app->widgets) {
+        String visStr = interpolateStateVars(app->id, wEl.visibleExpr);
         if (visStr == "0" || visStr.equalsIgnoreCase("false")) continue;
 
-        int btnX = jsonExtractInt(elem, "x", 20);
-        int btnY = jsonExtractInt(elem, "y", 0);
-        int btnW = jsonExtractInt(elem, "w", 200);
-        int btnH = jsonExtractInt(elem, "h", 36);
+        int btnX = wEl.x;
+        int btnY = wEl.y;
+        int btnW = wEl.w;
+        int btnH = wEl.h;
 
-        if (type == "button") {
+        if (wEl.type == "button") {
             if (x >= btnX && x <= (btnX + btnW) && touchY >= btnY && touchY <= (btnY + btnH)) {
-                String action = jsonExtractString(elem, "action", "");
+                triggerVibration();
+                const String &action = wEl.action;
                 // 1. Echte JS-Aktion ausführen, wenn Skript vorhanden
                 if (app->jsScript.length() > 0 && action.length() > 0 && !action.startsWith("inc:") && !action.startsWith("dec:") && !action.startsWith("reset:") && !action.startsWith("toast:")) {
                     runJsAction(app, action);
@@ -3651,7 +3793,6 @@ void AppManager::handleDynamicAppTouch(AppPackage *app, int x, int touchY) {
                     return;
                 }
                 // 2. Abwärtskompatible Kurz-Aktionen (inc:/dec:/reset:/toast:/back)
-                triggerVibration();
                 if (action.startsWith("inc:")) {
                     String varId = action.substring(4);
                     appStates[app->id][varId] = JsVal(appStates[app->id][varId].asNum() + 1.0);
@@ -3664,28 +3805,28 @@ void AppManager::handleDynamicAppTouch(AppPackage *app, int x, int touchY) {
                 } else if (action.startsWith("toast:")) {
                     showToast(action.substring(6));
                 } else if (action == "back") {
-                    if (app->category == CAT_PRODUCTIVITY) slideToPage(Pages::GoodAppsMenu, -1, 0);
-                    else slideToPage(Pages::BadAppsMenu, -1, 0);
+                    slideToPage(Pages::AppLauncher, -1, 0);
                 }
                 lastSecond = -1;
                 return;
             }
         }
-        else if (type == "keypad") {
+        else if (wEl.type == "keypad") {
             if (x >= btnX && x <= (btnX + btnW) && touchY >= btnY && touchY <= (btnY + btnH)) {
-                int rows = max(1, jsonExtractInt(elem, "rows", 4));
-                int cols = max(1, jsonExtractInt(elem, "cols", 4));
+                int rows = max(1, wEl.rows);
+                int cols = max(1, wEl.cols);
                 int colIdx = constrain((x - btnX) * cols / max(1, btnW), 0, cols - 1);
                 int rowIdx = constrain((touchY - btnY) * rows / max(1, btnH), 0, rows - 1);
                 int targetIdx = rowIdx * cols + colIdx;
 
-                String keysStr = jsonExtractString(elem, "keys", "7,8,9,/,4,5,6,*,1,2,3,-,C,0,=, +");
+                const String &keysStr = wEl.keys;
                 int kStart = 0;
                 for (int k = 0; k <= targetIdx; k++) {
                     int comma = keysStr.indexOf(',', kStart);
                     String kLabel = (comma == -1) ? keysStr.substring(kStart) : keysStr.substring(kStart, comma);
                     kLabel.trim();
                     if (k == targetIdx) {
+                        triggerVibration();
                         if (app->jsScript.length() > 0) {
                             JsVM vm(app, app->jsScript);
                             vm.callFunction("onKey", { JsVal(kLabel) });
@@ -3700,6 +3841,28 @@ void AppManager::handleDynamicAppTouch(AppPackage *app, int x, int touchY) {
             }
         }
     }
+}
+
+bool AppManager::getAppStateBool(const String &appId, const String &key, bool defaultVal) {
+    if (appStates.count(appId) && appStates[appId].count(key)) {
+        return appStates[appId][key].asBool();
+    }
+    return defaultVal;
+}
+
+int AppManager::getAppStateInt(const String &appId, const String &key, int defaultVal) {
+    if (appStates.count(appId) && appStates[appId].count(key)) {
+        return (int)appStates[appId][key].asNum();
+    }
+    return defaultVal;
+}
+
+void AppManager::setAppStateBool(const String &appId, const String &key, bool val) {
+    appStates[appId][key] = JsVal(val ? 1 : 0);
+}
+
+void AppManager::setAppStateInt(const String &appId, const String &key, int val) {
+    appStates[appId][key] = JsVal((double)val);
 }
 
 void AppManager::resetToDefaults() {
