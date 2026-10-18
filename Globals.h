@@ -1,6 +1,7 @@
 // --- Globals.h ---
 #pragma once
 #include <Arduino.h>
+#include <vector>
 #include <XPowersLib.h>        
 #include <TouchDrvFT6X36.hpp>  
 #include <SensorDRV2605.hpp>   
@@ -12,6 +13,14 @@
 
 #define MAX_HISTORY 200
 #define WATCHOS_VERSION "1.3.1"
+
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
+  #define INIT_BACKLIGHT_PWM(pin) do { ledcAttach(pin, 5000, 8); } while(0)
+  #define WRITE_BACKLIGHT_PWM(pin, val) do { ledcWrite(pin, val); } while(0)
+#else
+  #define INIT_BACKLIGHT_PWM(pin) do { ledcSetup(0, 5000, 8); ledcAttachPin(pin, 0); } while(0)
+  #define WRITE_BACKLIGHT_PWM(pin, val) do { ledcWrite(0, val); } while(0)
+#endif
 
 extern XPowersAXP2101 pmu;
 extern TouchDrvFT6X36 touch;

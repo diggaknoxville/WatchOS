@@ -4543,6 +4543,7 @@ void setupServerRoutes() {
         }
         BLEScan* pBLEScan = BLEDevice::getScan();
         pBLEScan->setActiveScan(true);
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
         BLEScanResults* foundDevices = pBLEScan->start(2, false);
         int count = foundDevices ? foundDevices->getCount() : 0;
         String j = "{\"devices\":[";
@@ -4552,6 +4553,17 @@ void setupServerRoutes() {
             String dName = d.haveName() ? String(d.getName().c_str()) : "";
             j += "{\"name\":\"" + jsonEscape(dName) + "\",\"mac\":\"" + String(d.getAddress().toString().c_str()) + "\",\"rssi\":" + String(d.getRSSI()) + "}";
         }
+#else
+        BLEScanResults foundDevices = pBLEScan->start(2, false);
+        int count = foundDevices.getCount();
+        String j = "{\"devices\":[";
+        for (int i = 0; i < count; i++) {
+            BLEAdvertisedDevice d = foundDevices.getDevice(i);
+            if (i > 0) j += ",";
+            String dName = d.haveName() ? String(d.getName().c_str()) : "";
+            j += "{\"name\":\"" + jsonEscape(dName) + "\",\"mac\":\"" + String(d.getAddress().toString().c_str()) + "\",\"rssi\":" + String(d.getRSSI()) + "}";
+        }
+#endif
         j += "]}";
         pBLEScan->clearResults();
         server.send(200, "application/json", j);

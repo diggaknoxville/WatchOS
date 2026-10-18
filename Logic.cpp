@@ -17,6 +17,14 @@
 
 #define TOUCH_INT 16 // HIER IST DER FIX: Pin für den Touch-Wakeup definiert!
 
+#ifndef KEY_PRINT_SCREEN
+  #ifdef HID_KEY_PRINT_SCREEN
+    #define KEY_PRINT_SCREEN HID_KEY_PRINT_SCREEN
+  #else
+    #define KEY_PRINT_SCREEN 0xCE
+  #endif
+#endif
+
 extern "C" {
     typedef uint8_t esp_bd_addr_t[6];
     int esp_ble_gap_set_rand_addr(esp_bd_addr_t rand_addr);
@@ -307,7 +315,7 @@ void spamBLE() {
     const uint8_t models[] = {0x02, 0x0e, 0x0a, 0x0f, 0x13, 0x14}; 
     payload[6] = models[random(sizeof(models))];
     
-    oAdvertisementData.addData((char*)payload, sizeof(payload)); 
+    oAdvertisementData.addData(std::string((char*)payload, sizeof(payload))); 
     pAdvertising->setAdvertisementData(oAdvertisementData);
     pAdvertising->start();
     delay(20);

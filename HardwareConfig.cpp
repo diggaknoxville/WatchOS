@@ -7,6 +7,12 @@
 #include <Wire.h>
 #include <WiFi.h>
 #include <driver/i2s.h>
+#include <esp_idf_version.h>
+#if ESP_IDF_VERSION_MAJOR >= 5
+  #define I2S_SET_DMA(cfg, count, len) do { (cfg).dma_desc_num = (count); (cfg).dma_frame_num = (len); } while(0)
+#else
+  #define I2S_SET_DMA(cfg, count, len) do { (cfg).dma_buf_count = (count); (cfg).dma_buf_len = (len); } while(0)
+#endif
 #include <time.h>
 #include <FFat.h>
 
@@ -415,7 +421,7 @@ void loadPreferences() {
 }
 
 void initHardware() {
-    tft.init(); tft.setRotation(2); tft.fillScreen(TFT_BLACK); ledcAttach(TFT_BL, 5000, 8); setBrightness(255);
+    tft.init(); tft.setRotation(2); tft.fillScreen(TFT_BLACK); INIT_BACKLIGHT_PWM(TFT_BL); setBrightness(255);
     Wire.begin(IIC_SDA_PMU, IIC_SCL_PMU);
     if (pmu.init(Wire, IIC_SDA_PMU, IIC_SCL_PMU, AXP2101_SLAVE_ADDRESS)) {
         pmu.clearIrqStatus();
@@ -602,14 +608,14 @@ void bootUpdateRight(String right, uint16_t rightCol = TFT_WHITE) { if(bootY >= 
 
 void showBootSequence() {
     // Lautsprecher dauerhaft auf I2S_NUM_1 (Standard TX), damit Audio und PDM-Mikrofon (I2S_NUM_0) nicht kollidieren
-    i2s_config_t i2s_tx_config; memset(&i2s_tx_config, 0, sizeof(i2s_tx_config)); i2s_tx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX); i2s_tx_config.sample_rate = 16000; i2s_tx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_tx_config.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT; i2s_tx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_tx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; i2s_tx_config.dma_desc_num = 4; i2s_tx_config.dma_frame_num = 256; i2s_tx_config.use_apll = false;
+    i2s_config_t i2s_tx_config; memset(&i2s_tx_config, 0, sizeof(i2s_tx_config)); i2s_tx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX); i2s_tx_config.sample_rate = 16000; i2s_tx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_tx_config.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT; i2s_tx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_tx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; I2S_SET_DMA(i2s_tx_config, 4, 256); i2s_tx_config.use_apll = false;
     i2s_pin_config_t tx_pin_config; memset(&tx_pin_config, 0, sizeof(tx_pin_config)); tx_pin_config.bck_io_num = I2S_BCK_SPK; tx_pin_config.ws_io_num = I2S_WS_SPK; tx_pin_config.data_out_num = I2S_DOUT_SPK; tx_pin_config.data_in_num = -1; tx_pin_config.mck_io_num = -1;
     i2s_driver_install(I2S_NUM_1, &i2s_tx_config, 0, NULL); i2s_set_pin(I2S_NUM_1, &tx_pin_config); i2s_zero_dma_buffer(I2S_NUM_1);
 
     if (bootMode == 4) {
         WiFi.mode(WIFI_STA); WiFi.begin(userSSID.c_str(), userPWD.c_str()); int wifiRetry = 0; while (WiFi.status() != WL_CONNECTED && wifiRetry < 16) { delay(250); wifiRetry++; }
         if (WiFi.status() == WL_CONNECTED) { syncNtpTime(6); } WiFi.disconnect(true); WiFi.mode(WIFI_OFF);
-        i2s_config_t i2s_rx_config; memset(&i2s_rx_config, 0, sizeof(i2s_rx_config)); i2s_rx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); i2s_rx_config.sample_rate = 16000; i2s_rx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_rx_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT; i2s_rx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_rx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; i2s_rx_config.dma_desc_num = 8; i2s_rx_config.dma_frame_num = 256; i2s_rx_config.use_apll = false; i2s_pin_config_t rx_pin_config; memset(&rx_pin_config, 0, sizeof(rx_pin_config)); rx_pin_config.bck_io_num = -1; rx_pin_config.ws_io_num = I2S_WS_MIC; rx_pin_config.data_out_num = -1; rx_pin_config.data_in_num = I2S_DIN_MIC; rx_pin_config.mck_io_num = -1;
+        i2s_config_t i2s_rx_config; memset(&i2s_rx_config, 0, sizeof(i2s_rx_config)); i2s_rx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); i2s_rx_config.sample_rate = 16000; i2s_rx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_rx_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT; i2s_rx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_rx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; I2S_SET_DMA(i2s_rx_config, 8, 256); i2s_rx_config.use_apll = false; i2s_pin_config_t rx_pin_config; memset(&rx_pin_config, 0, sizeof(rx_pin_config)); rx_pin_config.bck_io_num = -1; rx_pin_config.ws_io_num = I2S_WS_MIC; rx_pin_config.data_out_num = -1; rx_pin_config.data_in_num = I2S_DIN_MIC; rx_pin_config.mck_io_num = -1;
         if(i2s_driver_install(I2S_NUM_0, &i2s_rx_config, 0, NULL) == ESP_OK) { i2s_set_pin(I2S_NUM_0, &rx_pin_config); i2s_stop(I2S_NUM_0); }
         cdSprite.deleteSprite(); 
         void* p = cdSprite.createSprite(240, 240 - 34); 
@@ -704,7 +710,7 @@ void showBootSequence() {
 
     uint16_t okCol = (bootMode == 0) ? TFT_WHITE : bFG; uint16_t errCol = (bootMode == 0) ? TFT_WHITE : bFG; uint16_t infCol = (bootMode == 0) ? TFT_WHITE : bFG; uint16_t waitCol = (bootMode == 0) ? TFT_WHITE : bFG;
     bootLog("LilyGo BIOS v2.0", "OK", okCol); bootLog("Copyright (C) 2026", "", okCol); bootLog("Michael Strassburger", "", okCol); bootLog("======================="); bootLog("CPU: ESP32-S3", String(ESP.getCpuFreqMHz()) + " MHz", infCol); bootLog("SRAM Base", String(ESP.getHeapSize() / 1024) + " KB", infCol); bootLog("OPI PSRAM", String(ESP.getPsramSize() / 1024) + " KB", infCol); bootLog("Flash ROM", String(ESP.getFlashChipSize() / 1024 / 1024) + " MB", infCol); WiFi.mode(WIFI_STA); bootLog("MAC", WiFi.macAddress(), infCol); bootLog("", ""); bootLog("--- System Init ---"); bootLog("I2C Bus", "OK", okCol); bootLog("PMU AXP2101", "OK", okCol); bootLog(" BATT Volt", String(pmu.getBattVoltage() / 1000.0) + "V", infCol); bootLog("Haptic DRV", "OK", okCol); bootLog("Touch FT6X36", "OK", okCol);
-    i2s_config_t i2s_rx_config; memset(&i2s_rx_config, 0, sizeof(i2s_rx_config)); i2s_rx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); i2s_rx_config.sample_rate = 16000; i2s_rx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_rx_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT; i2s_rx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_rx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; i2s_rx_config.dma_desc_num = 8; i2s_rx_config.dma_frame_num = 256; i2s_rx_config.use_apll = false; i2s_pin_config_t rx_pin_config; memset(&rx_pin_config, 0, sizeof(rx_pin_config)); rx_pin_config.bck_io_num = -1; rx_pin_config.ws_io_num = I2S_WS_MIC; rx_pin_config.data_out_num = -1; rx_pin_config.data_in_num = I2S_DIN_MIC; rx_pin_config.mck_io_num = -1;
+    i2s_config_t i2s_rx_config; memset(&i2s_rx_config, 0, sizeof(i2s_rx_config)); i2s_rx_config.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM); i2s_rx_config.sample_rate = 16000; i2s_rx_config.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT; i2s_rx_config.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT; i2s_rx_config.communication_format = I2S_COMM_FORMAT_STAND_I2S; i2s_rx_config.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1; I2S_SET_DMA(i2s_rx_config, 8, 256); i2s_rx_config.use_apll = false; i2s_pin_config_t rx_pin_config; memset(&rx_pin_config, 0, sizeof(rx_pin_config)); rx_pin_config.bck_io_num = -1; rx_pin_config.ws_io_num = I2S_WS_MIC; rx_pin_config.data_out_num = -1; rx_pin_config.data_in_num = I2S_DIN_MIC; rx_pin_config.mck_io_num = -1;
     if(i2s_driver_install(I2S_NUM_0, &i2s_rx_config, 0, NULL) == ESP_OK) { i2s_set_pin(I2S_NUM_0, &rx_pin_config); i2s_stop(I2S_NUM_0); bootLog("Audio Mic", "OK", okCol); } else { bootLog("Audio Mic", "FAIL", errCol); }
     bootLog("EEPROM NVRAM", "OK", okCol); WiFi.begin(userSSID.c_str(), userPWD.c_str()); int wifiRetry = 0; bootLog("WLAN", "Wait", waitCol); while (WiFi.status() != WL_CONNECTED && wifiRetry < 16) { bootUpdateRight(String(wifiRetry+1), waitCol); delay(300); wifiRetry++; }
     if (WiFi.status() == WL_CONNECTED) { 

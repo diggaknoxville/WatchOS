@@ -22,7 +22,7 @@ void applyTheme() {
     cHeadBG = hex2rgb565(hexHeadBG); cHeadFG = hex2rgb565(hexHeadFG); cAppBG = hex2rgb565(hexAppBG); cWarn = hex2rgb565(hexWarn);
     cAodFG = hex2rgb565(hexAodFG); cAodAcc = hex2rgb565(hexAodAcc);
 }
-void setBrightness(int b) { ledcWrite(45, b); } 
+void setBrightness(int b) { WRITE_BACKLIGHT_PWM(45, b); } 
 
 time_t stringToTime(String dateStr, String timeStr) {
     if(dateStr.length() != 10) return 0; struct tm t; memset(&t, 0, sizeof(struct tm));
