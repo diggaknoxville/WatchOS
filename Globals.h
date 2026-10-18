@@ -131,18 +131,24 @@ extern int watchfaceMode;
 
 // --- Watchface- & Karussell-System ---
 enum CarouselFaceId {
-    FACE_ULTRA_DASH = 0,   // Ultra Rings Dashboard
-    FACE_CHRONO     = 1,   // Swiss Classic Chronograph
-    FACE_CASIO      = 2,   // Retro Casio Illuminator
-    FACE_LIFETIME   = 3,   // 3D Lebenszeit Countdown
-    FACE_BAUHAUS    = 4,   // Bauhaus Minimalist Analog
-    FACE_CYBERPUNK  = 5,   // Cyberpunk Matrix Terminal
-    FACE_WORDCLOCK  = 6,   // Typografische Wortuhr
-    FACE_FINANCE    = 7,   // Finanz & Opportunitaet
-    FACE_CHILDREN   = 8,   // Kinder-Zeitleiste
-    FACE_PARENTS    = 9    // Generationen & Eltern
+    FACE_ULTRA_DASH     = 0,   // Ultra Rings Dashboard
+    FACE_CHRONO         = 1,   // Swiss Classic Chronograph
+    FACE_CASIO          = 2,   // Retro Casio Illuminator
+    FACE_LIFETIME       = 3,   // 3D Lebenszeit Countdown
+    FACE_BAUHAUS        = 4,   // Bauhaus Minimalist Analog
+    FACE_CYBERPUNK      = 5,   // Cyberpunk Matrix Terminal
+    FACE_WORDCLOCK      = 6,   // Typografische Wortuhr
+    FACE_FINANCE        = 7,   // Finanz & Opportunitaet
+    FACE_CHILDREN       = 8,   // Kinder-Zeitleiste
+    FACE_PARENTS        = 9,   // Generationen & Eltern
+    FACE_PILOT_FLIEGER  = 10,  // Flieger B-Uhr Aviator
+    FACE_DIVER_PRO      = 11,  // Deep Sea Submariner Diver
+    FACE_NEON_HORIZON   = 12,  // Synthwave 80s Sunset Grid
+    FACE_RADAR_TACTICAL = 13,  // Tactical Military Sonar Radar
+    FACE_ASTRO_ORBIT    = 14,  // Celestial Planetary Orbit & Lunar Phase
+    FACE_MINIMAL_TYPO   = 15   // Swiss Bold Modern Typographic
 };
-const int NUM_CAROUSEL_FACES = 10;
+const int NUM_CAROUSEL_FACES = 16;
 
 extern std::vector<int> carouselOrder;
 extern int carouselIndex;

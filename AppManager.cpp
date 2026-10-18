@@ -2400,7 +2400,7 @@ String AppManager::getDefaultAppPackageJson(const String &id) {
   "category": "productivity",
   "color": "#ffffff",
   "icon": "FL",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "author": "WatchOS",
   "description": "Vollbild Display-Flutlicht mit Strobo und Daemmer-Modus (JS)",
   "driver": "flashlight",
@@ -3218,14 +3218,14 @@ void AppManager::init() {
             if (!FFat.exists("/apps")) FFat.mkdir("/apps");
             String path = "/apps/" + String(id) + ".app";
             bool needWrite = forceDefaultUpdate || !FFat.exists(path);
-            if (!needWrite && pkg.jsScript.length() > 0) {
+            if (!needWrite) {
                 fs::File rf = FFat.open(path, "r");
                 if (rf) {
                     String existingContent = rf.readString();
                     rf.close();
                     if ((existingContent.indexOf("\"script\"") == -1 && existingContent.indexOf("\"engine\"") != -1) ||
-                        (id == "flashlight" && existingContent.indexOf("\"fullscreen\"") == -1)) {
-                        needWrite = true; // Migration von altem Engine-Verweis oder Upgrade auf Vollbild-Lampe
+                        (existingContent.indexOf("\"version\": \"" + pkg.version + "\"") == -1)) {
+                        needWrite = true; // Migration von altem Engine-Verweis oder Versions-Upgrade
                     }
                 }
             }
@@ -3251,7 +3251,7 @@ void AppManager::init() {
     add("lora",        "LoRa Funk",  CAT_PRODUCTIVITY, 0x07FF,     "RF", "2.1.0", "Off-Grid P2P Messenger & Beacon auf 868MHz (JS)", [](){ return LoraManager::isBeaconActive(); });
     add("notif",       "Mitteilung", CAT_PRODUCTIVITY, 0x9DFF,     "NT", "1.1.0", "Push-Mitteilungszentrale vom Smartphone (JS)", nullptr);
     add("battery",     "Akku-Info",  CAT_SYSTEM,       0x37E0,     "BA", "1.2.0", "Detaillierte Telemetrie und Ladehistorie (JS)", nullptr);
-    add("flashlight",  "Lampe",      CAT_SYSTEM,       TFT_WHITE,  "FL", "1.2.0", "Helles Display-Flutlicht mit wählbaren Modi (JS)", nullptr);
+    add("flashlight",  "Lampe",      CAT_SYSTEM,       TFT_WHITE,  "FL", "1.4.0", "Helles Display-Flutlicht mit wählbaren Modi (JS)", nullptr);
 
     // --- Security & Audit Apps ---
     add("portal",      "Portal",     CAT_SECURITY, TFT_RED,     "CP", "1.2.0", "Captive Portal zur Demonstration und Authentifizierungs-Tests (JS)", [](){ return portalActive; });

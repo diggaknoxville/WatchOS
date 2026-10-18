@@ -58,6 +58,12 @@ void drawWordClockWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool
 void drawFinanceWatchface(TFT_eSprite *spr, struct tm *aktuell);
 void drawChildrenWatchface(TFT_eSprite *spr, struct tm *aktuell);
 void drawParentsWatchface(TFT_eSprite *spr, struct tm *aktuell);
+void drawPilotFliegerWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg);
+void drawDiverProWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg);
+void drawNeonHorizonWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg);
+void drawRadarTacticalWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg);
+void drawAstroOrbitWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg);
+void drawMinimalTypoWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg);
 void drawControlCenter(TFT_eSprite *spr, struct tm *aktuell);
 void drawLoraMessenger(TFT_eSprite *spr, struct tm *aktuell);
 

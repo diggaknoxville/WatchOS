@@ -355,10 +355,10 @@ void loadPreferences() {
     webUser = prefs.getString("webUsr", webUser);
     webPass = prefs.getString("webPwd", webPass);
     webAuthEnabled = prefs.getBool("webAuth", webAuthEnabled);
+    parentViewMode = prefs.getInt("pViewM", 0);
     
-    // Haptic: 14 = Strong Buzz 100% (spuerbar auf ERM Motor, Wafer 1 war unspuerbar kurz)
+    // Haptic Waveform
     hapticWaveform = prefs.getInt("hapW", 14);
-    if (hapticWaveform == 1) hapticWaveform = 14;
     bool hasUsbModeKey = prefs.isKey("usbHid");
     usbModeSource = hasUsbModeKey ? "NVS" : "Default";
     usbHidActive = prefs.getBool("usbHid", usbHidActive);

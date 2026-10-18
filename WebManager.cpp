@@ -2196,27 +2196,39 @@ function connectWebBle(){
 }
 var carOrder = [0, 1, 2, 7, 8, 9];
 var carStart = 0;
+var carFilter = 'all';
 var wfCatalog = [
-    {id: 0, name: "Ultra Rings", icon: "⚡", desc: "Cyberpunk Aktivitätsringe & Glowing Complications"},
-    {id: 1, name: "Classic Chrono", icon: "⏱️", desc: "Schweizer Bi-Compax Chronograph mit 3 Hilfszifferblättern"},
-    {id: 2, name: "Retro Casio", icon: "📟", desc: "Kultiges 80er Olive LCD mit Wochentagsmatrix & Odometer"},
-    {id: 3, name: "3D Lebensuhr", icon: "⏳", desc: "Restlebenszeit-Countdown mit 3D Glass Cards & Säule"},
-    {id: 4, name: "Bauhaus Minimalist", icon: "📐", desc: "Schlichte Bauhaus-Ästhetik, puristische Ziffern & rote Zentralsekunde"},
-    {id: 5, name: "Cyberpunk Terminal HUD", icon: "💻", desc: "High-Tech Matrix HUD mit Live CPU/RAM/Akku-Telemetrie"},
-    {id: 6, name: "Deutsche Wortuhr", icon: "🔤", desc: "Typografische Textmatrix ('ES IST HALB ZEHN') mit 4 Minutenpunkten"},
-    {id: 7, name: "Opportunität & Finanzen", icon: "💶", desc: "Echtzeit-Verdienstticker (EUR) & echter Stundenlohn"},
-    {id: 8, name: "Kinder-Zeitleiste", icon: "👶", desc: "Chronologische Altersanzeige für Kinder (Jahre, Monate, Wochen, Tage)"},
-    {id: 9, name: "Generationen & Eltern", icon: "👨‍👩‍👧", desc: "Altersvergleich & Projektionsrechner (Tippen zum Umschalten)"}
+    {id: 0, name: "Ultra Rings", icon: "⚡", cat: "sport", catName: "Sport & Dashboard", desc: "Cyberpunk Aktivitätsringe, Micro-Ticks & Glowing Complications"},
+    {id: 1, name: "Classic Chrono", icon: "⏱️", cat: "swiss", catName: "Swiss Heritage", desc: "Schweizer Bi-Compax Chronograph mit Tachymeter & Hilfszifferblättern"},
+    {id: 2, name: "Retro Casio", icon: "📟", cat: "retro", catName: "80s Digital", desc: "Kultiges 80er Olive LCD mit Wochentagsmatrix, DW-5600 Segmenten & Odometer"},
+    {id: 3, name: "3D Lebensuhr", icon: "⏳", cat: "personal", catName: "Persönlich", desc: "Restlebenszeit-Countdown mit 3D Glass Cards & Fortschrittssäule"},
+    {id: 4, name: "Bauhaus Minimalist", icon: "📐", cat: "analog", catName: "Klassisch Analog", desc: "Schlichte Bauhaus-Ästhetik, Eisenbahn-Minuterie & Gangreserve-Bogen"},
+    {id: 5, name: "Cyberpunk Terminal HUD", icon: "💻", cat: "scifi", catName: "Sci-Fi & Terminal", desc: "High-Tech Matrix HUD mit Blinking Cursor & Live CPU/RAM/Akku-Telemetrie"},
+    {id: 6, name: "Deutsche Wortuhr", icon: "🔤", cat: "modern", catName: "Typografie", desc: "Typografische Textmatrix ('ES IST HALB ZEHN') mit LED-Hintergrundglühen"},
+    {id: 7, name: "Opportunität & Finanzen", icon: "💶", cat: "personal", catName: "Persönlich", desc: "Echtzeit-Verdienstticker (EUR), Verdienstrate/Min & echter Stundenlohn"},
+    {id: 8, name: "Kinder-Zeitleiste", icon: "👶", cat: "personal", catName: "Persönlich", desc: "Chronologische Altersanzeige für Kinder (Jahre, Monate, Wochen, Tage)"},
+    {id: 9, name: "Generationen & Eltern", icon: "👨‍👩‍👧", cat: "personal", catName: "Persönlich", desc: "Altersvergleich & Projektionsrechner (Tippen zum Umschalten Eltern/Kinder)"},
+    {id: 10, name: "Aviation Flieger B-Uhr", icon: "✈️", cat: "analog", catName: "Flieger & Militär", desc: "Kultige Fliegeruhr Baumuster B mit Innenstundenring & Höhenmesser/Fuel"},
+    {id: 11, name: "Submariner Diver 300M", icon: "🌊", cat: "swiss", catName: "Swiss Diver", desc: "Tauchmeister mit drehbarer Keramiklünette, Mercedes-Zeigern & Datumslupe"},
+    {id: 12, name: "Synthwave 80s Horizon", icon: "🌇", cat: "retro", catName: "80s Outrun", desc: "Outrun 1984 Vektorsonne, 3D Perspektivgitter, Fuel & Boost Tachometer"},
+    {id: 13, name: "Tactical Military Radar", icon: "🎯", cat: "scifi", catName: "Militär & Tactical", desc: "Militär-Sonar mit animiertem 360° Radarstrahl, Ziel-Blips & MGRS-Zeit"},
+    {id: 14, name: "Planetary Orbit & Moon", icon: "🌙", cat: "modern", catName: "Astronomie", desc: "Himmelsbahnen mit fotorealistischer synodischer Mondphase & Planetenzeigern"},
+    {id: 15, name: "Swiss Minimal Typo", icon: "🔲", cat: "modern", catName: "Typografie", desc: "Große gestapelte Schweizer Typografie mit seitlichen Micro-Messanzeigen"}
 ];
 
 function loadCarouselData(){
     fetch('/api/carousel').then(r=>r.json()).then(d=>{
         if(d.order) {
-            carOrder = d.order.split(',').map(Number).filter(n => !isNaN(n) && n>=0 && n<10);
+            carOrder = d.order.split(',').map(Number).filter(n => !isNaN(n) && n>=0 && n<16);
         }
         if(d.activeIdx !== undefined) carStart = d.activeIdx;
         renderCarouselUI();
     }).catch(function(e){ console.log('loadCarousel error', e); });
+}
+
+function setCarFilter(f) {
+    carFilter = f;
+    renderCarouselUI();
 }
 
 function renderCarouselUI(){
@@ -2229,40 +2241,90 @@ function renderCarouselUI(){
 
     var list = document.getElementById('carouselList');
     if (!list) return;
+
     var html = '';
 
-    for (var i = 0; i < carOrder.length; i++) {
-        var fid = carOrder[i];
-        var item = wfCatalog.find(f => f.id === fid);
-        if (!item) continue;
-        var isStart = (i === carStart);
-        html += '<div class="car-item" style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--surface-2);border:2px solid ' + (isStart ? 'var(--accent)' : 'var(--border)') + ';border-radius:10px;padding:10px 14px;margin-bottom:8px;">';
-        html += '  <div style="display:flex;align-items:center;gap:12px;min-width:180px;">';
-        html += '    <span style="font-size:22px;">' + item.icon + '</span>';
-        html += '    <div>';
-        html += '      <div style="font-weight:700;font-size:14px;color:var(--text);">' + item.name + (isStart ? ' <span class="badge" style="font-size:10px;background:var(--accent);color:#fff;padding:2px 6px;border-radius:4px;">START</span>' : '') + '</div>';
-        html += '      <div class="hint" style="font-size:11px;margin-top:2px;">' + item.desc + '</div>';
-        html += '    </div>';
-        html += '  </div>';
-        html += '  <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">';
-        html += '    <span class="pill" style="font-size:11px;font-weight:600;background:rgba(59,130,246,0.1);color:var(--accent);border:1px solid var(--accent);">Pos #' + (i + 1) + '</span>';
-        html += '    <button type="button" class="btn" style="padding:4px 8px;font-size:12px;" onclick="moveCarousel(' + i + ',-1)"' + (i === 0 ? ' disabled' : '') + '>▲</button>';
-        html += '    <button type="button" class="btn" style="padding:4px 8px;font-size:12px;" onclick="moveCarousel(' + i + ',1)"' + (i === carOrder.length - 1 ? ' disabled' : '') + '>▼</button>';
-        html += '    <button type="button" class="btn" style="padding:4px 10px;font-size:12px;' + (isStart ? 'background:var(--accent);color:#fff;' : '') + '" onclick="setCarouselStart(' + i + ')">' + (isStart ? 'Standard ✓' : 'Als Start') + '</button>';
-        html += '    <button type="button" class="btn" style="padding:4px 8px;font-size:12px;color:var(--warn);" onclick="toggleCarouselFace(' + item.id + ')">✕ Entfernen</button>';
-        html += '  </div>';
-        html += '</div>';
+    // Filter Buttons Bar
+    html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;">';
+    var fOpts = [
+        {id:'all', label:'Alle (' + wfCatalog.length + ')'},
+        {id:'active', label:'Im Karussell (' + carOrder.length + ')'},
+        {id:'analog', label:'Analog'},
+        {id:'swiss', label:'Swiss'},
+        {id:'retro', label:'Retro & Outrun'},
+        {id:'scifi', label:'Sci-Fi & Radar'},
+        {id:'modern', label:'Modern & Astro'},
+        {id:'personal', label:'Persönlich'}
+    ];
+    for (var f = 0; f < fOpts.length; f++) {
+        var fo = fOpts[f];
+        var isSel = (carFilter === fo.id);
+        html += '<button type="button" class="btn" style="padding:4px 10px;font-size:11.5px;margin:0;' + (isSel ? 'background:var(--accent);color:#fff;font-weight:700;' : 'background:var(--surface);') + '" onclick="setCarFilter(\'' + fo.id + '\')">' + fo.label + '</button>';
+    }
+    html += '</div>';
+
+    // Section 1: Active Carousel Sequence
+    if (carFilter === 'all' || carFilter === 'active') {
+        html += '<div style="margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;"><span style="font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:.5px;color:var(--accent);">Aktive Karussell-Reihenfolge (' + carOrder.length + ' Zifferblätter):</span><span class="hint" style="font-size:11px;">Horizontales Wischen blättert in dieser Reihenfolge</span></div>';
+        
+        for (var i = 0; i < carOrder.length; i++) {
+            var fid = carOrder[i];
+            var item = wfCatalog.find(f => f.id === fid);
+            if (!item) continue;
+            var isStart = (i === carStart);
+            html += '<div class="car-item" style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--surface-2);border:2px solid ' + (isStart ? 'var(--accent)' : 'var(--border)') + ';border-radius:10px;padding:10px 14px;margin-bottom:8px;">';
+            html += '  <div style="display:flex;align-items:center;gap:12px;min-width:200px;">';
+            html += '    <span style="font-size:24px;">' + item.icon + '</span>';
+            html += '    <div>';
+            html += '      <div style="font-weight:700;font-size:14px;color:var(--text);">' + item.name + (isStart ? ' <span class="badge" style="font-size:10px;background:var(--accent);color:#fff;padding:2px 6px;border-radius:4px;">START-ZIFFERBLATT</span>' : '') + '</div>';
+            html += '      <div class="hint" style="font-size:11px;margin-top:2px;"><span class="badge" style="background:var(--border);padding:1px 5px;font-size:10px;margin-right:6px;">' + item.catName + '</span>' + item.desc + '</div>';
+            html += '    </div>';
+            html += '  </div>';
+            html += '  <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">';
+            html += '    <span class="pill" style="font-size:11px;font-weight:700;background:rgba(59,130,246,0.12);color:var(--accent);border:1px solid var(--accent);">#' + (i + 1) + '</span>';
+            html += '    <button type="button" class="btn" style="padding:4px 8px;font-size:12px;" onclick="moveCarousel(' + i + ',-1)"' + (i === 0 ? ' disabled' : '') + ' title="Nach oben">▲</button>';
+            html += '    <button type="button" class="btn" style="padding:4px 8px;font-size:12px;" onclick="moveCarousel(' + i + ',1)"' + (i === carOrder.length - 1 ? ' disabled' : '') + ' title="Nach unten">▼</button>';
+            html += '    <button type="button" class="btn" style="padding:4px 10px;font-size:12px;' + (isStart ? 'background:var(--accent);color:#fff;font-weight:700;' : '') + '" onclick="setCarouselStart(' + i + ')">' + (isStart ? 'Standard ✓' : 'Als Start') + '</button>';
+            html += '    <button type="button" class="btn btn-green" style="padding:4px 10px;font-size:12px;" onclick="activateFaceDirect(' + item.id + ')" title="Jetzt sofort auf der Uhr anzeigen">⚡ Aktivieren</button>';
+            html += '    <button type="button" class="btn" style="padding:4px 8px;font-size:12px;color:var(--warn);" onclick="toggleCarouselFace(' + item.id + ')" title="Aus Karussell entfernen">✕ Entfernen</button>';
+            html += '  </div>';
+            html += '</div>';
+        }
     }
 
-    var inactive = wfCatalog.filter(f => !carOrder.includes(f.id));
-    if (inactive.length > 0) {
-        html += '<div style="margin-top:16px;margin-bottom:8px;font-weight:700;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">Weitere verfügbare Watchfaces:</div>';
-        html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;">';
-        for (var j = 0; j < inactive.length; j++) {
-            var inAct = inactive[j];
-            html += '<div style="background:var(--surface);border:1px dashed var(--border);border-radius:8px;padding:10px;display:flex;justify-content:space-between;align-items:center;">';
-            html += '  <div><span style="font-size:18px;margin-right:6px;">' + inAct.icon + '</span><b>' + inAct.name + '</b><div class="hint" style="font-size:10.5px;">' + inAct.desc + '</div></div>';
-            html += '  <button type="button" class="btn" style="padding:4px 10px;font-size:12px;" onclick="toggleCarouselFace(' + inAct.id + ')">+ Hinzufügen</button>';
+    // Section 2: Inactive or Filtered Available Faces
+    var showCatalog = wfCatalog;
+    if (carFilter === 'active') {
+        showCatalog = [];
+    } else if (carFilter !== 'all') {
+        showCatalog = wfCatalog.filter(f => f.cat === carFilter);
+    } else {
+        showCatalog = wfCatalog.filter(f => !carOrder.includes(f.id));
+    }
+
+    if (showCatalog.length > 0) {
+        html += '<div style="margin-top:20px;margin-bottom:10px;font-weight:700;font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;">' + (carFilter === 'all' ? 'Weitere verfügbare Zifferblätter in der Galerie:' : 'Gefilterte Zifferblätter:') + '</div>';
+        html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px;">';
+        for (var j = 0; j < showCatalog.length; j++) {
+            var catItem = showCatalog[j];
+            var inCar = carOrder.includes(catItem.id);
+            var pos = carOrder.indexOf(catItem.id);
+            html += '<div style="background:var(--surface);border:1px ' + (inCar ? 'solid var(--accent)' : 'dashed var(--border)') + ';border-radius:10px;padding:12px;display:flex;flex-direction:column;justify-content:space-between;gap:8px;">';
+            html += '  <div>';
+            html += '    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">';
+            html += '      <div style="display:flex;align-items:center;gap:8px;"><span style="font-size:22px;">' + catItem.icon + '</span><b style="font-size:14px;">' + catItem.name + '</b></div>';
+            html += '      <span class="badge" style="font-size:10px;background:' + (inCar ? 'var(--accent)' : 'var(--border)') + ';color:#fff;">' + (inCar ? 'Pos #' + (pos + 1) : 'Verfügbar') + '</span>';
+            html += '    </div>';
+            html += '    <div class="hint" style="font-size:11.5px;margin-bottom:6px;"><span class="badge" style="background:var(--surface-2);padding:1px 5px;font-size:9.5px;margin-right:6px;">' + catItem.catName + '</span>' + catItem.desc + '</div>';
+            html += '  </div>';
+            html += '  <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">';
+            html += '    <button type="button" class="btn btn-green" style="padding:4px 10px;font-size:11.5px;" onclick="activateFaceDirect(' + catItem.id + ')">⚡ Sofort auf Uhr</button>';
+            if (inCar) {
+                html += '    <button type="button" class="btn" style="padding:4px 8px;font-size:11.5px;color:var(--warn);" onclick="toggleCarouselFace(' + catItem.id + ')">✕ Aus Karussell</button>';
+            } else {
+                html += '    <button type="button" class="btn btn-blue" style="padding:4px 10px;font-size:11.5px;" onclick="toggleCarouselFace(' + catItem.id + ')">+ In Karussell</button>';
+            }
+            html += '  </div>';
             html += '</div>';
         }
         html += '</div>';
@@ -2291,7 +2353,7 @@ function toggleCarouselFace(fid){
     var idx = carOrder.indexOf(fid);
     if (idx >= 0) {
         if (carOrder.length <= 1) {
-            alert('Mindestens ein Watchface muss im Karussell aktiv bleiben!');
+            alert('Mindestens ein Zifferblatt muss im Karussell aktiv bleiben!');
             return;
         }
         carOrder.splice(idx, 1);
@@ -2320,7 +2382,7 @@ function activateFaceDirect(fid){
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: 'activate=' + fid
     }).then(r => r.json()).then(d => {
-        showToastMsg && showToastMsg('Watchface aktiviert!');
+        showToastMsg && showToastMsg('Zifferblatt aktiviert!');
         loadCarouselData();
     }).catch(function(e){ alert('Fehler'); });
 }
@@ -2348,10 +2410,61 @@ function checkGitHubRelease(){
             var binUrl = binAsset ? binAsset.browser_download_url : (d.html_url || '#');
             det.innerHTML = '<b>' + (d.name || remoteTag) + '</b> (' + (d.published_at ? d.published_at.substring(0, 10) : '') + ')<br>' +
                             '<div class="hint" style="margin:6px 0;">' + (d.body ? d.body.replace(/\\n/g, '<br>') : 'Keine Release-Notes vorhanden.') + '</div>' +
-                            (binAsset ? '<a href="' + binUrl + '" class="btn" style="display:inline-block;margin-top:8px;text-decoration:none;" target="_blank">Firmware herunterladen (' + (binAsset.size/1024).toFixed(0) + ' KB)</a>' : '');
+                            (binAsset ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">' +
+                                        '<button type="button" class="btn btn-green" style="margin:0;padding:7px 14px;font-weight:700;" onclick="installReleaseDirect(\'' + binUrl + '\')">🚀 Direkt auf Uhr installieren</button>' +
+                                        '<a href="' + binUrl + '" class="btn" style="margin:0;padding:7px 12px;text-decoration:none;" target="_blank">📥 .bin herunterladen (' + (binAsset.size/1024).toFixed(0) + ' KB)</a></div>' : '');
         }
     }).catch(function(err){
         if (st) st.textContent = 'GitHub Release Check: Keine Verbindung oder Rate-Limit (' + err.message + ')';
+    });
+}
+
+function installReleaseDirect(url) {
+    if (!confirm('Neueste Firmware direkt aus dem GitHub Release auf die Uhr übertragen und flashen?')) return;
+    var st = document.getElementById('ghReleaseStatus');
+    if (st) st.innerHTML = '<span style="color:var(--accent);font-weight:700;">Lade Firmware von GitHub herunter...</span>';
+    var prog = document.getElementById('otaprog');
+    var pCont = document.getElementById('otaprog-container');
+    if (pCont) pCont.style.display = 'block';
+    if (prog) { prog.style.width = '10%'; prog.textContent = 'Download von GitHub...'; }
+
+    fetch(url)
+    .then(r => {
+        if (!r.ok) throw new Error('Download von GitHub fehlgeschlagen: HTTP ' + r.status);
+        return r.blob();
+    })
+    .then(blob => {
+        if (st) st.innerHTML = '<span style="color:var(--accent);font-weight:700;">Übertrage Firmware an die Uhr (OTA)...</span>';
+        if (prog) { prog.style.width = '30%'; prog.textContent = 'Flashe Uhr...'; }
+        
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', '/update', true);
+        xhr.upload.onprogress = function(e) {
+            if (e.lengthComputable && prog) {
+                var pct = Math.round((e.loaded / e.total) * 100);
+                prog.style.width = pct + '%';
+                prog.textContent = pct + '% (Flash...)';
+            }
+        };
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                if (prog) { prog.style.width = '100%'; prog.style.background = 'var(--good)'; prog.textContent = '100% OK! Neustart...'; }
+                if (st) st.innerHTML = '<span style="color:var(--good);font-weight:700;">Update erfolgreich! Die Uhr startet jetzt neu...</span>';
+                setTimeout(function(){ window.location.reload(); }, 9000);
+            } else {
+                if (st) st.innerHTML = '<span style="color:var(--danger);">Flash fehlgeschlagen: ' + xhr.responseText + '</span>';
+            }
+        };
+        xhr.onerror = function() {
+            if (st) st.innerHTML = '<span style="color:var(--danger);">Verbindungsfehler beim Flashen!</span>';
+        };
+        var fd = new FormData();
+        fd.append('firmware', blob, 'firmware.bin');
+        xhr.send(fd);
+    })
+    .catch(err => {
+        if (st) st.innerHTML = '<span style="color:var(--danger);">Fehler: ' + err.message + '</span>';
+        if (pCont) pCont.style.display = 'none';
     });
 }
 var liveWatchTimer = null;
@@ -2507,7 +2620,7 @@ function loadStorageDetail(){
         var bFfF = document.getElementById('barFfatFree'); if(bFfF) bFfF.style.width = pctOf(d.ffat_free_kb);
         var bSys = document.getElementById('barSysRes'); if(bSys) bSys.style.width = pctOf(d.sys_res_kb);
 
-        setTextIfChanged('stTotalFreeTxt', (d.total_free_kb/1024).toFixed(2) + ' MB frei (' + Math.round((d.total_free_kb/chip)*100) + '%)');
+        setTextIfChanged('stTotalFreeTxt', (d.total_free_kb/1024).toFixed(1) + ' / ' + (chip/1024).toFixed(1) + ' MB frei (' + Math.round((d.total_free_kb/chip)*100) + '%)');
         setTextIfChanged('stFwTxt', (d.fw_used_kb/1024).toFixed(2) + ' MB belegt · ' + (d.fw_free_kb/1024).toFixed(2) + ' MB frei (Partition: ' + (d.fw_tot_kb/1024).toFixed(1) + ' MB)');
         setTextIfChanged('stOtaTxt', (d.ota_reserve_kb/1024).toFixed(2) + ' MB (A/B Ausfallsicherheit)');
         setTextIfChanged('stFfatTxt', (d.ffat_used_kb/1024).toFixed(2) + ' MB belegt · ' + (d.ffat_free_kb/1024).toFixed(2) + ' MB frei (Partition: ' + (d.ffat_tot_kb/1024).toFixed(1) + ' MB)');
@@ -3384,7 +3497,7 @@ function resetPackagesApi() {
     s += tr(sysLang, "RAM, 16 MB Gesamtspeicher (Hardware-Flash) und Einstellungs-Speicher (NVS)", "RAM, 16 MB total hardware flash and settings storage (NVS)", "RAM, 16 Mo flash matériel et stockage des réglages (NVS)"); s += F("</div>");
     s += F("<div class='ring-row'>");
     s += F("<div class='ring-mini'><div class='rwrap'><svg width='72' height='72' viewBox='0 0 72 72'><circle class='track' cx='36' cy='36' r='30'></circle><circle class='val' id='ringRam' cx='36' cy='36' r='30' style='stroke:var(--accent-2)'></circle></svg><div class='rc' id='ringRamTxt'>--%</div></div><div class='lbl'>"); s += tr(sysLang, "RAM frei", "RAM free", "RAM libre"); s += F("</div><div class='sub' id='ramSub'>--</div></div>");
-    s += F("<div class='ring-mini'><div class='rwrap'><svg width='72' height='72' viewBox='0 0 72 72'><circle class='track' cx='36' cy='36' r='30'></circle><circle class='val' id='ringFlash' cx='36' cy='36' r='30' style='stroke:var(--good)'></circle></svg><div class='rc' id='ringFlashTxt'>--%</div></div><div class='lbl'>"); s += tr(sysLang, "Flash frei", "Flash free", "Flash libre"); s += F("</div><div class='sub' id='flashSub'>--</div></div>");
+    s += F("<div class='ring-mini' title='"); s += tr(sysLang, "Gesamter freier Flash-Speicher (16 MB Hardware-Chip)", "Total free flash storage (16 MB chip)", "Stockage flash libre total (16 Mo)"); s += F("'><div class='rwrap'><svg width='72' height='72' viewBox='0 0 72 72'><circle class='track' cx='36' cy='36' r='30'></circle><circle class='val' id='ringFlash' cx='36' cy='36' r='30' style='stroke:var(--good)'></circle></svg><div class='rc' id='ringFlashTxt'>--%</div></div><div class='lbl'>"); s += tr(sysLang, "Flash frei", "Flash free", "Flash libre"); s += F("</div><div class='sub' id='flashSub'>--</div></div>");
     s += F("<div class='ring-mini'><div class='rwrap'><svg width='72' height='72' viewBox='0 0 72 72'><circle class='track' cx='36' cy='36' r='30'></circle><circle class='val' id='ringNvs' cx='36' cy='36' r='30' style='stroke:var(--accent)'></circle></svg><div class='rc' id='ringNvsTxt'>--%</div></div><div class='lbl'>"); s += tr(sysLang, "NVS frei", "NVS free", "NVS libre"); s += F("</div><div class='sub' id='nvsSub'>--</div></div>");
     s += F("</div><button type='button' class='details-btn' id='openStorage'>"); s += tr(sysLang, "Speicherinhalt anzeigen…", "Show storage contents…", "Afficher le contenu…"); s += F("</button></div>");
     s += F("</div>"); // .hero
@@ -3950,6 +4063,13 @@ function resetPackagesApi() {
     s += F("<b>"); s += tr(sysLang, "Geburt & Zeit", "Birth & time", "Naissance & heure"); s += F(":</b><br><input name='pD' type='date' value='"); s += parentDate; s += F("' style='width:60%;display:inline-block;'><input name='pT' type='time' value='"); s += parentTime; s += F("' style='width:35%;display:inline-block;float:right;'><hr>");
     s += F("<b>"); s += tr(sysLang, "Papa Name", "Dad's name", "Nom de papa"); s += F(":</b><input name='ppN' type='text' value='"); s += htmlEscape(papaName); s += F("'>");
     s += F("<b>"); s += tr(sysLang, "Geburt & Zeit", "Birth & time", "Naissance & heure"); s += F(":</b><br><input name='ppD' type='date' value='"); s += papaDate; s += F("' style='width:60%;display:inline-block;'><input name='ppT' type='time' value='"); s += papaTime; s += F("' style='width:35%;display:inline-block;float:right;'><hr>");
+    s += F("<b>"); s += tr(sysLang, "Standard-Sichtmodus Generationen & Eltern", "Default generation & parent view mode", "Mode de vue par défaut parents/générations"); s += F(":</b><br><select name='pViewM'><option value='0'");
+    if (parentViewMode == 0) s += F(" selected");
+    s += F(">"); s += tr(sysLang, "Eltern-Sicht (Wie alt waren Eltern als sie so alt wie ich heute waren)", "Parents view (How old were parents at my age)", "Vue parents (Âge des parents à mon âge)");
+    s += F("</option><option value='1'");
+    if (parentViewMode == 1) s += F(" selected");
+    s += F(">"); s += tr(sysLang, "Kinder-Sicht (Wie alt bin ich wenn meine Kinder mein heutiges Alter erreichen)", "Children projection (How old will I be when children reach my age)", "Projection enfants (Mon âge quand mes enfants auront mon âge)");
+    s += F("</option></select><hr>");
     s += F("<b>Netto-Monatslohn (E):</b><input name='netS' type='number' step='0.01' value='"); s += netSalary; s += F("'><b>Arbeitsstunden / Tag (100%):</b><input name='wh' type='number' step='0.1' value='"); s += workHoursPerDay; s += F("'><b>Teilzeit (%):</b><input name='pt' type='number' min='1' max='100' value='"); s += partTimePct; s += F("'><b>Regel-Arbeitstage / Jahr:</b><input name='wd' type='number' value='"); s += workDaysYear; s += F("'><b>Urlaubstage:</b><input name='vac' type='number' value='"); s += vacationDays; s += F("'><b>Krankheitstage (dieses Jahr):</b><input name='sick' type='number' value='"); s += sickDays; s += F("'><hr>");
     s += F("<b>Kind 1 Name:</b><input name='c1n' type='text' value='"); s += htmlEscape(child1Name); s += F("'>");
     s += F("<b>Kind 1 Geburtsdatum & Zeit:</b><br><input name='c1d' type='date' value='"); s += child1Date; s += F("' style='width:60%;display:inline-block;'><input name='c1t' type='time' value='"); s += child1Time; s += F("' style='width:35%;display:inline-block;float:right;'><br>");
@@ -4383,6 +4503,7 @@ void handleSave() {
     if (server.hasArg("btime")) { String btime = server.arg("btime"); if(btime.length() == 5) { gStunde = btime.substring(0,2).toInt(); gMinute = btime.substring(3,5).toInt(); } }
     if (server.hasArg("pN")) parentName = server.arg("pN"); if (server.hasArg("pD")) parentDate = server.arg("pD"); if (server.hasArg("pT")) parentTime = server.arg("pT");
     if (server.hasArg("ppN")) papaName = server.arg("ppN"); if (server.hasArg("ppD")) papaDate = server.arg("ppD"); if (server.hasArg("ppT")) papaTime = server.arg("ppT");
+    if (server.hasArg("pViewM")) parentViewMode = server.arg("pViewM").toInt();
     if (server.hasArg("brandName")) { String bn = server.arg("brandName"); if (bn.length() > 0 && bn.length() <= 40) brandName = htmlEscape(bn); }
     if (server.hasArg("netS")) netSalary = server.arg("netS").toFloat(); if (server.hasArg("pt")) partTimePct = server.arg("pt").toInt(); if (server.hasArg("vac")) vacationDays = server.arg("vac").toInt(); if (server.hasArg("sick")) sickDays = server.arg("sick").toInt(); if (server.hasArg("wh")) workHoursPerDay = server.arg("wh").toFloat(); if (server.hasArg("wd")) workDaysYear = server.arg("wd").toInt();
     if (server.hasArg("c1n")) child1Name = server.arg("c1n"); if (server.hasArg("c1d")) child1Date = server.arg("c1d"); if (server.hasArg("c1t")) child1Time = server.arg("c1t");
@@ -4488,6 +4609,7 @@ void handleSave() {
         prefs.putInt("tag", gTag); prefs.putInt("monat", gMonat); prefs.putInt("jahr", gJahr); prefs.putInt("std", gStunde); prefs.putInt("min", gMinute); prefs.putInt("alter", zielAlter);
         prefs.putString("pN", parentName); prefs.putString("pD", parentDate); prefs.putString("pT", parentTime);
         prefs.putString("ppN", papaName); prefs.putString("ppD", papaDate); prefs.putString("ppT", papaTime);
+        prefs.putInt("pViewM", parentViewMode);
         prefs.putFloat("netS", netSalary); prefs.putInt("pt", partTimePct); prefs.putInt("vac", vacationDays); prefs.putInt("sick", sickDays); prefs.putFloat("wh", workHoursPerDay); prefs.putInt("wd", workDaysYear);
         prefs.putString("c1n", child1Name); prefs.putString("c1d", child1Date); prefs.putString("c1t", child1Time); prefs.putString("c2n", child2Name); prefs.putString("c2d", child2Date); prefs.putString("c2t", child2Time); prefs.putString("c3n", child3Name); prefs.putString("c3d", child3Date); prefs.putString("c3t", child3Time);
     }
@@ -4789,14 +4911,15 @@ void setupServerRoutes() {
     });
     server.on("/api/carousel", HTTP_POST, []() {
         if (!checkAdminAccess()) return;
-        static const char* const kNames[10] = {
+        static const char* const kNames[16] = {
             "Ultra Rings", "Classic Chrono", "Retro Casio", "3D Lebensuhr",
             "Bauhaus Minimal", "Cyberpunk HUD", "Deutsche Wortuhr", "Opportunitaet",
-            "Kinder", "Generationen"
+            "Kinder", "Generationen", "Flieger B-Uhr", "Submariner Diver",
+            "Synthwave Horizon", "Tactical Radar", "Astro Orbit & Moon", "Swiss Minimal Typo"
         };
         if (server.hasArg("activate")) {
             int fid = server.arg("activate").toInt();
-            if (fid >= 0 && fid < 10) {
+            if (fid >= 0 && fid < 16) {
                 int found = -1;
                 for (size_t i = 0; i < carouselOrder.size(); i++) {
                     if (carouselOrder[i] == fid) { found = (int)i; break; }
@@ -5109,9 +5232,9 @@ void setupServerRoutes() {
         json += ",\"ram_psram_used_kb\":" + String((ESP.getPsramSize() - ESP.getFreePsram()) / 1024);
         json += ",\"ram_psram_free_kb\":" + String(ESP.getFreePsram() / 1024);
         json += ",\"ram_psram_tot_kb\":" + String(ESP.getPsramSize() / 1024);
-        // Abwaertskompatibilitaet fuer bestehenden Code:
-        json += ",\"flash_free_kb\":" + String(ffatFreeBytes / 1024);
-        json += ",\"flash_tot_kb\":" + String(ffatTotBytes / 1024);
+        // Einheitliche Flash-Werte (Hardware-Gesamtflash 16MB konsistent mit Dashboard-Ring):
+        json += ",\"flash_free_kb\":" + String(totalFreeBytes / 1024);
+        json += ",\"flash_tot_kb\":" + String(flashChipBytes / 1024);
 
         nvs_stats_t nvsStats; nvsStats.free_entries = 0; nvsStats.total_entries = 0;
         nvs_get_stats(NULL, &nvsStats);
@@ -5472,6 +5595,7 @@ void setupServerRoutes() {
         j += "\"tAlarm\":" + String(timerAlarmMode) + ",\"hapW\":" + String(hapticWaveform) + ",";
         j += "\"pN\":\"" + jsonEscape(parentName) + "\",\"pD\":\"" + jsonEscape(parentDate) + "\",\"pT\":\"" + jsonEscape(parentTime) + "\",";
         j += "\"ppN\":\"" + jsonEscape(papaName) + "\",\"ppD\":\"" + jsonEscape(papaDate) + "\",\"ppT\":\"" + jsonEscape(papaTime) + "\",";
+        j += "\"pViewM\":" + String(parentViewMode) + ",";
         j += "\"brandName\":\"" + jsonEscape(brandName) + "\",";
         j += "\"netS\":" + String(netSalary, 2) + ",\"pt\":" + String(partTimePct) + ",\"vac\":" + String(vacationDays) + ",\"sick\":" + String(sickDays) + ",\"wh\":" + String(workHoursPerDay, 1) + ",\"wd\":" + String(workDaysYear) + ",";
         j += "\"c1n\":\"" + jsonEscape(child1Name) + "\",\"c1d\":\"" + jsonEscape(child1Date) + "\",\"c1t\":\"" + jsonEscape(child1Time) + "\",";
@@ -5520,6 +5644,7 @@ void setupServerRoutes() {
         timerAlarmMode = jInt("tAlarm", timerAlarmMode); hapticWaveform = jInt("hapW", hapticWaveform);
         parentName = jStr("pN"); parentDate = jStr("pD"); parentTime = jStr("pT");
         papaName = jStr("ppN"); papaDate = jStr("ppD"); papaTime = jStr("ppT");
+        parentViewMode = jInt("pViewM", parentViewMode);
         brandName = jStr("brandName");
         netSalary = jFloat("netS", netSalary); partTimePct = jInt("pt", partTimePct); vacationDays = jInt("vac", vacationDays); sickDays = jInt("sick", sickDays); workHoursPerDay = jFloat("wh", workHoursPerDay); workDaysYear = jInt("wd", workDaysYear);
         child1Name = jStr("c1n"); child1Date = jStr("c1d"); child1Time = jStr("c1t");
@@ -5552,6 +5677,7 @@ void setupServerRoutes() {
         prefs.putString("cHBG", hexHeadBG); prefs.putString("cHFG", hexHeadFG); prefs.putString("cABG", hexAppBG); prefs.putString("cWrn", hexWarn);
         prefs.putInt("lang", sysLang);
         prefs.putString("ppN", papaName); prefs.putString("ppD", papaDate); prefs.putString("ppT", papaTime);
+        prefs.putInt("pViewM", parentViewMode);
         prefs.putString("brandName", brandName);
         prefs.putBool("enP0", enP0); prefs.putBool("enP1", enP1); prefs.putBool("enP2", enP2); prefs.putBool("enP3", enP3);
         prefs.putInt("tAlarm", timerAlarmMode); prefs.putInt("hapW", hapticWaveform);

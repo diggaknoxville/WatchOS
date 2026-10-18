@@ -126,55 +126,70 @@ void updateMotion(unsigned long now) {
         stepArmed = true;
     }
 
-    // --- Handgelenk-Erkennung (Zuverlaessiger Wake + Automatischer Wrist-Down-Sleep) ---
-    static bool armDownArmed = false;
-    static unsigned long armDownStartTime = 0;
+    // --- Handgelenk-Erkennung (Hochpraezise dynamische Flick- & Haltungs-Erkennung) ---
+    static float prevAx = 0.0f, prevAy = 0.0f, prevAz = 1.0f;
+    static bool flickArmed = false;
+    static unsigned long flickTime = 0;
     static unsigned long lastWakeTime = 0;
     static int wristDownCount = 0;
+    static int viewHoldCount = 0;
 
-    // 1. Arm-Down / Tilted-Away Haltung erkennen:
-    // Der Arm haengt nach unten oder ist vom Gesicht abgewandt (az < 0.40f oder starke Querbeschleunigung)
-    bool isArmDown = (az < 0.40f) || (sqrtf(ax * ax + ay * ay) > 0.65f);
+    float dAx = fabsf(ax - prevAx);
+    float dAy = fabsf(ay - prevAy);
+    float dAz = fabsf(az - prevAz);
+    float jerk = dAx + dAy + dAz;
 
-    if (isArmDown) {
-        if (!armDownArmed) {
-            if (armDownStartTime == 0) armDownStartTime = now;
-            else if (now - armDownStartTime > 200) {
-                armDownArmed = true; // Arm war mind. 200ms unten -> scharfschalten fuer echten Wake
+    prevAx = ax;
+    prevAy = ay;
+    prevAz = az;
+
+    // 1. Blickposition: Display zeigt zum Gesicht/Nutzer (az > 0.52f, moderate Seitenneigung)
+    bool isViewingAngle = (az > 0.52f) && (fabsf(ax) < 0.65f) && (ay > -0.68f && ay < 0.45f);
+
+    // 2. Dynamische Flick-Erkennung: Schnelle gezielte Drehung des Handgelenks
+    if (!flickArmed && (powerState >= 2 && powerState <= 4)) {
+        if ((dAy > 0.18f || dAz > 0.18f || jerk > 0.26f) && az > 0.35f) {
+            flickArmed = true;
+            flickTime = now;
+            viewHoldCount = 0;
+        }
+    }
+
+    // 3. Wenn Flick erkannt wurde: Innerhalb von 100-700ms muss die Uhr in stabiler Blickhaltung sein
+    if (flickArmed) {
+        unsigned long elapsedFlick = now - flickTime;
+        if (elapsedFlick > 700) {
+            flickArmed = false; // Zeitfenster abgelaufen
+            viewHoldCount = 0;
+        } else if (elapsedFlick >= 80 && isViewingAngle) {
+            viewHoldCount++;
+            if (viewHoldCount >= 2 && (now - lastWakeTime > 1200)) { // ~160ms stabile Blickhaltung
+                flickArmed = false;
+                viewHoldCount = 0;
+                lastWakeTime = now;
+                if (powerState == 4) {
+                    tft.writecommand(0x11); // Wake Display
+                    delay(120);
+                }
+                lastTouchTime = now;
+                powerState = 1;
+                setBrightness(maxBright);
+                triggerVibration();
+                lastSecond = -1;
             }
         }
-    } else {
-        armDownStartTime = 0;
     }
 
-    // 2. Handgelenk-Wake: wenn zuvor scharfgeschaltet und der Arm in normale Blickposition gedreht wird
-    // Blickposition: az > 0.65f (Display zeigt nach oben/zum Nutzer), fabsf(ax) < 0.60f, ay zwischen -0.65f und +0.45f
-    bool isViewingAngle = (az > 0.65f) && (fabsf(ax) < 0.60f) && (ay > -0.65f && ay < 0.45f);
-
-    if ((powerState >= 2 && powerState <= 4) && armDownArmed && isViewingAngle && (now - lastWakeTime > 1200)) {
-        armDownArmed = false;
-        lastWakeTime = now;
-        if (powerState == 4) {
-            tft.writecommand(0x11);
-            delay(120);
-        }
-        lastTouchTime = now;
-        powerState = 1;
-        setBrightness(maxBright);
-        triggerVibration();
-        lastSecond = -1;
-    }
-
-    // 3. Wrist-Down / Arm-Senken: Automatisch Dimmen/Schlafen wenn Display weggedreht oder Arm gesenkt wird
-    // Verhindert, dass die Uhr 30s unnoetig weiterleuchtet oder auf dem Tisch an bleibt
+    // 4. Wrist-Down / Arm-Senken: Display weggedreht oder Arm nach unten gerichtet -> sofort dimmen/schlafen
     AppPackage* curMotionApp = AppManager::getAppByPage(currentPage);
     bool keepAwakeApp = (curMotionApp && (curMotionApp->id == "flashlight" || curMotionApp->driver == "flashlight" || curMotionApp->id == "battery"));
     if (powerState == 1 && !keepAwakeApp && (now - lastTouchTime > 1500)) {
-        if (az < 0.20f || (isArmDown && az < 0.35f)) {
+        bool isTurnedAway = (az < 0.22f) || (ay < -0.72f) || (fabsf(ax) > 0.72f);
+        if (isTurnedAway) {
             wristDownCount++;
-            if (wristDownCount >= 6) { // ~480ms stabile Haltung nach unten
+            if (wristDownCount >= 4) { // ~320ms weggedreht -> Schlafen
                 wristDownCount = 0;
-                lastTouchTime = now - time_dim_start - 10; // Sofort Dim/Sleep einleiten
+                lastTouchTime = now - time_dim_start - 10;
             }
         } else {
             wristDownCount = 0;

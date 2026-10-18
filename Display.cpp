@@ -567,6 +567,10 @@ void drawChronographWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bo
     // Sweeping Scarlet Second Hand
     float secRad = aktuell->tm_sec * 6.0f * DEG2RAD - 1.5707963f;
     drawSecondHand(spr, cx, cy, secRad, 84.0f, 0xF800);
+
+    // Specular center boss highlight
+    spr->fillCircle(cx, cy, 3, 0xFFFF);
+    spr->drawPixel(cx - 1, cy - 1, 0xFFFF);
 }
 
 void drawRetroCasioWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg) {
@@ -654,6 +658,15 @@ void drawRetroCasioWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, boo
     spr->setTextDatum(TR_DATUM);
     spr->setTextColor(lcdInk, lcdBg);
     spr->drawString(dateStr, lx + lw - 8, ly + 6, 2);
+
+    // Vintage 10-segment animated dot matrix bar graph (DW-5600 style)
+    spr->setTextDatum(TL_DATUM);
+    spr->drawString("ALM", lx + lw - 86, ly + 21, 1);
+    for (int g = 0; g < 10; g++) {
+        int gx = lx + lw - 58 + g * 5;
+        if (g <= (aktuell->tm_sec % 10)) spr->fillRect(gx, ly + 21, 3, 3, lcdInk);
+        else spr->drawRect(gx, ly + 21, 3, 3, lcdGhost);
+    }
 
     // 4. Middle 7-Segment Digital Time
     // Hours & Minutes: height 44, width 20, spacing 4
@@ -748,17 +761,31 @@ void drawUltraDashboard(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isC
     int yearsLeft = (int)(diff / 31536000L);
     int daysLeft  = (int)((diff % 31536000L) / 86400L);
 
-    // === 1. TOP PILL: Datum & Wochentag ===
+    // 0. Bezel Perimeter Micro-Ticks (Active Second Bead Glow)
+    const float DEG2RAD_U = 0.0174532925f;
+    for (int d = 0; d < 60; d += 2) {
+        float r = (d * 6.0f) * DEG2RAD_U - 1.5707963f;
+        int bx = 120 + (int)(116.0f * cosf(r)), by = 103 + (int)(100.0f * sinf(r));
+        if (d == (aktuell->tm_sec / 2) * 2) {
+            spr->fillCircle(bx, by, 2, COLOR_CYAN_TECH);
+            spr->drawPixel(bx, by, COLOR_TEXT_MAIN);
+        } else if (d % 10 == 0) {
+            spr->drawPixel(bx, by, COLOR_BORDER_HI);
+        }
+    }
+
+    // === 1. TOP PILL: Datum & Wochentag mit Kalenderwoche ===
     static const char* monKurz[] = {"Jan", "Feb", "Mrz", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"};
-    char dPill[32];
-    snprintf(dPill, sizeof(dPill), "%s, %02d. %s", wochentage[wday], mday, monKurz[mon]);
+    int kw = (aktuell->tm_yday + 7) / 7;
+    char dPill[36];
+    snprintf(dPill, sizeof(dPill), "KW %02d · %s, %02d. %s", kw, wochentage[wday], mday, monKurz[mon]);
     
-    drawGlassCard(spr, 28, 4, 184, 22, 11, COLOR_BORDER_HI, COLOR_SURFACE, COLOR_BG_DARK);
-    spr->fillCircle(40, 15, 3, COLOR_CYAN_TECH);
-    spr->fillCircle(40, 15, 1, COLOR_TEXT_MAIN);
+    drawGlassCard(spr, 20, 4, 200, 22, 11, COLOR_BORDER_HI, COLOR_SURFACE, COLOR_BG_DARK);
+    spr->fillCircle(32, 15, 3, COLOR_CYAN_TECH);
+    spr->fillCircle(32, 15, 1, COLOR_TEXT_MAIN);
     spr->setTextDatum(MC_DATUM);
     spr->setTextColor(COLOR_ACCENT_TIME);
-    spr->drawString(dPill, 126, 15, 2);
+    spr->drawString(dPill, 122, 15, 2);
 
     // === 2. HERO TIME: Apple Watch Ultra Digital Clock ===
     char tBuf[8];
@@ -899,6 +926,22 @@ void drawBauhausWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool i
         }
     }
 
+    // 1/5th second railroad perimeter ticks
+    for (int sub = 0; sub < 240; sub++) {
+        if (sub % 4 != 0) {
+            float srad = (sub * 1.5f) * DEG2RAD - 1.5707963f;
+            spr->drawPixel(cx + (int)(96.0f * cosf(srad)), cy + (int)(96.0f * sinf(srad)), 0x2965);
+        }
+    }
+
+    // Power Reserve Minimalist Arc at 6 o'clock
+    int prY = cy + 46;
+    float batAngle = (akku / 100.0f) * 120.0f - 60.0f;
+    for (int a = -60; a <= 60; a += 15) {
+        float rad = (a * DEG2RAD) - 1.5707963f;
+        spr->drawPixel(cx + (int)(18.0f * cosf(rad)), prY + (int)(18.0f * sinf(rad)), (a <= batAngle) ? (akku > 25 ? 0x87F0 : 0xF800) : 0x3186);
+    }
+
     // 3. Typographic Cardinal Markers (Max Bill style 12, 3, 6, 9)
     spr->setTextDatum(MC_DATUM);
     spr->setTextColor(0xFFFF, 0x10A2);
@@ -977,7 +1020,8 @@ void drawCyberpunkWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool
     // 3. Top Cyberpunk Terminal Header
     spr->setTextDatum(TL_DATUM);
     spr->setTextColor(0x07E0, 0x0000); // Neon Green
-    spr->drawString("// SYS.TERMINAL // v2.4", 20, 10, 1);
+    bool blinkCur = ((millis() / 500) % 2 == 0);
+    spr->drawString(blinkCur ? "// SYS.TERMINAL // v2.4 _" : "// SYS.TERMINAL // v2.4  ", 20, 10, 1);
 
     spr->setTextDatum(TR_DATUM);
     spr->setTextColor(isChg ? 0xFFE0 : 0x07FF, 0x0000);
@@ -1110,6 +1154,14 @@ void drawWordClockWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool
 
     auto drawWord = [&](const char* text, int x, int y, bool active) {
         spr->setTextDatum(ML_DATUM);
+        if (active) {
+            // Soft LED ambient backlight halo
+            spr->setTextColor(0x2125, 0x0821);
+            spr->drawString(text, x - 1, y, 2);
+            spr->drawString(text, x + 1, y, 2);
+            spr->drawString(text, x, y - 1, 2);
+            spr->drawString(text, x, y + 1, 2);
+        }
         spr->setTextColor(active ? cActive : cDim, 0x0821);
         spr->drawString(text, x, y, 2);
     };
@@ -1202,6 +1254,13 @@ void drawFinanceWatchface(TFT_eSprite *spr, struct tm *aktuell) {
     spr->setTextDatum(TL_DATUM);
     spr->setTextColor(COLOR_CYAN_TECH);
     spr->drawString("EUR/h", 22 + hTotalW + 6, 150, 2);
+
+    // Live Earn Rate Pill
+    float minRate = (trueHourlyWage > 0) ? (trueHourlyWage / 60.0f) : (dailyNet / 1440.0f);
+    char rBuf[32]; snprintf(rBuf, sizeof(rBuf), "+%.3f EUR/min", minRate);
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(COLOR_PROD_GREEN);
+    spr->drawString(rBuf, 120, 192, 1);
 }
 
 void drawChildrenWatchface(TFT_eSprite *spr, struct tm *aktuell) {
@@ -1406,6 +1465,471 @@ void drawParentsWatchface(TFT_eSprite *spr, struct tm *aktuell) {
             spr->drawString("Im WebDashboard anlegen", 120, 124, 1);
         }
     }
+}
+
+void drawPilotFliegerWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg) {
+    if (!spr || spr->getPointer() == nullptr) return;
+    const float DEG2RAD = 0.0174532925f;
+    int cx = 120, cy = 103;
+
+    // 1. Jet Black Aviation Instrument Dial
+    spr->fillSprite(0x0000);
+    spr->drawCircle(cx, cy, 102, 0x3186); // Steel cockpit case rim
+    spr->drawCircle(cx, cy, 101, 0x18C3);
+
+    // 2. Outer Minute Track & Ticks (Type B Flieger)
+    for (int m = 0; m < 60; m++) {
+        float rad = (m * 6.0f) * DEG2RAD - 1.5707963f;
+        float c = cosf(rad);
+        float s = sinf(rad);
+        if (m % 5 == 0) {
+            int rIn = 84, rOut = 95;
+            spr->drawLine(cx + (int)(rIn * c), cy + (int)(rIn * s), cx + (int)(rOut * c), cy + (int)(rOut * s), 0x87F0); // Tritium green
+            spr->drawLine(cx + (int)(rIn * c) + 1, cy + (int)(rIn * s), cx + (int)(rOut * c) + 1, cy + (int)(rOut * s), 0x87F0);
+        } else {
+            int rIn = 88, rOut = 94;
+            spr->drawLine(cx + (int)(rIn * c), cy + (int)(rIn * s), cx + (int)(rOut * c), cy + (int)(rOut * s), 0x4A69);
+        }
+    }
+
+    // 12 o'clock Aviation Triangle + 2 Dots
+    int triTipX = cx, triTipY = cy - 82;
+    int triLBaseX = cx - 7, triBaseY = cy - 94;
+    int triRBaseX = cx + 7;
+    spr->fillTriangle(triTipX, triTipY, triLBaseX, triBaseY, triRBaseX, triBaseY, 0x87F0);
+    spr->fillCircle(cx - 10, cy - 87, 2, 0x87F0);
+    spr->fillCircle(cx + 10, cy - 87, 2, 0x87F0);
+
+    // Outer Minute Numerals: 55, 05, 10, 20, 25, 35, 40, 50
+    static const int minLabels[12] = {60, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55};
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(0xFFFF, 0x0000);
+    for (int idx = 1; idx < 12; idx++) {
+        if (idx == 3 || idx == 9 || idx == 6) continue;
+        float rad = (idx * 30.0f) * DEG2RAD - 1.5707963f;
+        int rNum = 74;
+        char numBuf[4]; snprintf(numBuf, sizeof(numBuf), "%02d", minLabels[idx]);
+        spr->drawString(numBuf, cx + (int)(rNum * cosf(rad)), cy + (int)(rNum * sinf(rad)), 1);
+    }
+
+    // 3. Inner Hour Track (Radius ~45)
+    spr->drawCircle(cx, cy, 45, 0x4A69);
+    for (int h = 1; h <= 12; h++) {
+        float rad = (h * 30.0f) * DEG2RAD - 1.5707963f;
+        int rH = 34;
+        char hBuf[4]; snprintf(hBuf, sizeof(hBuf), "%d", h);
+        spr->setTextColor(0x87F0, 0x0000);
+        spr->drawString(hBuf, cx + (int)(rH * cosf(rad)), cy + (int)(rH * sinf(rad)), 1);
+    }
+
+    // 4. Pilot Cockpit Inscriptions & Gauges
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(0x4A69, 0x0000);
+    spr->drawString("ALT", cx - 48, cy, 1);
+    spr->setTextColor(0x87F0, 0x0000);
+    spr->drawString(String(stepCount), cx - 48, cy + 9, 1);
+
+    spr->setTextColor(0x4A69, 0x0000);
+    spr->drawString("FUEL", cx + 48, cy, 1);
+    spr->setTextColor(isChg ? 0x07FF : (akku > 25 ? 0x87F0 : 0xF800), 0x0000);
+    spr->drawString(String(akku) + "%", cx + 48, cy + 9, 1);
+
+    // Bottom Date Aperture (at 6 o'clock)
+    drawGlassCard(spr, cx - 14, cy + 50, 28, 15, 3, 0x4A69, 0x0821, 0x0000);
+    char dBuf[6]; snprintf(dBuf, sizeof(dBuf), "%02d", aktuell->tm_mday);
+    spr->setTextColor(0xFFFF, 0x0821);
+    spr->drawString(dBuf, cx, cy + 57, 1);
+
+    // 5. Flieger Sword Hands
+    float hRad = ((aktuell->tm_hour % 12) + aktuell->tm_min / 60.0f) * 30.0f * DEG2RAD - 1.5707963f;
+    drawSwordHand(spr, cx, cy, hRad, 40.0f, 6.0f, 0xFFFF, 0x3186, 0x87F0);
+
+    float mRad = (aktuell->tm_min + aktuell->tm_sec / 60.0f) * 6.0f * DEG2RAD - 1.5707963f;
+    drawSwordHand(spr, cx, cy, mRad, 78.0f, 4.5f, 0xFFFF, 0x3186, 0x87F0);
+
+    float sRad = aktuell->tm_sec * 6.0f * DEG2RAD - 1.5707963f;
+    drawSecondHand(spr, cx, cy, sRad, 86.0f, 0xFD20);
+}
+
+void drawDiverProWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg) {
+    if (!spr || spr->getPointer() == nullptr) return;
+    const float DEG2RAD = 0.0174532925f;
+    int cx = 120, cy = 103;
+
+    // 1. Steel Case & Scalloped Diver Bezel
+    spr->fillSprite(0x0000);
+    spr->fillCircle(cx, cy, 102, 0x18C3);
+    spr->drawCircle(cx, cy, 102, 0x5ACB);
+    spr->drawCircle(cx, cy, 100, 0xBDD7);
+
+    // Ceramic Diver Bezel Insert
+    spr->fillCircle(cx, cy, 99, 0x0842);
+    spr->drawCircle(cx, cy, 80, 0x3186);
+
+    // Bezel Markings: 10, 20, 30, 40, 50
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(0xFFFF, 0x0842);
+    static const int bzVals[6] = {0, 10, 20, 30, 40, 50};
+    for (int b = 1; b < 6; b++) {
+        float bzRad = (b * 60.0f) * DEG2RAD - 1.5707963f;
+        spr->drawString(String(bzVals[b]), cx + (int)(89.0f * cosf(bzRad)), cy + (int)(89.0f * sinf(bzRad)), 1);
+    }
+    // Luminous Pearl at 12 o'clock on bezel
+    spr->fillTriangle(cx, cy - 97, cx - 6, cy - 83, cx + 6, cy - 83, 0xFFFF);
+    spr->fillCircle(cx, cy - 89, 3, 0x07FF);
+
+    // Marine Abyss Gradient Dial
+    spr->fillCircle(cx, cy, 79, 0x0024);
+    spr->drawCircle(cx, cy, 54, 0x0046);
+    spr->drawCircle(cx, cy, 28, 0x0046);
+
+    // 2. Maxi Luminous Hour Plots
+    uint16_t lumeCol = 0x07FF;
+    uint16_t lumeBorder = 0xFFFF;
+    for (int h = 0; h < 12; h++) {
+        if (h == 3) continue; // Cyclops Date window
+        float rad = (h * 30.0f) * DEG2RAD - 1.5707963f;
+        float c = cosf(rad), s = sinf(rad);
+        int rPlot = 68;
+        int px = cx + (int)(rPlot * c), py = cy + (int)(rPlot * s);
+
+        if (h == 0) {
+            spr->fillTriangle(px, py - 4, px - 6, py + 6, px + 6, py + 6, lumeBorder);
+            spr->fillTriangle(px, py - 2, px - 4, py + 5, px + 4, py + 5, lumeCol);
+        } else if (h == 6 || h == 9) {
+            spr->fillRoundRect(px - 4, py - 4, 8, 8, 2, lumeBorder);
+            spr->fillRoundRect(px - 3, py - 3, 6, 6, 1, lumeCol);
+        } else {
+            spr->fillCircle(px, py, 4, lumeBorder);
+            spr->fillCircle(px, py, 3, lumeCol);
+        }
+    }
+
+    // 3. Cyclops Date Window Magnifier at 3 o'clock
+    int dwX = cx + 50, dwY = cy - 9;
+    spr->fillRoundRect(dwX - 2, dwY - 2, 24, 18, 4, 0x0000);
+    spr->drawRoundRect(dwX - 2, dwY - 2, 24, 18, 4, 0xBDD7);
+    spr->fillRect(dwX, dwY, 20, 14, 0xFFFF);
+    char dBuf[4]; snprintf(dBuf, sizeof(dBuf), "%02d", aktuell->tm_mday);
+    spr->setTextColor(0x0000, 0xFFFF);
+    spr->drawString(dBuf, dwX + 10, dwY + 7, 2);
+
+    // 4. Dial Inscriptions
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(0xFFFF, 0x0024);
+    spr->drawString("SUBMARINER", cx, cy - 36, 1);
+    spr->setTextColor(0x5ACB, 0x0024);
+    spr->drawString("1000ft / 300m", cx, cy + 28, 1);
+    spr->setTextColor(isChg ? 0x07FF : (akku > 25 ? 0x07E0 : 0xF800), 0x0024);
+    spr->drawString(String(akku) + "%  " + String(stepCount) + "st", cx, cy + 39, 1);
+
+    // 5. Classic Mercedes Diver Hands
+    float hRad = ((aktuell->tm_hour % 12) + aktuell->tm_min / 60.0f) * 30.0f * DEG2RAD - 1.5707963f;
+    int hTipX = cx + (int)(46.0f * cosf(hRad));
+    int hTipY = cy + (int)(46.0f * sinf(hRad));
+    spr->drawLine(cx, cy, hTipX, hTipY, 0xFFFF);
+    int hDiscX = cx + (int)(32.0f * cosf(hRad));
+    int hDiscY = cy + (int)(32.0f * sinf(hRad));
+    spr->fillCircle(hDiscX, hDiscY, 6, 0xFFFF);
+    spr->fillCircle(hDiscX, hDiscY, 4, lumeCol);
+    spr->drawLine(hDiscX, hDiscY, hDiscX, hDiscY - 4, 0xFFFF);
+    spr->drawLine(hDiscX, hDiscY, hDiscX - 3, hDiscY + 3, 0xFFFF);
+    spr->drawLine(hDiscX, hDiscY, hDiscX + 3, hDiscY + 3, 0xFFFF);
+
+    float mRad = (aktuell->tm_min + aktuell->tm_sec / 60.0f) * 6.0f * DEG2RAD - 1.5707963f;
+    drawSwordHand(spr, cx, cy, mRad, 72.0f, 5.0f, 0xFFFF, 0x3186, lumeCol);
+
+    float sRad = aktuell->tm_sec * 6.0f * DEG2RAD - 1.5707963f;
+    int sTipX = cx + (int)(80.0f * cosf(sRad));
+    int sTipY = cy + (int)(80.0f * sinf(sRad));
+    spr->drawLine(cx - (int)(18.0f * cosf(sRad)), cy - (int)(18.0f * sinf(sRad)), sTipX, sTipY, 0xFFFF);
+    int sPipX = cx + (int)(54.0f * cosf(sRad));
+    int sPipY = cy + (int)(54.0f * sinf(sRad));
+    spr->fillCircle(sPipX, sPipY, 4, 0xFFFF);
+    spr->fillCircle(sPipX, sPipY, 3, lumeCol);
+    spr->fillCircle(cx, cy, 4, 0xBDD7);
+    spr->fillCircle(cx, cy, 2, 0xFFFF);
+}
+
+void drawNeonHorizonWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg) {
+    if (!spr || spr->getPointer() == nullptr) return;
+    // 1. Retro Sunset Gradient Sky
+    for (int y = 0; y < 105; y++) {
+        uint16_t skyCol = (y < 40) ? 0x1013 : (y < 75 ? 0x3813 : 0x7808);
+        spr->drawFastHLine(0, y, 240, skyCol);
+    }
+
+    // Glowing Retro Synthwave Sun
+    int sunX = 120, sunY = 75, sunR = 40;
+    for (int r = sunR; r > 0; r--) {
+        uint16_t sunCol = (r > 28) ? 0xF81F : (r > 15 ? 0xFD20 : 0xFFE0);
+        spr->fillCircle(sunX, sunY, r, sunCol);
+    }
+    for (int sy = 62; sy <= 100; sy += 6) {
+        int stripeH = 1 + (sy - 62) / 10;
+        spr->fillRect(sunX - sunR - 2, sy, (sunR + 2) * 2, stripeH, 0x1013);
+    }
+
+    spr->drawFastHLine(0, 105, 240, 0x07FF);
+    spr->drawFastHLine(0, 106, 240, 0xF81F);
+
+    // 2. 3D Perspective Grid Ground
+    spr->fillRect(0, 107, 240, 100, 0x0801);
+    static const int gridY[8] = {112, 119, 128, 140, 155, 173, 194, 206};
+    for (int i = 0; i < 7; i++) {
+        spr->drawFastHLine(0, gridY[i], 240, 0xF81F);
+    }
+    for (int gx = -80; gx <= 320; gx += 40) {
+        spr->drawLine(120, 105, gx, 206, 0x07FF);
+    }
+
+    // 3. Hero 80s Digital Time
+    char tBuf[10];
+    snprintf(tBuf, sizeof(tBuf), "%02d:%02d", aktuell->tm_hour, aktuell->tm_min);
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(0x780F, 0x1013);
+    spr->drawString(tBuf, 122, 42, 7);
+    spr->setTextColor(0x07FF, 0x1013);
+    spr->drawString(tBuf, 120, 40, 7);
+
+    char sBuf[6]; snprintf(sBuf, sizeof(sBuf), ":%02d", aktuell->tm_sec);
+    spr->setTextDatum(ML_DATUM);
+    spr->setTextColor(0xFFE0, 0x1013);
+    spr->drawString(sBuf, 178, 42, 4);
+
+    // 4. Retro Gauges (Left Fuel / Right Boost)
+    drawGlassCard(spr, 8, 120, 68, 64, 6, 0x07FF, 0x1013, 0x0000);
+    spr->setTextDatum(TC_DATUM);
+    spr->setTextColor(0x07FF);
+    spr->drawString("FUEL", 42, 124, 1);
+    spr->setTextColor(isChg ? 0xFFE0 : (akku > 25 ? 0x07E0 : 0xF800));
+    spr->drawString(String(akku) + "%", 42, 136, 2);
+    int fFill = (akku * 52) / 100;
+    spr->drawRect(16, 156, 52, 6, 0x3186);
+    spr->fillRect(17, 157, fFill, 4, isChg ? 0xFFE0 : 0x07FF);
+
+    drawGlassCard(spr, 164, 120, 68, 64, 6, 0xF81F, 0x1013, 0x0000);
+    spr->setTextDatum(TC_DATUM);
+    spr->setTextColor(0xF81F);
+    spr->drawString("BOOST", 198, 124, 1);
+    spr->setTextColor(0xFFE0);
+    spr->drawString(String(stepCount), 198, 136, 2);
+    int goal = (stepGoal > 0) ? stepGoal : 8000;
+    int bFill = (stepCount * 52) / goal;
+    if (bFill > 52) bFill = 52;
+    spr->drawRect(172, 156, 52, 6, 0x3186);
+    spr->fillRect(173, 157, bFill, 4, 0xF81F);
+
+    static const char* synthWday[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+    char dLine[36];
+    snprintf(dLine, sizeof(dLine), "OUTRUN // %s %02d.%02d", synthWday[aktuell->tm_wday % 7], aktuell->tm_mday, aktuell->tm_mon + 1);
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(0xFFE0, 0x0801);
+    spr->drawString(dLine, 120, 192, 1);
+}
+
+void drawRadarTacticalWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg) {
+    if (!spr || spr->getPointer() == nullptr) return;
+    const float DEG2RAD = 0.0174532925f;
+    int cx = 120, cy = 103;
+
+    spr->fillSprite(0x0000);
+
+    // Azimuth & Range Rings
+    spr->drawCircle(cx, cy, 102, 0x03E0);
+    spr->drawCircle(cx, cy, 100, 0x0260);
+    spr->drawCircle(cx, cy, 32, 0x0260);
+    spr->drawCircle(cx, cy, 64, 0x0260);
+    spr->drawCircle(cx, cy, 92, 0x03E0);
+
+    spr->drawFastHLine(cx - 96, cy, 192, 0x0260);
+    spr->drawFastVLine(cx, cy - 96, 192, 0x0260);
+
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(0x07E0, 0x0000);
+    spr->drawString("000°", cx, cy - 88, 1);
+    spr->drawString("090°", cx + 80, cy, 1);
+    spr->drawString("180°", cx, cy + 86, 1);
+    spr->drawString("270°", cx - 80, cy, 1);
+
+    for (int deg = 0; deg < 360; deg += 30) {
+        float r = deg * DEG2RAD;
+        int x1 = cx + (int)(95.0f * cosf(r)), y1 = cy + (int)(95.0f * sinf(r));
+        int x2 = cx + (int)(100.0f * cosf(r)), y2 = cy + (int)(100.0f * sinf(r));
+        spr->drawLine(x1, y1, x2, y2, 0x05E0);
+    }
+
+    // Dynamic Rotating Radar Beam
+    float sweepAngle = ((millis() % 4000) / 4000.0f) * 360.0f;
+    float sweepRad = sweepAngle * DEG2RAD;
+    for (int t = 8; t >= 1; t--) {
+        float tRad = (sweepAngle - t * 2.5f) * DEG2RAD;
+        uint16_t trailCol = (t > 5) ? 0x01E0 : (t > 2 ? 0x03E0 : 0x05E0);
+        spr->drawLine(cx, cy, cx + (int)(90.0f * cosf(tRad)), cy + (int)(90.0f * sinf(tRad)), trailCol);
+    }
+    spr->drawLine(cx, cy, cx + (int)(91.0f * cosf(sweepRad)), cy + (int)(91.0f * sinf(sweepRad)), 0xFFFF);
+    spr->drawLine(cx, cy, cx + (int)(91.0f * cosf(sweepRad)) + 1, cy + (int)(91.0f * sinf(sweepRad)), 0x07E0);
+
+    // Target Blips
+    int blip1X = cx + 38, blip1Y = cy - 38;
+    spr->fillCircle(blip1X, blip1Y, 3, 0x07E0);
+    spr->drawCircle(blip1X, blip1Y, 6, 0x07E0);
+
+    int blip2X = cx - 58, blip2Y = cy + 32;
+    spr->fillCircle(blip2X, blip2Y, 3, isChg ? 0xFFE0 : 0x07E0);
+    spr->drawCircle(blip2X, blip2Y, 6, isChg ? 0xFFE0 : 0x03E0);
+
+    spr->fillCircle(cx, cy, 3, 0xFFFF);
+
+    char milTime[16];
+    snprintf(milTime, sizeof(milTime), "[ %02d%02d:%02dZ ]", aktuell->tm_hour, aktuell->tm_min, aktuell->tm_sec);
+    drawGlassCard(spr, 56, 12, 128, 22, 4, 0x07E0, 0x0260, 0x0000);
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(0x07E0);
+    spr->drawString(milTime, 120, 23, 2);
+
+    drawGlassCard(spr, 14, 154, 100, 34, 4, 0x03E0, 0x0160, 0x0000);
+    spr->setTextDatum(TL_DATUM);
+    spr->setTextColor(0x07E0);
+    spr->drawString("PWR // BAT", 22, 158, 1);
+    spr->setTextColor(isChg ? 0xFFE0 : (akku > 25 ? 0xFFFF : 0xF800));
+    spr->drawString(String(akku) + "% " + (isChg ? "+CHG" : "STB"), 22, 170, 2);
+
+    drawGlassCard(spr, 126, 154, 100, 34, 4, 0x03E0, 0x0160, 0x0000);
+    spr->setTextDatum(TL_DATUM);
+    spr->setTextColor(0x07E0);
+    spr->drawString("RNG // STP", 134, 158, 1);
+    spr->setTextColor(0xFFFF);
+    spr->drawString(String(stepCount), 134, 170, 2);
+}
+
+void drawAstroOrbitWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg) {
+    if (!spr || spr->getPointer() == nullptr) return;
+    const float DEG2RAD = 0.0174532925f;
+    int cx = 120, cy = 103;
+
+    spr->fillSprite(0x0008);
+    static const int starX[16] = {24, 48, 88, 150, 196, 216, 32, 180, 64, 130, 204, 16, 76, 170, 108, 222};
+    static const int starY[16] = {18, 32, 14, 26, 38, 70, 110, 124, 150, 170, 148, 180, 192, 184, 52, 160};
+    for (int s = 0; s < 16; s++) {
+        spr->drawPixel(starX[s], starY[s], (s % 3 == 0) ? 0xFFFF : 0x6339);
+    }
+
+    // Realistic Moon Phase
+    time_t jetzt; time(&jetzt);
+    double daysSinceRef = (double)(jetzt - 1704974220) / 86400.0;
+    double moonAge = fmod(daysSinceRef, 29.53058867);
+    if (moonAge < 0) moonAge += 29.53058867;
+    float moonPct = (float)(moonAge / 29.53058867);
+
+    int mX = cx, mY = cy - 38, mR = 20;
+    spr->fillCircle(mX, mY, mR + 2, 0x18C3);
+    spr->fillCircle(mX, mY, mR, 0x2124);
+
+    for (int py = -mR; py <= mR; py++) {
+        float xBorder = sqrtf(mR * mR - py * py);
+        float phaseFactor = cosf(moonPct * 2.0f * 3.14159265f);
+        float termX = xBorder * phaseFactor;
+
+        int x1, x2;
+        if (moonAge <= 14.765) {
+            x1 = (int)termX; x2 = (int)xBorder;
+        } else {
+            x1 = -(int)xBorder; x2 = (int)termX;
+        }
+        if (x1 > x2) { int tmp = x1; x1 = x2; x2 = tmp; }
+        for (int px = x1; px <= x2; px++) {
+            spr->drawPixel(mX + px, mY + py, 0xFFF0);
+        }
+    }
+    spr->drawCircle(mX, mY, mR, 0x8410);
+
+    // Orbit Rings
+    spr->drawCircle(cx, cy, 54, 0x18E5);
+    spr->drawCircle(cx, cy, 76, 0x2167);
+    spr->drawCircle(cx, cy, 96, 0x29C9);
+
+    spr->fillCircle(cx, cy, 7, 0xFD20);
+    spr->fillCircle(cx, cy, 5, 0xFFE0);
+
+    // Hour Planet (Mars)
+    float hRad = ((aktuell->tm_hour % 12) + aktuell->tm_min / 60.0f) * 30.0f * DEG2RAD - 1.5707963f;
+    int hX = cx + (int)(54.0f * cosf(hRad)), hY = cy + (int)(54.0f * sinf(hRad));
+    spr->fillCircle(hX, hY, 5, 0xF800);
+    spr->drawCircle(hX, hY, 6, 0xFFFF);
+
+    // Minute Planet (Earth)
+    float mRad = (aktuell->tm_min + aktuell->tm_sec / 60.0f) * 6.0f * DEG2RAD - 1.5707963f;
+    int minX = cx + (int)(76.0f * cosf(mRad)), minY = cy + (int)(76.0f * sinf(mRad));
+    spr->fillCircle(minX, minY, 5, 0x07FF);
+    spr->drawCircle(minX, minY, 6, 0xFFFF);
+
+    // Seconds Satellite
+    float sRad = aktuell->tm_sec * 6.0f * DEG2RAD - 1.5707963f;
+    int sX = cx + (int)(96.0f * cosf(sRad)), sY = cy + (int)(96.0f * sinf(sRad));
+    spr->fillCircle(sX, sY, 3, 0xFFE0);
+
+    char tBuf[8]; snprintf(tBuf, sizeof(tBuf), "%02d:%02d", aktuell->tm_hour, aktuell->tm_min);
+    drawGlassCard(spr, cx - 38, cy + 18, 76, 22, 6, 0x39E7, 0x0821, 0x0008);
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(0xFFFF);
+    spr->drawString(tBuf, cx, cy + 29, 2);
+
+    const char* phaseNames[8] = {"Neumond", "Zunehmend", "1. Viertel", "Zunehmend", "Vollmond", "Abnehmend", "Letztes V.", "Abnehmend"};
+    int pIdx = (int)((moonAge / 29.53058867f) * 8.0f) % 8;
+    char moonPill[36];
+    snprintf(moonPill, sizeof(moonPill), "%s · Tag %.1f", phaseNames[pIdx], moonAge);
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(0xCE79, 0x0008);
+    spr->drawString(moonPill, cx, cy + 68, 1);
+
+    char bStp[32];
+    snprintf(bStp, sizeof(bStp), "%d%% Akku · %d Schritte", akku, stepCount);
+    spr->setTextColor(0x07FF, 0x0008);
+    spr->drawString(bStp, cx, cy + 82, 1);
+}
+
+void drawMinimalTypoWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg) {
+    if (!spr || spr->getPointer() == nullptr) return;
+    spr->fillSprite(0x0000);
+
+    // Left Micro-Pill Gauge (Battery)
+    int batH = 160;
+    int batFill = (akku * batH) / 100;
+    spr->fillRoundRect(12, 20, 4, batH, 2, 0x18C3);
+    uint16_t batCol = isChg ? 0x07FF : (akku > 25 ? 0x07E0 : 0xF800);
+    if (batFill > 2) spr->fillRoundRect(12, 20 + (batH - batFill), 4, batFill, 2, batCol);
+
+    // Right Micro-Pill Gauge (Steps)
+    int goal = (stepGoal > 0) ? stepGoal : 8000;
+    int stpH = 160;
+    int stpFill = (stepCount * stpH) / goal;
+    if (stpFill > stpH) stpFill = stpH;
+    spr->fillRoundRect(224, 20, 4, stpH, 2, 0x18C3);
+    if (stpFill > 2) spr->fillRoundRect(224, 20 + (stpH - stpFill), 4, stpFill, 2, 0xFD20);
+
+    // Giant Stacked Numerals
+    char hBuf[4]; snprintf(hBuf, sizeof(hBuf), "%02d", aktuell->tm_hour);
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(0xFFFF, 0x0000);
+    spr->drawString(hBuf, 120, 48, 7);
+
+    static const char* typoWdays[] = {"SO", "MO", "DI", "MI", "DO", "FR", "SA"};
+    char dLine[32];
+    snprintf(dLine, sizeof(dLine), "%s  %02d.%02d", typoWdays[aktuell->tm_wday % 7], aktuell->tm_mday, aktuell->tm_mon + 1);
+    drawGlassCard(spr, 36, 88, 168, 22, 6, 0x2965, 0x10A2, 0x0000);
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(0x07FF);
+    spr->drawString(dLine, 120, 99, 2);
+
+    char mBuf[4]; snprintf(mBuf, sizeof(mBuf), "%02d", aktuell->tm_min);
+    spr->setTextDatum(MC_DATUM);
+    spr->setTextColor(0xFD20, 0x0000);
+    spr->drawString(mBuf, 120, 150, 7);
+
+    int secX = 24 + (aktuell->tm_sec * 192) / 60;
+    spr->drawFastHLine(24, 196, 192, 0x18C3);
+    spr->fillCircle(secX, 196, 3, 0xF800);
 }
 
 void drawControlCenter(TFT_eSprite *spr, struct tm *aktuell) {
@@ -1651,17 +2175,23 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell) {
         }
 
         switch (activeFace) {
-            case FACE_ULTRA_DASH: drawUltraDashboard(spr, aktuell, getBattery(), isChargingCached(false)); break;
-            case FACE_CHRONO:     drawChronographWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
-            case FACE_CASIO:      drawRetroCasioWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
-            case FACE_LIFETIME:   drawLifetimeWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
-            case FACE_BAUHAUS:    drawBauhausWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
-            case FACE_CYBERPUNK:  drawCyberpunkWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
-            case FACE_WORDCLOCK:  drawWordClockWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
-            case FACE_FINANCE:    drawFinanceWatchface(spr, aktuell); break;
-            case FACE_CHILDREN:   drawChildrenWatchface(spr, aktuell); break;
-            case FACE_PARENTS:    drawParentsWatchface(spr, aktuell); break;
-            default:              drawUltraDashboard(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_ULTRA_DASH:     drawUltraDashboard(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_CHRONO:         drawChronographWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_CASIO:          drawRetroCasioWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_LIFETIME:       drawLifetimeWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_BAUHAUS:        drawBauhausWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_CYBERPUNK:      drawCyberpunkWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_WORDCLOCK:      drawWordClockWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_FINANCE:        drawFinanceWatchface(spr, aktuell); break;
+            case FACE_CHILDREN:       drawChildrenWatchface(spr, aktuell); break;
+            case FACE_PARENTS:        drawParentsWatchface(spr, aktuell); break;
+            case FACE_PILOT_FLIEGER:  drawPilotFliegerWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_DIVER_PRO:      drawDiverProWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_NEON_HORIZON:   drawNeonHorizonWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_RADAR_TACTICAL: drawRadarTacticalWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_ASTRO_ORBIT:    drawAstroOrbitWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            case FACE_MINIMAL_TYPO:   drawMinimalTypoWatchface(spr, aktuell, getBattery(), isChargingCached(false)); break;
+            default:                  drawUltraDashboard(spr, aktuell, getBattery(), isChargingCached(false)); break;
         }
     } 
     else if (page == 1 || page == FACE_FINANCE) {
@@ -1783,8 +2313,9 @@ void renderUI(unsigned long currentMillis) {
     }
 
     bool isAppActive = (curApp != nullptr);
-    bool isFinanceActive = (currentPage == 1 || (currentPage == 0 && !carouselOrder.empty() && carouselIndex >= 0 && carouselIndex < (int)carouselOrder.size() && carouselOrder[carouselIndex] == FACE_FINANCE));
-    bool fastRefresh = (isFinanceActive || isAppActive || isFlashlight); 
+    int curFace = (!carouselOrder.empty() && carouselIndex >= 0 && carouselIndex < (int)carouselOrder.size()) ? carouselOrder[carouselIndex] : 0;
+    bool isFastFace = (currentPage == 1 || (currentPage == 0 && (curFace == FACE_FINANCE || curFace == FACE_RADAR_TACTICAL)));
+    bool fastRefresh = (isFastFace || isAppActive || isFlashlight); 
     bool forceRender = (aktuell->tm_sec != lastSecond) 
                     || (fastRefresh && (currentMillis - lastFrame > (isFlashlight ? 40 : 50))) 
                     || (currentMillis < toastEndTime) 
@@ -1797,12 +2328,22 @@ void renderUI(unsigned long currentMillis) {
         // Vollbild-Flutlicht (Reines 240x240 Displaylicht ohne Header & Buttons)
         if (isFsLight) {
             uint16_t lightColor = TFT_WHITE;
+            static unsigned long lastStrobeMs = 0;
+            static bool strobeState = true;
             if (fsMode == 1) {
                 lightColor = 0xFFDE; // warmes gedaempftes Weiss
                 setBrightness(75);
             } else if (fsMode == 2) {
-                lightColor = (strobeTog == 1) ? TFT_WHITE : TFT_BLACK;
-                setBrightness((strobeTog == 1) ? 255 : 5);
+                // Echte 10 Hz Stroboskop-Frequenz (50ms hell / 50ms dunkel)
+                if (currentMillis - lastStrobeMs >= 50) {
+                    lastStrobeMs = currentMillis;
+                    strobeState = !strobeState;
+                }
+                lightColor = strobeState ? TFT_WHITE : TFT_BLACK;
+                setBrightness(strobeState ? 255 : 5);
+            } else if (fsMode == 3) {
+                lightColor = TFT_RED; // Rotlicht fuer Nachtsicht
+                setBrightness(255);
             } else {
                 lightColor = TFT_WHITE;
                 setBrightness(255);
