@@ -39,7 +39,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
 
       - name: Cache PlatformIO Core & Packages
         uses: actions/cache@v4
@@ -54,7 +53,7 @@ jobs:
       - name: Install PlatformIO
         run: |
           python -m pip install --upgrade pip
-          pip install --upgrade platformio
+          pip install -r requirements.txt
 
       - name: Compile WatchOS Firmware
         run: |
