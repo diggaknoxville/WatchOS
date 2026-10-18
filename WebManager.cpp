@@ -2387,40 +2387,123 @@ function activateFaceDirect(fid){
     }).catch(function(e){ alert('Fehler'); });
 }
 
+function loadOtaStatus() {
+    fetch('/api/ota/status').then(r => r.json()).then(d => {
+        var cb = document.getElementById('otaAutoCheckCb');
+        if (cb) cb.checked = d.auto_check;
+        var st = document.getElementById('ghReleaseStatus');
+        if (st && d.last_status && d.last_status !== 'Noch nicht geprüft') {
+            var isNew = d.update_available;
+            st.innerHTML = isNew ?
+                '<span class="badge" style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:4px;font-weight:700;">🚀 UPDATE VERFÜGBAR: v' + (d.remote_version || '') + ' (' + (d.remote_commit || '') + ')</span>' :
+                '<span class="badge" style="background:var(--good);color:#fff;padding:3px 8px;border-radius:4px;">🟢 ' + d.last_status + '</span>';
+        }
+    }).catch(function(){});
+}
+
+function toggleOtaAutoCheck(checked) {
+    fetch('/api/ota/settings?auto=' + (checked ? '1' : '0'), {method: 'POST'})
+    .then(r => r.json())
+    .then(d => { showToastMsg && showToastMsg('Auto-Update Check ' + (checked ? 'aktiviert' : 'deaktiviert')); });
+}
+
 function checkGitHubRelease(){
     var st = document.getElementById('ghReleaseStatus');
     var det = document.getElementById('ghReleaseDetails');
     if (st) st.textContent = 'Suche nach Releases auf GitHub...';
-    fetch('https://api.github.com/repos/diggaknoxville/WatchOS/releases/latest', {cache: 'no-store'})
-    .then(r => {
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        return r.json();
-    }).then(d => {
-        var remoteTag = d.tag_name || 'unbekannt';
-        var currentVer = 'v' + ('2.4.0');
-        var isNewer = (remoteTag !== currentVer && remoteTag !== 'latest');
+
+    // 1. Check auf der Watch anstoßen
+    fetch('/api/ota/check', {method: 'POST'})
+    .then(r => r.json())
+    .catch(function(){ return {success: false}; })
+    .then(function() {
+        // 2. Parallel auch direkt per Browser version.json abfragen (funktioniert auch im Hotspot-Modus mit mobilem Datennetz)
+        return fetch('https://raw.githubusercontent.com/diggaknoxville/WatchOS/main/version.json?t=' + Date.now(), {cache: 'no-store'})
+            .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .catch(function(){
+                return fetch('https://api.github.com/repos/diggaknoxville/WatchOS/releases/latest', {cache: 'no-store'})
+                    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+            });
+    })
+    .then(d => {
+        var remoteVer = d.version || d.tag_name || 'unbekannt';
+        var remoteCommit = d.commit || '';
+        var curVer = (document.getElementById('ota_cur_ver') || {}).innerText || '';
+        var curCommit = (document.getElementById('ota_cur_commit') || {}).innerText || '';
+
+        var isNewer = (remoteCommit.length > 0 && curCommit.indexOf(remoteCommit) === -1) ||
+                      (remoteVer !== curVer && remoteVer !== 'latest');
+
         if (st) {
             st.innerHTML = isNewer ? 
-                '<span class="badge" style="background:var(--accent);color:#fff;padding:3px 8px;border-radius:4px;">NEUE VERSION VERFÜGBAR: ' + remoteTag + '</span>' :
-                '<span class="badge" style="background:var(--good);color:#fff;padding:3px 8px;border-radius:4px;">Aktuell (Installiert: ' + currentVer + ')</span>';
+                '<span class="badge" style="background:var(--accent);color:#fff;padding:4px 10px;border-radius:4px;font-weight:700;">🚀 NEUE VERSION VERFÜGBAR: ' + remoteVer + (remoteCommit ? ' (' + remoteCommit + ')' : '') + '</span>' :
+                '<span class="badge" style="background:var(--good);color:#fff;padding:4px 10px;border-radius:4px;">🟢 Aktuell auf dem neuesten Stand</span>';
         }
         if (det) {
             det.style.display = 'block';
-            var binAsset = (d.assets || []).find(a => a.name.endsWith('.bin'));
-            var binUrl = binAsset ? binAsset.browser_download_url : (d.html_url || '#');
-            det.innerHTML = '<b>' + (d.name || remoteTag) + '</b> (' + (d.published_at ? d.published_at.substring(0, 10) : '') + ')<br>' +
-                            '<div class="hint" style="margin:6px 0;">' + (d.body ? d.body.replace(/\\n/g, '<br>') : 'Keine Release-Notes vorhanden.') + '</div>' +
-                            (binAsset ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">' +
-                                        '<button type="button" class="btn btn-green" style="margin:0;padding:7px 14px;font-weight:700;" onclick="installReleaseDirect(\'' + binUrl + '\')">🚀 Direkt auf Uhr installieren</button>' +
-                                        '<a href="' + binUrl + '" class="btn" style="margin:0;padding:7px 12px;text-decoration:none;" target="_blank">📥 .bin herunterladen (' + (binAsset.size/1024).toFixed(0) + ' KB)</a></div>' : '');
+            var binUrl = 'https://github.com/diggaknoxville/WatchOS/releases/latest/download/firmware.bin';
+            var dateStr = d.build_date ? d.build_date.substring(0, 10) : (d.published_at ? d.published_at.substring(0, 10) : '');
+            var sizeMb = d.bin_size_bytes ? (d.bin_size_bytes / 1048576).toFixed(2) + ' MB' : '';
+            var sha = d.sha256 || '';
+
+            det.innerHTML = '<div style="margin-bottom:8px;"><b>Version:</b> ' + remoteVer + (remoteCommit ? ' <code style="background:var(--surface-2);padding:1px 4px;border-radius:3px;">' + remoteCommit + '</code>' : '') + 
+                            (dateStr ? ' &nbsp;•&nbsp; <b>Datum:</b> ' + dateStr : '') + 
+                            (sizeMb ? ' &nbsp;•&nbsp; <b>Größe:</b> ' + sizeMb : '') + '</div>' +
+                            (sha ? '<div style="font-family:monospace;font-size:10.5px;color:var(--muted);word-break:break-all;margin-bottom:10px;">SHA-256: ' + sha + '</div>' : '') +
+                            '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">' +
+                            '<button type="button" class="btn btn-green" style="margin:0;padding:7px 14px;font-weight:700;" onclick="startWatchCloudOTA()">⚡ 1-Klick Cloud-Update (Uhr lädt direkt)</button>' +
+                            '<button type="button" class="btn btn-blue" style="margin:0;padding:7px 12px;" onclick="installReleaseDirect(\'' + binUrl + '\')">🌐 Browser-Relay Flash</button>' +
+                            '<a href="' + binUrl + '" class="btn" style="margin:0;padding:7px 12px;text-decoration:none;" target="_blank">📥 .bin herunterladen</a>' +
+                            '</div>';
         }
-    }).catch(function(err){
-        if (st) st.textContent = 'GitHub Release Check: Keine Verbindung oder Rate-Limit (' + err.message + ')';
+    })
+    .catch(err => {
+        if (st) st.textContent = 'Release Check fehlgeschlagen (' + err.message + ')';
+    });
+}
+
+function startWatchCloudOTA() {
+    if (!confirm('Möchtest du, dass die WatchOS-Uhr die neueste Firmware selbstständig via WLAN aus dem GitHub Release lädt und installiert?')) return;
+    var st = document.getElementById('ghReleaseStatus');
+    if (st) st.innerHTML = '<span style="color:var(--accent);font-weight:700;">Die Uhr lädt die Firmware herunter und flasht sie... Bitte Display der Uhr beachten!</span>';
+    
+    var prog = document.getElementById('otaprog');
+    var pCont = document.getElementById('otaprog-container');
+    if (pCont) pCont.style.display = 'block';
+    if (prog) {
+        prog.style.width = '100%';
+        prog.style.background = 'var(--accent)';
+        prog.textContent = 'Cloud-Update läuft auf der Uhr...';
+    }
+
+    fetch('/api/ota/cloud_update', {method: 'POST'})
+    .then(r => r.json())
+    .then(d => {
+        var secsLeft = 20;
+        var timer = setInterval(function() {
+            secsLeft--;
+            if (st) st.innerHTML = '<span style="color:var(--accent);font-weight:700;">Flashen & Neustart... Automatischer Reconnect in ' + secsLeft + 's</span>';
+            if (secsLeft <= 0) {
+                clearInterval(timer);
+                if (st) st.innerHTML = '<span style="color:var(--good);font-weight:700;">Verbinde neu mit WatchOS...</span>';
+                var poll = setInterval(function() {
+                    fetch('/api/ota/status', {cache: 'no-store'}).then(function(res) {
+                        if (res.ok) {
+                            clearInterval(poll);
+                            window.location.reload();
+                        }
+                    }).catch(function(){});
+                }, 2000);
+            }
+        }, 1000);
+    })
+    .catch(err => {
+        if (st) st.innerHTML = '<span style="color:var(--danger);">Konnte Cloud-Update nicht starten: ' + err.message + '</span>';
     });
 }
 
 function installReleaseDirect(url) {
-    if (!confirm('Neueste Firmware direkt aus dem GitHub Release auf die Uhr übertragen und flashen?')) return;
+    if (!confirm('Neueste Firmware direkt aus dem GitHub Release über den Browser auf die Uhr übertragen und flashen?')) return;
     var st = document.getElementById('ghReleaseStatus');
     if (st) st.innerHTML = '<span style="color:var(--accent);font-weight:700;">Lade Firmware von GitHub herunter...</span>';
     var prog = document.getElementById('otaprog');
@@ -3470,7 +3553,7 @@ function resetPackagesApi() {
     s += tr(sysLang, "2FA & Mitteilungen", "2FA & Alerts", "2FA & Notifs");
     s += F("</div><div class='tab' onclick='showTab(\"p_apps\", this);document.querySelector(\".tabs\").classList.remove(\"open\");loadPackagesList();'>");
     s += tr(sysLang, "Pakete & Apps", "Packages & Apps", "Paquets & Apps");
-    s += F("</div><div class='tab' onclick='showTab(\"p6\", this);document.querySelector(\".tabs\").classList.remove(\"open\")'>");
+    s += F("</div><div class='tab' onclick='showTab(\"p6\", this);document.querySelector(\".tabs\").classList.remove(\"open\");loadOtaStatus();'>");
     s += tr(sysLang, "Update", "Update", "Mise a jour");
     s += F("</div></div>");
 
@@ -4183,18 +4266,24 @@ function resetPackagesApi() {
 
     // 6. UPDATE
     s += F("<div id='p6' class='panel'><h3>"); s += tr(sysLang, "Firmware Update &amp; CI/CD", "Firmware Update &amp; CI/CD", "Mise a jour Firmware &amp; CI/CD"); s += F("</h3>");
-    s += F("<p>"); s += tr(sysLang, "WatchOS Version", "WatchOS Version", "Version WatchOS"); s += F(": <b id='ota_cur_ver' style='color:#ffb020;'>v"); s += WATCHOS_VERSION; s += F("</b><br>Build: <b style='color:#ffb020;'>");
-    s += String(__DATE__) + " - " + String(__TIME__);
-    s += F("</b></p>");
+    s += F("<div style='background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:14px;'>");
+    s += F("<div style='display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;'>");
+    s += F("<div><span style='font-size:12px;color:var(--muted);'>Installierte Version</span><br><b id='ota_cur_ver' style='font-size:16px;color:var(--accent);'>v"); s += WATCHOS_VERSION; s += F("</b> &nbsp;<code id='ota_cur_commit' style='background:var(--surface-2);padding:2px 6px;border-radius:4px;'>"); s += WATCHOS_BUILD_COMMIT; s += F("</code></div>");
+    s += F("<div><span style='font-size:12px;color:var(--muted);'>Kompiliert am</span><br><span style='font-size:13px;'>"); s += String(WATCHOS_BUILD_DATE); s += F("</span></div>");
+    s += F("</div></div>");
 
     // GitHub Releases / Auto-Update Block
     s += F("<div class='card' style='background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:14px;margin:12px 0;'>");
     s += F("<div style='display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;'>");
-    s += F("<div><b style='font-size:14px;'>GitHub Releases &amp; CI/CD Auto-Update</b><div class='hint' style='font-size:11.5px;margin-top:2px;'>Überwacht das GitHub Repository <code>diggaknoxville/WatchOS</code> auf automatische Firmware-Releases.</div></div>");
-    s += F("<button type='button' class='btn' style='margin:0;padding:5px 12px;font-size:12px;' onclick='checkGitHubRelease()'>🔄 Auf Updates prüfen</button>");
-    s += F("</div><div id='ghReleaseStatus' style='margin-top:10px;font-size:12px;color:var(--text);'>Klicke auf 'Auf Updates prüfen' um den neuesten Build abzufragen.</div>");
-    s += F("<div id='ghReleaseDetails' style='display:none;margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;'></div>");
-    s += F("</div><hr><p>");
+    s += F("<div><b style='font-size:14px;'>GitHub Releases &amp; CI/CD Auto-Sync</b><div class='hint' style='font-size:11.5px;margin-top:2px;'>Überwacht das Repository <code>diggaknoxville/WatchOS</code> auf automatische Firmware-Releases.</div></div>");
+    s += F("<button type='button' class='btn btn-blue' style='margin:0;padding:6px 14px;font-size:12px;font-weight:700;' onclick='checkGitHubRelease()'>🔄 Auf Updates prüfen</button>");
+    s += F("</div><div id='ghReleaseStatus' style='margin-top:12px;font-size:12.5px;color:var(--text);'>Klicke auf 'Auf Updates prüfen' um den neuesten Build abzufragen.</div>");
+    s += F("<div id='ghReleaseDetails' style='display:none;margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:12px;'></div>");
+    s += F("<div style='margin-top:12px;padding-top:10px;border-top:1px solid var(--border);font-size:12px;'>");
+    s += F("<label style='display:inline-flex;align-items:center;gap:8px;cursor:pointer;'><input type='checkbox' id='otaAutoCheckCb' ");
+    if (otaAutoCheck) s += F("checked ");
+    s += F("onchange='toggleOtaAutoCheck(this.checked)'> Automatisch im Hintergrund bei Heim-WLAN auf neue GitHub-Releases prüfen</label>");
+    s += F("</div></div><hr><p>");
     s += tr(sysLang, "Manuelles Update: Waehle die kompilierte .bin Datei aus.", "Manual Update: Select the compiled .bin file.", "Mise a jour manuelle: Selectionnez le fichier .bin compile."); s += F("</p>");
     s += F("<input type='file' id='otafile' accept='.bin' onchange='updateOtaMeta()' style='background:var(--surface-2); color:var(--text); border:1px solid var(--border); padding:10px; margin:8px 0; border-radius:var(--radius-sm); width:100%; box-sizing:border-box;'><br>");
     s += F("<div id='ota_meta' style='font-size:12px; color:#bbb; margin:4px 0;'></div>");

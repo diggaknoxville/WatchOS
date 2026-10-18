@@ -62,6 +62,7 @@ uint16_t cBG, cFG, cAcc1, cAcc2, cBatBG;
 unsigned long time_dim_start = 10000, time_aod_start = 20000, time_sleep_start = 40000;  
 int bootMode = 0, aodMode = 0; int maxBright = 255, minBright = 10;
 bool aodActive = false, wlanActive = false, btActive = false, vibActive = true; 
+bool otaAutoCheck = true;
 String ntpServer = "pool.ntp.org", ntpZone = "CET-1CEST,M3.5.0,M10.5.0/3"; 
 
 struct tm zielZeit; int currentPage = 1, mainPage = 1, lastSecond = -1; 

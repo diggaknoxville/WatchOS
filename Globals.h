@@ -14,6 +14,22 @@
 #define MAX_HISTORY 200
 #define WATCHOS_VERSION "1.3.1"
 
+#if __has_include("BuildInfo.h")
+  #include "BuildInfo.h"
+#endif
+
+#ifndef WATCHOS_BUILD_COMMIT
+  #define WATCHOS_BUILD_COMMIT "99b78d1"
+#endif
+#ifndef WATCHOS_BUILD_DATE
+  #define WATCHOS_BUILD_DATE __DATE__ " " __TIME__
+#endif
+#ifndef WATCHOS_BUILD_VERSION
+  #define WATCHOS_BUILD_VERSION WATCHOS_VERSION
+#endif
+
+extern bool otaAutoCheck;
+
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
   #define INIT_BACKLIGHT_PWM(pin) do { ledcAttach(pin, 5000, 8); } while(0)
   #define WRITE_BACKLIGHT_PWM(pin, val) do { ledcWrite(pin, val); } while(0)

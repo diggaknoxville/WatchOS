@@ -319,6 +319,7 @@ void loadPreferences() {
     battRateNormal = prefs.getFloat("bRateN", battRateNormal); battRateHacking = prefs.getFloat("bRateH", battRateHacking); battRateCharging = prefs.getFloat("bRateC", battRateCharging);
     battSamplesNormal = prefs.getUShort("bSampN", 0); battSamplesHacking = prefs.getUShort("bSampH", 0); battSamplesCharging = prefs.getUShort("bSampC", 0);
     stepGoal = prefs.getInt("stepGoal", stepGoal);
+    otaAutoCheck = prefs.getBool("otaAuto", true);
 
     historyCount = prefs.getInt("hCount", 0);
     if (historyCount > 0 && historyCount <= MAX_HISTORY) {

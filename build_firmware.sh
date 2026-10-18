@@ -36,6 +36,21 @@ BUILD_PATH="$PROJECT_DIR/build/obj"
 CACHE_PATH="$PROJECT_DIR/build/cache"
 mkdir -p "$OUTPUT_DIR" "$BUILD_PATH" "$CACHE_PATH"
 
+VER=$(grep -E 'WATCHOS_VERSION' "$PROJECT_DIR/Globals.h" | head -1 | sed -E 's/.*"([^"]+)".*/\1/' || echo "1.3.1")
+COMMIT_HASH="${GITHUB_SHA:-$(git rev-parse HEAD 2>/dev/null || echo "unknown")}"
+COMMIT_SHORT=$(echo "$COMMIT_HASH" | cut -c1-7)
+BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+cat <<EOF > "$PROJECT_DIR/BuildInfo.h"
+// --- BuildInfo.h ---
+// Generated automatically during build process
+#pragma once
+
+#define WATCHOS_BUILD_COMMIT "$COMMIT_SHORT"
+#define WATCHOS_BUILD_DATE   "$BUILD_DATE"
+#define WATCHOS_BUILD_VERSION "$VER"
+EOF
+
 N_JOBS=$(nproc 2>/dev/null || echo 4)
 
 echo "[BUILD] Kompiliere WatchOS Firmware mit $CLI ($N_JOBS Jobs, Cache aktiviert)..."

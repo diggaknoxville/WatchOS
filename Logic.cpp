@@ -9,6 +9,7 @@
 #include "NotificationManager.h"
 #include "LoraManager.h"
 #include "AppManager.h"
+#include "UpdateOTA.h"
 #include <esp_sleep.h>
 #include <driver/i2s.h>
 #include <BLEDevice.h>
@@ -661,13 +662,14 @@ void checkBackgroundTasks(unsigned long currentMillis) {
     updateMotion(currentMillis); // Schrittzähler + Handgelenk-Wake (BMA423)
     refreshPowerTelemetry(false);
 
-    // Automatischer Hintergrund-NTP-Sync, wenn mit einem Heim-WLAN verbunden
+    // Automatischer Hintergrund-NTP-Sync und OTA Update-Check, wenn mit einem Heim-WLAN verbunden
     static unsigned long lastNtpAutoSync = 0;
     if (wlanActive && wlanClientMode && WiFi.status() == WL_CONNECTED) {
         if (lastNtpAutoSync == 0 || (currentMillis - lastNtpAutoSync > 1800000UL)) {
             lastNtpAutoSync = currentMillis;
             syncNtpTime(6);
         }
+        checkOtaAutoOnWifi();
     } else {
         lastNtpAutoSync = 0;
     }

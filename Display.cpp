@@ -8,6 +8,7 @@
 #include <WiFi.h>
 #include "LoraManager.h"
 #include "AppManager.h"
+#include "UpdateOTA.h"
 
 #define HEAD_H 34
 extern int getDecibels();
@@ -178,6 +179,14 @@ void drawHeader(struct tm *aktuell, int akku, bool charging) {
         hs.fillRect(gx - 1, gy + 3, 2, 3, 0xFD20);
         hs.fillRect(gx - 6, gy - 1, 3, 2, 0xFD20);
         hs.fillRect(gx + 3, gy - 1, 3, 2, 0xFD20);
+        curX += 13;
+    }
+    
+    // 3c. OTA UPDATE INDICATOR — Pfeil nach oben
+    if (cloudOta.updateAvailable) {
+        int ux = curX + 5, uy = cy + 6;
+        hs.fillTriangle(ux, uy - 4, ux - 4, uy + 1, ux + 4, uy + 1, COLOR_CYAN_TECH);
+        hs.fillRect(ux - 1, uy + 1, 3, 4, COLOR_CYAN_TECH);
         curX += 13;
     }
     
