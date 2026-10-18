@@ -2062,3 +2062,56 @@ void renderAOD() {
         tft.drawString(String(batPct) + "%", px, py, 4);
     }
 }
+
+void streamScreenBmp(WiFiClient &client) {
+    static const uint8_t bmpHeader[54] = {
+        'B', 'M',
+        0x36, 0xA3, 0x02, 0x00, // 172,854 bytes total file size
+        0x00, 0x00, 0x00, 0x00,
+        0x36, 0x00, 0x00, 0x00, // Offset to image data (54 bytes)
+        0x28, 0x00, 0x00, 0x00, // Header size (40 bytes)
+        0xF0, 0x00, 0x00, 0x00, // Width 240
+        0xF0, 0x00, 0x00, 0x00, // Height 240 (bottom-to-top)
+        0x01, 0x00,             // Planes 1
+        0x18, 0x00,             // 24 bits (RGB)
+        0x00, 0x00, 0x00, 0x00, // Compression: None
+        0x00, 0xA3, 0x02, 0x00, // Image size: 172,800 bytes
+        0x13, 0x0B, 0x00, 0x00, // 72 DPI
+        0x13, 0x0B, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00
+    };
+    client.write(bmpHeader, 54);
+
+    uint8_t rowChunk[720 * 4]; // 4 rows = 2880 bytes
+    int chunkRows = 4;
+    for (int yStart = 239; yStart >= 0; yStart -= chunkRows) {
+        int rCount = (yStart - chunkRows + 1 >= 0) ? chunkRows : (yStart + 1);
+        for (int r = 0; r < rCount; r++) {
+            int y = yStart - r;
+            uint8_t* out = rowChunk + r * 720;
+            const uint16_t* srcRow = nullptr;
+            if (cdSprite.height() >= 240) {
+                uint16_t* ptr = (uint16_t*)cdSprite.getPointer();
+                if (ptr) srcRow = ptr + y * 240;
+            } else if (y >= HEAD_H) {
+                uint16_t* ptr = (uint16_t*)cdSprite.getPointer();
+                if (ptr) srcRow = ptr + (y - HEAD_H) * 240;
+            } else if (headSpriteReady) {
+                uint16_t* ptr = (uint16_t*)headSprite.getPointer();
+                if (ptr) srcRow = ptr + y * 240;
+            }
+            if (srcRow) {
+                for (int x = 0; x < 240; x++) {
+                    uint16_t c = srcRow[x];
+                    out[x * 3 + 0] = (uint8_t)((c & 0x1F) << 3);         // Blue
+                    out[x * 3 + 1] = (uint8_t)(((c >> 5) & 0x3F) << 2);  // Green
+                    out[x * 3 + 2] = (uint8_t)(((c >> 11) & 0x1F) << 3); // Red
+                }
+            } else {
+                memset(out, 0, 720);
+            }
+        }
+        client.write(rowChunk, rCount * 720);
+    }
+}

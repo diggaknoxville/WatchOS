@@ -313,9 +313,11 @@ void spamBLE() {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
     };
     const uint8_t models[] = {0x02, 0x0e, 0x0a, 0x0f, 0x13, 0x14}; 
-    payload[6] = models[random(sizeof(models))];
-    
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+    oAdvertisementData.addData((char*)payload, sizeof(payload));
+#else
     oAdvertisementData.addData(std::string((char*)payload, sizeof(payload))); 
+#endif
     pAdvertising->setAdvertisementData(oAdvertisementData);
     pAdvertising->start();
     delay(20);
@@ -1326,6 +1328,205 @@ void handleTouchInput() {
                 handleAppTouch(curApp, lastX, touchY);
             }
             lastTouchTime = millis();
+        }
+    }
+}
+
+void simulateTap(int x, int y) {
+    lastTouchTime = millis();
+    lastX = constrain(x, 0, 239);
+    lastY = constrain(y, 0, 239);
+    int touchY = lastY - 34;
+    if (currentPage == 11) touchY = lastY;
+
+    AppPackage* curApp = AppManager::getAppByPage(currentPage);
+    bool isQSApp = (curApp && (curApp->id == "flashlight" || curApp->id == "battery"));
+
+    if (currentPage == 0) {
+        triggerVibration();
+        if (touchY <= 25 && lastX >= 80 && lastX <= 160 && NotificationManager::getUnreadCount() > 0) {
+            NotificationManager::markAllRead();
+            AppManager::launchAppById("notif");
+            lastSecond = -1;
+            return;
+        }
+        int activeFace = (!carouselOrder.empty() && carouselIndex >= 0 && carouselIndex < (int)carouselOrder.size()) ? carouselOrder[carouselIndex] : 0;
+        if (activeFace == FACE_ULTRA_DASH) {
+            if (touchY >= 116 && touchY <= 155 && lastX >= 98) {
+                AppManager::launchAppById("battery");
+                lastSecond = -1;
+                return;
+            }
+            if (touchY >= 74 && touchY <= 112 && lastX >= 98) {
+                showToastColor("Schritte: " + String(stepCount) + " / " + String(stepGoal), 2500, 0x07E0);
+                lastSecond = -1;
+                return;
+            }
+        } else if (activeFace == FACE_CHRONO) {
+            if (touchY >= 75 && touchY <= 130 && lastX >= 145 && lastX <= 198) {
+                AppManager::launchAppById("battery");
+                lastSecond = -1;
+                return;
+            }
+            if (touchY >= 75 && touchY <= 130 && lastX >= 42 && lastX <= 95) {
+                showToastColor("Schritte: " + String(stepCount) + " / " + String(stepGoal), 2500, 0x07E0);
+                lastSecond = -1;
+                return;
+            }
+        } else if (activeFace == FACE_CASIO) {
+            if (touchY >= 115 && lastX <= 115) {
+                AppManager::launchAppById("battery");
+                lastSecond = -1;
+                return;
+            }
+            if (touchY >= 115 && lastX > 115) {
+                showToastColor("Schritte: " + String(stepCount) + " / " + String(stepGoal), 2500, 0x07E0);
+                lastSecond = -1;
+                return;
+            }
+        } else if (activeFace == FACE_WORDCLOCK) {
+            struct tm t;
+            getLocalTime(&t, 0);
+            char tBuf[16];
+            snprintf(tBuf, sizeof(tBuf), "%02d:%02d:%02d", t.tm_hour, t.tm_min, t.tm_sec);
+            showToastColor(tBuf, 2500, 0x07FF);
+            lastSecond = -1;
+            return;
+        } else if (activeFace == FACE_CYBERPUNK) {
+            showToastColor("CPU " + String(ESP.getCpuFreqMHz()) + "MHz | " + String(ESP.getFreeHeap()/1024) + "K RAM", 2500, 0x07E0);
+            lastSecond = -1;
+            return;
+        } else if (activeFace == FACE_PARENTS || activeFace == FACE_CHILDREN) {
+            static bool parentModeProj = false;
+            parentModeProj = !parentModeProj;
+            showToastColor(parentModeProj ? "Projektions-Modus" : "Standard-Modus", 2000, 0x07FF);
+            lastSecond = -1;
+            return;
+        }
+    } else if (currentPage == 5) {
+        if (touchY <= 24) {
+            triggerVibration();
+            slideToPage(mainPage, 0, -1);
+            lastSecond = -1;
+            return;
+        }
+        if (touchY >= 22 && touchY <= 64) {
+            int bVal = map(lastX, 15, 225, 10, 255);
+            bVal = constrain(bVal, 10, 255);
+            maxBright = bVal;
+            setBrightness(maxBright);
+            prefs.begin("clock", false);
+            prefs.putInt("maxB", maxBright);
+            prefs.end();
+            triggerVibration();
+            lastSecond = -1;
+            return;
+        }
+        if (touchY >= 66 && touchY <= 110) {
+            if (lastX < 120) { triggerVibration(); toggleWLAN(); lastSecond = -1; return; }
+            else { triggerVibration(); toggleVibra(); lastSecond = -1; return; }
+        }
+        if (touchY >= 112 && touchY <= 156) {
+            if (lastX < 120) { triggerVibration(); AppManager::launchAppById("flashlight"); lastSecond = -1; return; }
+            else { triggerVibration(); toggleUsbHid(); lastSecond = -1; return; }
+        }
+        if (touchY >= 158) {
+            if (lastX < 120) { triggerVibration(); AppManager::launchAppById("lora"); lastSecond = -1; return; }
+            else { triggerVibration(); killAllApps(); lastSecond = -1; return; }
+        }
+    } else if (currentPage == 6 || currentPage == 22 || currentPage == 23) {
+        handleAppLauncherTouch(lastX, touchY);
+    } else if (curApp) {
+        if (curApp->id == "flashlight" || curApp->driver == "flashlight") {
+            if (AppManager::getAppStateBool(curApp->id, "fullscreen", false)) {
+                AppManager::setAppStateBool(curApp->id, "fullscreen", false);
+                triggerVibration();
+                lastSecond = -1;
+                return;
+            }
+        }
+        if (touchY <= 0) {
+            triggerVibration();
+            if (curApp->id == "mic" || curApp->driver == "mic") stopMic();
+            if (curApp->id == "flashlight" || curApp->driver == "flashlight") setBrightness(maxBright);
+            if (isQSApp) slideToPage(5, -1, 0);
+            else slideToPage(6, -1, 0);
+            return;
+        }
+        handleAppTouch(curApp, lastX, touchY);
+    }
+}
+
+void simulateSwipe(int dir) {
+    lastTouchTime = millis();
+    AppPackage* curApp = AppManager::getAppByPage(currentPage);
+    bool isApp = (curApp != nullptr);
+    bool isQSApp = (curApp && (curApp->id == "flashlight" || curApp->id == "battery"));
+
+    if (dir == 0) { // Swipe Left -> Nächstes Watchface / Navigation
+        if (currentPage == 0 || (currentPage >= 1 && currentPage <= 3)) {
+            if (!carouselOrder.empty()) {
+                carouselIndex = (carouselIndex + 1) % (int)carouselOrder.size();
+                triggerVibration();
+                slideToPage(0, -1, 0);
+                mainPage = 0;
+            }
+        } else if (isApp) {
+            triggerVibration();
+            if (curApp && (curApp->id == "mic" || curApp->driver == "mic")) stopMic();
+            if (curApp && (curApp->id == "flashlight" || curApp->driver == "flashlight")) setBrightness(maxBright);
+            if (isQSApp) slideToPage(5, -1, 0);
+            else slideToPage(6, -1, 0);
+        }
+    } else if (dir == 1) { // Swipe Right -> Vorheriges Watchface
+        if (currentPage == 0 || (currentPage >= 1 && currentPage <= 3)) {
+            if (!carouselOrder.empty()) {
+                carouselIndex = (carouselIndex - 1 + (int)carouselOrder.size()) % (int)carouselOrder.size();
+                triggerVibration();
+                slideToPage(0, 1, 0);
+                mainPage = 0;
+            }
+        } else if (isApp) {
+            triggerVibration();
+            if (curApp && (curApp->id == "mic" || curApp->driver == "mic")) stopMic();
+            if (curApp && (curApp->id == "flashlight" || curApp->driver == "flashlight")) setBrightness(maxBright);
+            if (isQSApp) slideToPage(5, 1, 0);
+            else slideToPage(6, 1, 0);
+        }
+    } else if (dir == 2) { // Swipe Up -> Launcher (Page 6) oder Kill App
+        if (currentPage == 0 || (currentPage >= 1 && currentPage <= 3)) {
+            triggerVibration();
+            slideToPage(6, 0, -1);
+        } else if (currentPage == 5) {
+            triggerVibration();
+            slideToPage(mainPage, 0, -1);
+        } else if (isApp) {
+            tft.fillRect(80, 0, 80, 40, TFT_RED);
+            tft.setTextDatum(MC_DATUM); tft.setTextColor(TFT_WHITE, TFT_RED);
+            tft.drawString("KILL", 120, 20, 2);
+            delay(200);
+            if (curApp) {
+                if (curApp->id == "mic" || curApp->driver == "mic") stopMic();
+                if (curApp->id == "flashlight" || curApp->driver == "flashlight") setBrightness(maxBright);
+                AppManager::stopJsApp(curApp);
+            }
+            triggerVibration();
+            if (isQSApp) slideToPage(5, 0, 1);
+            else slideToPage(6, 0, 1);
+        }
+    } else if (dir == 3) { // Swipe Down -> Quick Settings (Page 5)
+        if (currentPage == 0 || (currentPage >= 1 && currentPage <= 3)) {
+            triggerVibration();
+            slideToPage(5, 0, 1);
+        } else if (currentPage == 6) {
+            triggerVibration();
+            slideToPage(mainPage, 0, 1);
+        } else if (isApp) {
+            triggerVibration();
+            if (curApp && (curApp->id == "mic" || curApp->driver == "mic")) stopMic();
+            if (curApp && (curApp->id == "flashlight" || curApp->driver == "flashlight")) setBrightness(maxBright);
+            if (isQSApp) slideToPage(5, 0, 1);
+            else slideToPage(6, 0, 1);
         }
     }
 }

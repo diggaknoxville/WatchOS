@@ -26,3 +26,7 @@ void processProbeRing();
 // BLE Scanner
 void startBleScan();
 void stopBleScan();
+
+// Remote Web Interaction
+void simulateTap(int x, int y);
+void simulateSwipe(int dir);

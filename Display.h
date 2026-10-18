@@ -65,3 +65,6 @@ void renderPage(int page, TFT_eSprite *spr, struct tm *aktuell);
 void slideToPage(int newPage, int dx, int dy);
 void renderUI(unsigned long currentMillis);
 void renderAOD();
+
+#include <WiFiClient.h>
+void streamScreenBmp(WiFiClient &client);

@@ -2354,6 +2354,125 @@ function checkGitHubRelease(){
         if (st) st.textContent = 'GitHub Release Check: Keine Verbindung oder Rate-Limit (' + err.message + ')';
     });
 }
+var liveWatchTimer = null;
+var liveWatchStreaming = false;
+
+function refreshLiveWatch() {
+    var img = document.getElementById('liveWatchImg');
+    if (!img) return;
+    var t = Date.now();
+    var nImg = new Image();
+    nImg.onload = function() {
+        img.src = nImg.src;
+        var dot = document.getElementById('liveWatchDot');
+        if (dot) { dot.style.opacity = '1'; setTimeout(function(){ if (dot) dot.style.opacity = '0.3'; }, 250); }
+    };
+    nImg.src = '/api/screen.bmp?t=' + t;
+}
+
+function toggleLiveWatchStream() {
+    var btn = document.getElementById('liveWatchToggleBtn');
+    if (liveWatchStreaming) {
+        liveWatchStreaming = false;
+        if (liveWatchTimer) { clearInterval(liveWatchTimer); liveWatchTimer = null; }
+        if (btn) btn.innerHTML = '▶️ Live-Sync';
+    } else {
+        liveWatchStreaming = true;
+        refreshLiveWatch();
+        liveWatchTimer = setInterval(refreshLiveWatch, 1200);
+        if (btn) btn.innerHTML = '⏸️ Pause';
+    }
+}
+
+function remoteTouch(x, y) {
+    var st = document.getElementById('liveWatchStatus');
+    if (st) st.textContent = 'Tippe (' + Math.round(x) + ', ' + Math.round(y) + ')...';
+    fetch('/api/touch', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'x=' + Math.round(x) + '&y=' + Math.round(y)
+    }).then(r => r.json()).then(d => {
+        if (st) st.textContent = 'Tipp: OK (' + d.x + ', ' + d.y + ')';
+        setTimeout(refreshLiveWatch, 250);
+    }).catch(err => {
+        if (st) st.textContent = 'Tipp-Fehler: ' + err.message;
+    });
+}
+
+function remoteSwipe(dir) {
+    var st = document.getElementById('liveWatchStatus');
+    var label = dir === 'left' ? 'Links' : (dir === 'right' ? 'Rechts' : (dir === 'up' ? 'Hoch' : 'Runter'));
+    if (st) st.textContent = 'Wische ' + label + '...';
+    fetch('/api/swipe', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'dir=' + dir
+    }).then(r => r.json()).then(d => {
+        if (st) st.textContent = 'Wisch ' + label + ': OK';
+        setTimeout(refreshLiveWatch, 350);
+    }).catch(err => {
+        if (st) st.textContent = 'Wisch-Fehler: ' + err.message;
+    });
+}
+
+function initLiveWatchTouch() {
+    var img = document.getElementById('liveWatchImg');
+    if (!img || img.__touchInit) return;
+    img.__touchInit = true;
+    var startX = 0, startY = 0, startTime = 0;
+    
+    img.addEventListener('mousedown', function(e) {
+        var rect = img.getBoundingClientRect();
+        startX = ((e.clientX - rect.left) / rect.width) * 240;
+        startY = ((e.clientY - rect.top) / rect.height) * 240;
+        startTime = Date.now();
+    });
+    
+    img.addEventListener('mouseup', function(e) {
+        var rect = img.getBoundingClientRect();
+        var endX = ((e.clientX - rect.left) / rect.width) * 240;
+        var endY = ((e.clientY - rect.top) / rect.height) * 240;
+        var diffX = endX - startX;
+        var diffY = endY - startY;
+        var dt = Date.now() - startTime;
+        
+        if (Math.abs(diffX) > 35 && Math.abs(diffX) > Math.abs(diffY) && dt < 800) {
+            remoteSwipe(diffX > 0 ? 'right' : 'left');
+        } else if (Math.abs(diffY) > 35 && Math.abs(diffY) > Math.abs(diffX) && dt < 800) {
+            remoteSwipe(diffY > 0 ? 'down' : 'up');
+        } else {
+            remoteTouch(endX, endY);
+        }
+    });
+
+    img.addEventListener('touchstart', function(e) {
+        if (e.touches.length === 1) {
+            var rect = img.getBoundingClientRect();
+            startX = ((e.touches[0].clientX - rect.left) / rect.width) * 240;
+            startY = ((e.touches[0].clientY - rect.top) / rect.height) * 240;
+            startTime = Date.now();
+        }
+    }, {passive: true});
+
+    img.addEventListener('touchend', function(e) {
+        if (e.changedTouches.length === 1) {
+            var rect = img.getBoundingClientRect();
+            var endX = ((e.changedTouches[0].clientX - rect.left) / rect.width) * 240;
+            var endY = ((e.changedTouches[0].clientY - rect.top) / rect.height) * 240;
+            var diffX = endX - startX;
+            var diffY = endY - startY;
+            var dt = Date.now() - startTime;
+            
+            if (Math.abs(diffX) > 35 && Math.abs(diffX) > Math.abs(diffY) && dt < 800) {
+                remoteSwipe(diffX > 0 ? 'right' : 'left');
+            } else if (Math.abs(diffY) > 35 && Math.abs(diffY) > Math.abs(diffX) && dt < 800) {
+                remoteSwipe(diffY > 0 ? 'down' : 'up');
+            } else {
+                remoteTouch(endX, endY);
+            }
+        }
+    }, {passive: true});
+}
 function fsSizeStr(b){
     if(b < 1024) return b + ' B';
     if(b < 1024*1024) return (b/1024).toFixed(1) + ' KB';
@@ -2739,6 +2858,7 @@ window.onload = function() {
     refreshLoraApi();
     loadPackagesList();
     loadCarouselData();
+    initLiveWatchTouch();
     fetch('/api/watchface').then(r=>r.json()).then(d=>{ if(d.mode!==undefined) updateWfUI(d.mode); }).catch(function(){});
 };
 function syncTitle(id, val) { document.getElementById(id).innerText = val; }
@@ -3268,6 +3388,63 @@ function resetPackagesApi() {
     s += F("<div class='ring-mini'><div class='rwrap'><svg width='72' height='72' viewBox='0 0 72 72'><circle class='track' cx='36' cy='36' r='30'></circle><circle class='val' id='ringNvs' cx='36' cy='36' r='30' style='stroke:var(--accent)'></circle></svg><div class='rc' id='ringNvsTxt'>--%</div></div><div class='lbl'>"); s += tr(sysLang, "NVS frei", "NVS free", "NVS libre"); s += F("</div><div class='sub' id='nvsSub'>--</div></div>");
     s += F("</div><button type='button' class='details-btn' id='openStorage'>"); s += tr(sysLang, "Speicherinhalt anzeigen…", "Show storage contents…", "Afficher le contenu…"); s += F("</button></div>");
     s += F("</div>"); // .hero
+
+    // Live Watch Display & Fernbedienung
+    s += F("<div class='card' style='margin-top:16px;'>");
+    s += F("<div style='display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:14px;'>");
+    s += F("<div><h2 style='margin:0;'><svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' style='width:20px;height:20px;vertical-align:middle;margin-right:6px;'><rect x='5' y='2' width='14' height='20' rx='4'/><line x1='12' y1='18' x2='12.01' y2='18'/></svg> ");
+    s += tr(sysLang, "Live Display &amp; Fernbedienung", "Live Display &amp; Remote Control", "Écran en direct &amp; Télécommande");
+    s += F("</h2><div class='hint'>");
+    s += tr(sysLang, "Echtzeit-Bildschirm der T-Watch S3 (240x240 px) mit Touch- &amp; Gesten-Steuerung", "Realtime screen mirror of T-Watch S3 (240x240 px) with touch &amp; gesture remote control", "Miroir d'écran en direct (240x240 px) avec contrôle tactile &amp; gestuel");
+    s += F("</div></div>");
+    s += F("<div style='display:flex;gap:8px;align-items:center;'>");
+    s += F("<button type='button' class='btn' id='liveWatchToggleBtn' style='margin:0;padding:6px 12px;font-size:12.5px;' onclick='toggleLiveWatchStream()'>");
+    s += tr(sysLang, "▶️ Live-Sync", "▶️ Live-Sync", "▶️ Synchronisation");
+    s += F("</button>");
+    s += F("<button type='button' class='btn btn-gray' style='margin:0;padding:6px 10px;font-size:12.5px;' onclick='refreshLiveWatch()' title='");
+    s += tr(sysLang, "Bild jetzt aktualisieren", "Refresh frame now", "Rafraîchir maintenant");
+    s += F("'>🔄</button>");
+    s += F("</div></div>");
+    s += F("<div style='display:flex;flex-wrap:wrap;gap:24px;align-items:center;justify-content:center;'>");
+    s += F("<div style='position:relative;background:#18181b;padding:14px;border-radius:36px;box-shadow:0 10px 25px rgba(0,0,0,0.5), inset 0 0 0 3px #3f3f46;'>");
+    s += F("<div style='position:absolute;top:7px;left:50%;transform:translateX(-50%);width:28px;height:4px;background:#27272a;border-radius:2px;'></div>");
+    s += F("<img id='liveWatchImg' src='/api/screen.bmp' alt='Watch Screen' width='240' height='240' style='display:block;border-radius:24px;background:#000;cursor:crosshair;box-shadow:inset 0 0 10px rgba(0,0,0,0.8);' title='");
+    s += tr(sysLang, "Klicken zum Tippen oder Ziehen zum Wischen", "Click to tap or drag to swipe", "Cliquer pour appuyer ou glisser pour balayer");
+    s += F("'>");
+    s += F("<div id='liveWatchDot' style='position:absolute;bottom:8px;right:16px;width:8px;height:8px;border-radius:50%;background:var(--accent);opacity:0.3;transition:opacity 0.3s;'></div>");
+    s += F("</div>");
+    s += F("<div style='flex:1;min-width:240px;max-width:320px;'>");
+    s += F("<div class='hint' style='margin-bottom:10px;'><b>");
+    s += tr(sysLang, "Gesten-Fernbedienung", "Gesture Remote", "Télécommande gestuelle");
+    s += F("</b> (");
+    s += tr(sysLang, "oder direkt auf dem Display wischen/tippen", "or swipe/tap directly on the screen", "ou glisser/appuyer directement sur l'écran");
+    s += F("):</div>");
+    s += F("<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:12px;'>");
+    s += F("<div></div>");
+    s += F("<button type='button' class='btn' style='margin:0;padding:8px 4px;' onclick='remoteSwipe(\"up\")' title='");
+    s += tr(sysLang, "Launcher öffnen / App schließen", "Open launcher / Close app", "Ouvrir le lanceur / Fermer l'app");
+    s += F("'>⬆️ Launcher</button>");
+    s += F("<div></div>");
+    s += F("<button type='button' class='btn' style='margin:0;padding:8px 4px;' onclick='remoteSwipe(\"right\")' title='");
+    s += tr(sysLang, "Vorheriges Watchface", "Previous Watchface", "Cadran précédent");
+    s += F("'>⬅️ "); s += tr(sysLang, "Zurück", "Back", "Retour"); s += F("</button>");
+    s += F("<button type='button' class='btn' style='margin:0;padding:8px 4px;background:var(--surface-2);' onclick='remoteTouch(120, 120)' title='");
+    s += tr(sysLang, "Display-Mitte antippen", "Tap screen center", "Appuyer au centre");
+    s += F("'>🔘 "); s += tr(sysLang, "Tipp", "Tap", "Toucher"); s += F("</button>");
+    s += F("<button type='button' class='btn' style='margin:0;padding:8px 4px;' onclick='remoteSwipe(\"left\")' title='");
+    s += tr(sysLang, "Nächstes Watchface", "Next Watchface", "Cadran suivant");
+    s += F("'>"); s += tr(sysLang, "Vor", "Next", "Suivant"); s += F(" ➡️</button>");
+    s += F("<div></div>");
+    s += F("<button type='button' class='btn' style='margin:0;padding:8px 4px;' onclick='remoteSwipe(\"down\")' title='");
+    s += tr(sysLang, "Quick Settings / Schnellmenü", "Quick Settings", "Paramètres rapides");
+    s += F("'>⬇️ Settings</button>");
+    s += F("<div></div>");
+    s += F("</div>");
+    s += F("<div style='background:var(--surface-2);padding:8px 12px;border-radius:6px;font-size:12px;color:var(--muted);'>");
+    s += tr(sysLang, "Status", "Status", "Statut"); s += F(": <span id='liveWatchStatus' style='color:var(--text);font-family:monospace;'>");
+    s += tr(sysLang, "Bereit", "Ready", "Prêt"); s += F("</span>");
+    s += F("</div></div>");
+    s += F("</div></div>");
 
     // Watchface & Karussell Info Card (Link zu Anzeige)
     s += F("<div class='card' style='margin-top:16px;'>");
@@ -4670,6 +4847,35 @@ void setupServerRoutes() {
             return;
         }
         server.send(400, "application/json", "{\"status\":\"error\",\"msg\":\"Ungueltige Parameter\"}");
+    });
+
+    // --- Live Screen & Remote Control API ---
+    server.on("/api/screen.bmp", HTTP_GET, []() {
+        if (!checkAdminAccess()) return;
+        server.setContentLength(172854);
+        server.send(200, "image/bmp", "");
+        WiFiClient client = server.client();
+        streamScreenBmp(client);
+    });
+
+    server.on("/api/touch", HTTP_POST, []() {
+        if (!checkAdminAccess()) return;
+        int x = server.hasArg("x") ? server.arg("x").toInt() : 120;
+        int y = server.hasArg("y") ? server.arg("y").toInt() : 120;
+        simulateTap(x, y);
+        server.send(200, "application/json", "{\"status\":\"ok\",\"x\":" + String(x) + ",\"y\":" + String(y) + "}");
+    });
+
+    server.on("/api/swipe", HTTP_POST, []() {
+        if (!checkAdminAccess()) return;
+        String dir = server.hasArg("dir") ? server.arg("dir") : "left";
+        int d = 0;
+        if (dir == "left") d = 0;
+        else if (dir == "right") d = 1;
+        else if (dir == "up") d = 2;
+        else if (dir == "down") d = 3;
+        simulateSwipe(d);
+        server.send(200, "application/json", "{\"status\":\"ok\",\"dir\":\"" + dir + "\"}");
     });
 
     // --- Smartphone BLE Pairing API ---
