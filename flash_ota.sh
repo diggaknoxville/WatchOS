@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
 set -e
 
-WATCH_IP="${1:-192.168.4.1}"
-BIN_FILE="build/esp32.esp32.twatchs3/WatchOS.ino.bin"
+WATCH_IP="${1:-192.168.1.169}"
+BIN_FILE="${2:-}"
+
+if [ -z "$BIN_FILE" ]; then
+    if [ -f "build_output/firmware.bin" ]; then
+        BIN_FILE="build_output/firmware.bin"
+    elif [ -f "build/esp32.esp32.twatchs3/WatchOS.ino.bin" ]; then
+        BIN_FILE="build/esp32.esp32.twatchs3/WatchOS.ino.bin"
+    else
+        BIN_FILE="build_output/firmware.bin"
+    fi
+fi
+
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 cd "$PROJECT_DIR"
@@ -11,18 +22,11 @@ cd "$PROJECT_DIR"
 NEED_BUILD=0
 if [ ! -f "$BIN_FILE" ]; then
     NEED_BUILD=1
-else
-    for SRC in $(find . -maxdepth 1 \( -name "*.cpp" -o -name "*.h" -o -name "*.ino" \)); do
-        if [ "$SRC" -nt "$BIN_FILE" ]; then
-            NEED_BUILD=1
-            break
-        fi
-    done
 fi
 
 if [ "$NEED_BUILD" -eq 1 ]; then
-    echo "[BUILD] Quellcode geändert, kompiliere neu..."
-    ./build_firmware.sh
+    echo "[BUILD] Binary nicht vorhanden, kompiliere neu..."
+    ./scripts/build_ci.sh
 fi
 
 if [ ! -f "$BIN_FILE" ]; then
@@ -51,7 +55,7 @@ fi
 
 echo "[OTA] Starte Firmware-Upload zu http://$WATCH_IP/update?size=$SIZE ..."
 rm -f /tmp/ota_response.txt
-HTTP_CODE=$(curl -s -w "%{http_code}" -o /tmp/ota_response.txt --max-time 180 -H "Expect:" -H "Connection: close" -F "update=@$BIN_FILE" "http://$WATCH_IP/update?size=$SIZE" || echo "000")
+HTTP_CODE=$(curl --limit-rate 80k --progress-bar -w "%{http_code}" -o /tmp/ota_response.txt --max-time 240 -H "Expect:" -H "Connection: close" -F "update=@$BIN_FILE" "http://$WATCH_IP/update?size=$SIZE" || echo "000")
 RESPONSE=$(cat /tmp/ota_response.txt 2>/dev/null || echo "FAIL")
 
 echo ""

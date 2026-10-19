@@ -9,7 +9,6 @@
 #include "NotificationManager.h"
 #include "LoraManager.h"
 #include "AppManager.h"
-#include "UpdateOTA.h"
 #include <esp_sleep.h>
 #include <driver/i2s.h>
 #include <BLEDevice.h>
@@ -314,11 +313,9 @@ void spamBLE() {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
     };
     const uint8_t models[] = {0x02, 0x0e, 0x0a, 0x0f, 0x13, 0x14}; 
-#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
-    oAdvertisementData.addData((char*)payload, sizeof(payload));
-#else
+    payload[6] = models[random(sizeof(models))];
+    
     oAdvertisementData.addData(std::string((char*)payload, sizeof(payload))); 
-#endif
     pAdvertising->setAdvertisementData(oAdvertisementData);
     pAdvertising->start();
     delay(20);
@@ -662,14 +659,13 @@ void checkBackgroundTasks(unsigned long currentMillis) {
     updateMotion(currentMillis); // Schrittzähler + Handgelenk-Wake (BMA423)
     refreshPowerTelemetry(false);
 
-    // Automatischer Hintergrund-NTP-Sync und OTA Update-Check, wenn mit einem Heim-WLAN verbunden
+    // Automatischer Hintergrund-NTP-Sync, wenn mit einem Heim-WLAN verbunden
     static unsigned long lastNtpAutoSync = 0;
     if (wlanActive && wlanClientMode && WiFi.status() == WL_CONNECTED) {
         if (lastNtpAutoSync == 0 || (currentMillis - lastNtpAutoSync > 1800000UL)) {
             lastNtpAutoSync = currentMillis;
             syncNtpTime(6);
         }
-        checkOtaAutoOnWifi();
     } else {
         lastNtpAutoSync = 0;
     }
@@ -872,13 +868,7 @@ void handlePowerManagement(unsigned long currentMillis) {
         } else if (hacksRunning) {
             powerState = 5;        // A: Hacks -> Stealth (Bildschirm aus, CPU an)
         } else if (wlanActive) {
-            // Wenn Hotspot ohne verbundenen Client in den Schlaf geht -> Hotspot abschalten,
-            // damit echter Hardware-Light-Sleep (State 4, ~3-5 mA statt ~110 mA) moeglich wird!
-            if (!wlanClientMode && WiFi.softAPgetStationNum() == 0) {
-                stopHotspotAP();
-            } else {
-                powerState = 5;    // Aktive Web-Session oder Client-Modus -> Hintergrund weiterlaufen lassen
-            }
+            powerState = 5;    // Aktive Web-Session oder Client-Modus -> Hintergrund weiterlaufen lassen (handleWlanIdleTimeout schaltet Hotspot bei Inaktivitaet nach 3 Min ab)
         }
     }
 
@@ -1018,11 +1008,13 @@ void handleTouchInput() {
     bool isApp = (curApp != nullptr); 
 
     if (isTouched) {
-        // Doppel-Tipp weckt aus AOD (State 3), Sleep (State 4) und Stealth (State 5)
+        // Jede Beruehrung weckt sofort aus AOD (State 3), Sleep (State 4) und Stealth (State 5) auf
         if (powerState == 3 || powerState == 4 || powerState == 5) { 
-            if (millis() - lastTapTime < 600) { lastTouchTime = millis(); } 
-            lastTapTime = millis(); 
-            delay(100); 
+            lastTouchTime = millis(); 
+            powerState = 1;
+            setBrightness(maxBright);
+            lastSecond = -1;
+            delay(50); 
             return; 
         } 
         else {
@@ -1187,41 +1179,33 @@ void handleTouchInput() {
                     }
                 } else if (activeFace == FACE_CHRONO) {
                     if (touchY >= 75 && touchY <= 130 && lastX >= 145 && lastX <= 198) {
-                        triggerVibration();
                         AppManager::launchAppById("battery");
                         lastSecond = -1;
                         return;
                     }
                     if (touchY >= 75 && touchY <= 130 && lastX >= 42 && lastX <= 95) {
-                        triggerVibration();
                         showToastColor("Schritte: " + String(stepCount) + " / " + String(stepGoal), 2500, 0x07E0);
                         lastSecond = -1;
                         return;
                     }
                 } else if (activeFace == FACE_CASIO) {
                     if (touchY >= 115 && lastX <= 115) {
-                        triggerVibration();
                         AppManager::launchAppById("battery");
                         lastSecond = -1;
                         return;
                     }
                     if (touchY >= 115 && lastX > 115) {
-                        triggerVibration();
                         showToastColor("Schritte: " + String(stepCount) + " / " + String(stepGoal), 2500, 0x07E0);
                         lastSecond = -1;
                         return;
                     }
                 } else if (activeFace == FACE_PARENTS) {
                     parentViewMode = 1 - parentViewMode;
-                    prefs.begin("clock", false);
-                    prefs.putInt("pViewM", parentViewMode);
-                    prefs.end();
                     triggerVibration();
                     showToast(parentViewMode == 0 ? "Eltern-Sicht" : "Kinder-Projektion", 1500);
                     lastSecond = -1;
                     return;
                 } else if (activeFace == FACE_CYBERPUNK) {
-                    triggerVibration();
                     if (touchY >= 135 && touchY <= 165) {
                         AppManager::launchAppById("battery");
                         lastSecond = -1;
@@ -1231,67 +1215,9 @@ void handleTouchInput() {
                     lastSecond = -1;
                     return;
                 } else if (activeFace == FACE_WORDCLOCK) {
-                    triggerVibration();
                     time_t nw; time(&nw); struct tm *tmN = localtime(&nw);
                     char tBuf[16]; snprintf(tBuf, sizeof(tBuf), "%02d:%02d:%02d", tmN->tm_hour, tmN->tm_min, tmN->tm_sec);
                     showToastColor(String(tBuf), 2000, 0xFFFF);
-                    lastSecond = -1;
-                } else if (activeFace == FACE_PILOT_FLIEGER) {
-                    triggerVibration();
-                    if (lastX >= 120) {
-                        AppManager::launchAppById("battery");
-                    } else {
-                        showToastColor("Schritte: " + String(stepCount) + " / " + String(stepGoal), 2000, 0x87F0);
-                    }
-                    lastSecond = -1;
-                    return;
-                } else if (activeFace == FACE_DIVER_PRO) {
-                    triggerVibration();
-                    if (lastX >= 150) {
-                        time_t nw; time(&nw); struct tm *tN = localtime(&nw);
-                        char dBuf[24]; snprintf(dBuf, sizeof(dBuf), "%02d.%02d.%04d", tN->tm_mday, tN->tm_mon + 1, tN->tm_year + 1900);
-                        showToastColor(dBuf, 2000, 0x07FF);
-                    } else {
-                        AppManager::launchAppById("battery");
-                    }
-                    lastSecond = -1;
-                    return;
-                } else if (activeFace == FACE_NEON_HORIZON) {
-                    triggerVibration();
-                    if (lastX >= 150) {
-                        showToastColor("Boost: " + String(stepCount) + " Steps", 2000, 0xF81F);
-                    } else if (lastX <= 90) {
-                        AppManager::launchAppById("battery");
-                    } else {
-                        showToastColor("OUTRUN 1984 // SYNTHWAVE", 2000, 0x07FF);
-                    }
-                    lastSecond = -1;
-                    return;
-                } else if (activeFace == FACE_RADAR_TACTICAL) {
-                    triggerVibration();
-                    showToastColor("RADAR: GRID 48N 11E // SEC:OK", 2000, 0x07E0);
-                    lastSecond = -1;
-                    return;
-                } else if (activeFace == FACE_ASTRO_ORBIT) {
-                    triggerVibration();
-                    time_t jetzt; time(&jetzt);
-                    double mAge = fmod((double)(jetzt - 1704974220) / 86400.0, 29.53058867);
-                    if (mAge < 0) mAge += 29.53058867;
-                    char mToast[36]; snprintf(mToast, sizeof(mToast), "Mond: Tag %.1f (%.0f%%)", mAge, (mAge/29.53f)*100.0f);
-                    showToastColor(mToast, 2200, 0xCE79);
-                    lastSecond = -1;
-                    return;
-                } else if (activeFace == FACE_MINIMAL_TYPO) {
-                    triggerVibration();
-                    if (lastX <= 50) {
-                        AppManager::launchAppById("battery");
-                    } else if (lastX >= 190) {
-                        showToastColor("Schritte: " + String(stepCount), 2000, 0xFD20);
-                    } else {
-                        time_t nw; time(&nw); struct tm *tN = localtime(&nw);
-                        char tBuf[16]; snprintf(tBuf, sizeof(tBuf), "%02d:%02d:%02d", tN->tm_hour, tN->tm_min, tN->tm_sec);
-                        showToastColor(tBuf, 2000, 0xFFFF);
-                    }
                     lastSecond = -1;
                     return;
                 }
@@ -1300,9 +1226,6 @@ void handleTouchInput() {
             }
             else if (currentPage == 3) {
                 parentViewMode = 1 - parentViewMode;
-                prefs.begin("clock", false);
-                prefs.putInt("pViewM", parentViewMode);
-                prefs.end();
                 triggerVibration();
                 showToast(parentViewMode == 0 ? "Eltern-Sicht" : "Kinder-Projektion", 1500);
                 lastSecond = -1;
@@ -1382,44 +1305,7 @@ void handleTouchInput() {
                     if (AppManager::getAppStateBool(curApp->id, "fullscreen", false)) {
                         // Bei Tippen auf Vollbild-Taschenlampe: Zurueck ins Einstellungsmenue wechseln!
                         AppManager::setAppStateBool(curApp->id, "fullscreen", false);
-                        setBrightness(maxBright);
                         triggerVibration();
-                        lastSecond = -1;
-                        return;
-                    }
-                    // Native C++ Button-Abfrage fuer die Taschenlampen-Knoepfe:
-                    if (touchY >= 66 && touchY <= 104) {
-                        // WEISS VOLLBILD (100%)
-                        AppManager::setAppStateInt(curApp->id, "curModeIdx", 0);
-                        AppManager::setAppStateBool(curApp->id, "fullscreen", true);
-                        setBrightness(255);
-                        triggerVibration();
-                        lastSecond = -1;
-                        return;
-                    } else if (touchY >= 108 && touchY <= 146) {
-                        if (lastX < 120) {
-                            // GEDÄMPFT (30%)
-                            AppManager::setAppStateInt(curApp->id, "curModeIdx", 1);
-                            AppManager::setAppStateBool(curApp->id, "fullscreen", true);
-                            setBrightness(75);
-                            triggerVibration();
-                            lastSecond = -1;
-                            return;
-                        } else {
-                            // STROBO (10Hz)
-                            AppManager::setAppStateInt(curApp->id, "curModeIdx", 2);
-                            AppManager::setAppStateBool(curApp->id, "fullscreen", true);
-                            triggerVibration();
-                            lastSecond = -1;
-                            return;
-                        }
-                    } else if (touchY >= 150 && touchY <= 190) {
-                        // BEENDEN
-                        AppManager::setAppStateBool(curApp->id, "fullscreen", false);
-                        setBrightness(maxBright);
-                        triggerVibration();
-                        if (isQSApp) slideToPage(5, -1, 0);
-                        else slideToPage(6, -1, 0);
                         lastSecond = -1;
                         return;
                     }
@@ -1438,9 +1324,7 @@ void handleTouchInput() {
             lastTouchTime = millis();
         }
     }
-}
-
-void simulateTap(int x, int y) {
+}void simulateTap(int x, int y) {
     lastTouchTime = millis();
     lastX = constrain(x, 0, 239);
     lastY = constrain(y, 0, 239);

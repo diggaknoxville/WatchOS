@@ -25,11 +25,60 @@ void applyTheme() {
 }
 void setBrightness(int b) { WRITE_BACKLIGHT_PWM(45, b); } 
 
+static inline int64_t daysFromCivil(int y, int m, int d) {
+    y -= m <= 2;
+    const int64_t era = (y >= 0 ? y : y - 399) / 400;
+    const uint32_t yoe = (uint32_t)(y - era * 400);
+    const uint32_t doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
+    const uint32_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + (int64_t)doe - 719468;
+}
+
+int64_t toEpoch64(int y, int m, int d, int h, int min, int s) {
+    return daysFromCivil(y, m, d) * 86400LL + (int64_t)h * 3600LL + (int64_t)min * 60LL + (int64_t)s;
+}
+
+void epoch64ToCivil(int64_t epochSec, int *y, int *m, int *d, int *h, int *min, int *s) {
+    int64_t z = epochSec / 86400LL;
+    int remSec = (int)(epochSec % 86400LL);
+    if (remSec < 0) { remSec += 86400; z -= 1; }
+    if (h) *h = remSec / 3600;
+    remSec %= 3600;
+    if (min) *min = remSec / 60;
+    if (s) *s = remSec % 60;
+
+    z += 719468;
+    const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+    const unsigned doe = (unsigned)(z - era * 146097);
+    const unsigned yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365;
+    int yVal = (int)(yoe) + (int)(era * 400);
+    const unsigned doy = doe - (365*yoe + yoe/4 - yoe/100);
+    const unsigned mp = (5*doy + 2)/153;
+    const unsigned dVal = doy - (153*mp+2)/5 + 1;
+    const unsigned mVal = mp < 10 ? mp + 3 : mp - 9;
+    yVal += (mVal <= 2);
+    if (y) *y = yVal;
+    if (m) *m = (int)mVal;
+    if (d) *d = (int)dVal;
+}
+
+int64_t stringToEpoch64(const String &dateStr, const String &timeStr) {
+    if (dateStr.length() != 10) return 0;
+    int y = dateStr.substring(0, 4).toInt();
+    int m = dateStr.substring(5, 7).toInt();
+    int d = dateStr.substring(8, 10).toInt();
+    int h = 0, min = 0, s = 0;
+    if (timeStr.length() >= 5) {
+        h = timeStr.substring(0, 2).toInt();
+        min = timeStr.substring(3, 5).toInt();
+        if (timeStr.length() >= 8) s = timeStr.substring(6, 8).toInt();
+    }
+    return toEpoch64(y, m, d, h, min, s);
+}
+
 time_t stringToTime(String dateStr, String timeStr) {
-    if(dateStr.length() != 10) return 0; struct tm t; memset(&t, 0, sizeof(struct tm));
-    t.tm_year = dateStr.substring(0, 4).toInt() - 1900; t.tm_mon = dateStr.substring(5, 7).toInt() - 1; t.tm_mday = dateStr.substring(8, 10).toInt(); 
-    if(timeStr.length() == 5) { t.tm_hour = timeStr.substring(0,2).toInt(); t.tm_min = timeStr.substring(3,5).toInt(); }
-    return mktime(&t);
+    int64_t ep = stringToEpoch64(dateStr, timeStr);
+    return (time_t)ep;
 }
 
 void draw7Segment(TFT_eSPI &spr, int x, int y, int num, int h, int w, uint16_t color) {
@@ -78,6 +127,14 @@ void drawXButton(TFT_eSprite &spr) {
 
 static TFT_eSprite headSprite = TFT_eSprite(&tft);
 static bool headSpriteReady = false;
+
+void freeDisplaySprites() {
+    cdSprite.deleteSprite();
+    if (headSpriteReady) {
+        headSprite.deleteSprite();
+        headSpriteReady = false;
+    }
+}
 
 void drawBattery(TFT_eSprite &spr, int x, int y, int pct, bool charging) {
     int bW = 38, bH = 15, nubW = 3, nubH = 7;
@@ -755,20 +812,29 @@ void drawRetroCasioWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, boo
 
 void drawUltraDashboard(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg) {
     if (!spr || spr->getPointer() == nullptr) return;
-    time_t jetzt; time(&jetzt);
-    int wday = (aktuell->tm_wday >= 0 && aktuell->tm_wday <= 6) ? aktuell->tm_wday : 0;
-    int mon  = (aktuell->tm_mon >= 0 && aktuell->tm_mon <= 11) ? aktuell->tm_mon : 0;
-    int mday = (aktuell->tm_mday >= 1 && aktuell->tm_mday <= 31) ? aktuell->tm_mday : 1;
+    int wday = (aktuell && aktuell->tm_wday >= 0 && aktuell->tm_wday <= 6) ? aktuell->tm_wday : 0;
+    int mon  = (aktuell && aktuell->tm_mon >= 0 && aktuell->tm_mon <= 11) ? aktuell->tm_mon : 0;
+    int mday = (aktuell && aktuell->tm_mday >= 1 && aktuell->tm_mday <= 31) ? aktuell->tm_mday : 1;
 
-    long diff = 0;
-    if (zielZeit.tm_year > 0) {
-        time_t zt = mktime(&zielZeit);
-        if (zt != (time_t)-1 && zt > jetzt) {
-            diff = zt - jetzt;
-        }
-    }
-    int yearsLeft = (int)(diff / 31536000L);
-    int daysLeft  = (int)((diff % 31536000L) / 86400L);
+    int curY = (aktuell && aktuell->tm_year > 70) ? (aktuell->tm_year + 1900) : 2026;
+    int curM = aktuell ? (aktuell->tm_mon + 1) : 1;
+    int curD = aktuell ? (aktuell->tm_mday) : 1;
+    int curH = aktuell ? (aktuell->tm_hour) : 0;
+    int curMin = aktuell ? (aktuell->tm_min) : 0;
+    int curS = aktuell ? (aktuell->tm_sec) : 0;
+    int64_t curEpoch = toEpoch64(curY, curM, curD, curH, curMin, curS);
+
+    int targetY = gJahr + zielAlter;
+    int targetM = (gMonat >= 1 && gMonat <= 12) ? gMonat : 1;
+    int targetD = (gTag >= 1 && gTag <= 31) ? gTag : 1;
+    int targetH = (gStunde >= 0 && gStunde <= 23) ? gStunde : 0;
+    int targetMin = (gMinute >= 0 && gMinute <= 59) ? gMinute : 0;
+    int64_t targetEpoch = toEpoch64(targetY, targetM, targetD, targetH, targetMin, 0);
+
+    int64_t diff = targetEpoch - curEpoch;
+    if (diff < 0) diff = 0;
+    int yearsLeft = (int)(diff / 31536000LL);
+    int daysLeft  = (int)((diff % 31536000LL) / 86400LL);
 
     // 0. Bezel Perimeter Micro-Ticks (Active Second Bead Glow)
     const float DEG2RAD_U = 0.0174532925f;
@@ -860,15 +926,32 @@ void drawUltraDashboard(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isC
 
 void drawLifetimeWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool isChg) {
     if (!spr || spr->getPointer() == nullptr) return;
-    time_t jetzt; time(&jetzt);
-    long diff = 0;
-    if (zielZeit.tm_year > 0) {
-        time_t zt = mktime(&zielZeit);
-        if (zt != (time_t)-1 && zt > jetzt) {
-            diff = zt - jetzt;
-        }
-    }
-    int vals[] = {(int)(diff / 31536000L), (int)((diff % 31536000L) / 2592000L), (int)((diff % 2592000L) / 86400L), (int)((diff % 86400L) / 3600L), (int)((diff % 3600L) / 60L), (int)(diff % 60L)};
+    int curY = (aktuell && aktuell->tm_year > 70) ? (aktuell->tm_year + 1900) : 2026;
+    int curM = aktuell ? (aktuell->tm_mon + 1) : 1;
+    int curD = aktuell ? (aktuell->tm_mday) : 1;
+    int curH = aktuell ? (aktuell->tm_hour) : 0;
+    int curMin = aktuell ? (aktuell->tm_min) : 0;
+    int curS = aktuell ? (aktuell->tm_sec) : 0;
+    int64_t curEpoch = toEpoch64(curY, curM, curD, curH, curMin, curS);
+
+    int targetY = gJahr + zielAlter;
+    int targetM = (gMonat >= 1 && gMonat <= 12) ? gMonat : 1;
+    int targetD = (gTag >= 1 && gTag <= 31) ? gTag : 1;
+    int targetH = (gStunde >= 0 && gStunde <= 23) ? gStunde : 0;
+    int targetMin = (gMinute >= 0 && gMinute <= 59) ? gMinute : 0;
+    int64_t targetEpoch = toEpoch64(targetY, targetM, targetD, targetH, targetMin, 0);
+
+    int64_t diff = targetEpoch - curEpoch;
+    if (diff < 0) diff = 0;
+
+    int vals[] = {
+        (int)(diff / 31536000LL),
+        (int)((diff % 31536000LL) / 2592000LL),
+        (int)((diff % 2592000LL) / 86400LL),
+        (int)((diff % 86400LL) / 3600LL),
+        (int)((diff % 3600LL) / 60LL),
+        (int)(diff % 60LL)
+    };
     const char* labs[] = {"Jahre", "Monate", "Tage", "Stunden", "Minuten", "Sekunden"};
     int rowH = 28; 
     int sH = 20; int sW = 12; 
@@ -883,7 +966,7 @@ void drawLifetimeWatchface(TFT_eSprite *spr, struct tm *aktuell, int akku, bool 
     }
     
     // Lebensziel Progress Bar Rechts mit Säule
-    float aktAlter = (float)(aktuell->tm_year + 1900 - gJahr) + (float)aktuell->tm_yday/365.0f; 
+    float aktAlter = (float)(curY - gJahr) + (float)(aktuell ? aktuell->tm_yday : 0) / 365.25f; 
     float prozent = (zielAlter > 0) ? (aktAlter / (float)zielAlter) : 0.0f; 
     if (prozent > 1.0f) prozent = 1.0f;
     if (prozent < 0.0f) prozent = 0.0f;
@@ -1332,11 +1415,17 @@ void drawChildrenWatchface(TFT_eSprite *spr, struct tm *aktuell) {
 
 void drawParentsWatchface(TFT_eSprite *spr, struct tm *aktuell) {
     if (!spr || spr->getPointer() == nullptr) return;
-    time_t jetzt; time(&jetzt);
-    char uB[12]; char uT[6]; snprintf(uB, sizeof(uB), "%04d-%02d-%02d", gJahr, gMonat, gTag); snprintf(uT, sizeof(uT), "%02d:%02d", gStunde, gMinute);
-    time_t uTime = stringToTime(String(uB), String(uT));
-    time_t p1Time = (parentName.length() > 0) ? stringToTime(parentDate, parentTime) : 0;
-    time_t p2Time = (papaName.length() > 0) ? stringToTime(papaDate, papaTime) : 0;
+    int curY = (aktuell && aktuell->tm_year > 70) ? (aktuell->tm_year + 1900) : 2026;
+    int curM = aktuell ? (aktuell->tm_mon + 1) : 1;
+    int curD = aktuell ? (aktuell->tm_mday) : 1;
+    int curH = aktuell ? (aktuell->tm_hour) : 0;
+    int curMin = aktuell ? (aktuell->tm_min) : 0;
+    int curS = aktuell ? (aktuell->tm_sec) : 0;
+    int64_t curEpoch = toEpoch64(curY, curM, curD, curH, curMin, curS);
+
+    int64_t uEpoch = toEpoch64(gJahr, (gMonat >= 1 && gMonat <= 12) ? gMonat : 1, (gTag >= 1 && gTag <= 31) ? gTag : 1, gStunde, gMinute, 0);
+    int64_t p1Epoch = (parentName.length() > 0 && parentDate.length() == 10) ? stringToEpoch64(parentDate, parentTime) : 0;
+    int64_t p2Epoch = (papaName.length() > 0 && papaDate.length() == 10) ? stringToEpoch64(papaDate, papaTime) : 0;
     const char* monateKurz[] = {"Jan", "Feb", "Mrz", "Apr", "Mai", "Jun", "Jul", "Aug", "Sep", "Okt", "Nov", "Dez"};
 
     // Header Switcher Pill (oben zentriert): Zeigt aktuellen Modus an
@@ -1347,17 +1436,20 @@ void drawParentsWatchface(TFT_eSprite *spr, struct tm *aktuell) {
 
     if (parentViewMode == 0) {
         // === MODUS 0: Wie alt waren meine Eltern, als sie so alt waren wie ich heute ===
-        if (uTime != 0 && p1Time != 0 && p2Time != 0) {
-            int64_t myAgeSec = (int64_t)jetzt - (int64_t)uTime;
-            struct tm uTm; localtime_r(&uTime, &uTm);
+        if (uEpoch != 0 && p1Epoch != 0 && p2Epoch != 0) {
+            int64_t myAgeSec = curEpoch - uEpoch;
+            int uY, uM, uD, uH, uMin, uS;
+            epoch64ToCivil(uEpoch, &uY, &uM, &uD, &uH, &uMin, &uS);
 
-            auto drawParentCard = [&](int yCard, const String &pName, time_t pTime, uint16_t borderCol) {
-                time_t targetDate = (time_t)((int64_t)pTime + myAgeSec);
-                struct tm tgt; localtime_r(&targetDate, &tgt);
-                int yearsThen = (tgt.tm_year + 1900) - (uTm.tm_year + 1900);
-                if (tgt.tm_mon < uTm.tm_mon || (tgt.tm_mon == uTm.tm_mon && tgt.tm_mday < uTm.tm_mday)) yearsThen--;
+            auto drawParentCard = [&](int yCard, const String &pName, int64_t pEpoch, uint16_t borderCol) {
+                int64_t targetEpoch = pEpoch + myAgeSec;
+                int tgtY, tgtM, tgtD, tgtH, tgtMin, tgtS;
+                epoch64ToCivil(targetEpoch, &tgtY, &tgtM, &tgtD, &tgtH, &tgtMin, &tgtS);
+                int yearsThen = tgtY - uY;
+                if (tgtM < uM || (tgtM == uM && tgtD < uD)) yearsThen--;
                 char dBuf[28];
-                snprintf(dBuf, sizeof(dBuf), "%02d. %s %04d", tgt.tm_mday, monateKurz[tgt.tm_mon], tgt.tm_year + 1900);
+                int mIdx = (tgtM >= 1 && tgtM <= 12) ? tgtM - 1 : 0;
+                snprintf(dBuf, sizeof(dBuf), "%02d. %s %04d", tgtD, monateKurz[mIdx], tgtY);
 
                 drawGlassCard(spr, 10, yCard, 220, 78, 10, borderCol, COLOR_SURFACE, COLOR_BG_DARK);
                 spr->setTextDatum(TL_DATUM);
@@ -1370,18 +1462,21 @@ void drawParentsWatchface(TFT_eSprite *spr, struct tm *aktuell) {
                 else spr->drawString("Du warst " + String(yearsThen) + " Jahre", 20, yCard + 56, 2);
             };
 
-            drawParentCard(26, parentName, p1Time, COLOR_ACCENT_TIME);
-            drawParentCard(108, papaName, p2Time, COLOR_CYAN_TECH);
-        } else if (uTime != 0 && (p1Time != 0 || p2Time != 0)) {
-            time_t pTime = (p1Time != 0) ? p1Time : p2Time;
-            String pName = (p1Time != 0) ? parentName : papaName;
-            int64_t myAgeSec = (int64_t)jetzt - (int64_t)uTime;
-            time_t targetDate = (time_t)((int64_t)pTime + myAgeSec);
-            struct tm tgt; localtime_r(&targetDate, &tgt);
-            char dBuf[30]; snprintf(dBuf, sizeof(dBuf), "%02d. %s %04d", tgt.tm_mday, monateKurz[tgt.tm_mon], tgt.tm_year+1900);
-            struct tm uTm; localtime_r(&uTime, &uTm);
-            int yearsThen = (tgt.tm_year + 1900) - (uTm.tm_year + 1900);
-            if (tgt.tm_mon < uTm.tm_mon || (tgt.tm_mon == uTm.tm_mon && tgt.tm_mday < uTm.tm_mday)) yearsThen--;
+            drawParentCard(26, parentName, p1Epoch, COLOR_ACCENT_TIME);
+            drawParentCard(108, papaName, p2Epoch, COLOR_CYAN_TECH);
+        } else if (uEpoch != 0 && (p1Epoch != 0 || p2Epoch != 0)) {
+            int64_t pEpoch = (p1Epoch != 0) ? p1Epoch : p2Epoch;
+            String pName = (p1Epoch != 0) ? parentName : papaName;
+            int64_t myAgeSec = curEpoch - uEpoch;
+            int64_t targetEpoch = pEpoch + myAgeSec;
+            int tgtY, tgtM, tgtD, tgtH, tgtMin, tgtS;
+            epoch64ToCivil(targetEpoch, &tgtY, &tgtM, &tgtD, &tgtH, &tgtMin, &tgtS);
+            int mIdx = (tgtM >= 1 && tgtM <= 12) ? tgtM - 1 : 0;
+            char dBuf[30]; snprintf(dBuf, sizeof(dBuf), "%02d. %s %04d", tgtD, monateKurz[mIdx], tgtY);
+            int uY, uM, uD, uH, uMin, uS;
+            epoch64ToCivil(uEpoch, &uY, &uM, &uD, &uH, &uMin, &uS);
+            int yearsThen = tgtY - uY;
+            if (tgtM < uM || (tgtM == uM && tgtD < uD)) yearsThen--;
             
             drawGlassCard(spr, 12, 26, 216, 160, 12, COLOR_BORDER, COLOR_SURFACE, COLOR_BG_DARK);
             spr->setTextDatum(MC_DATUM);
@@ -1414,19 +1509,22 @@ void drawParentsWatchface(TFT_eSprite *spr, struct tm *aktuell) {
         if(child2Name.length() > 0 && child2Date.length() == 10) { kNames[activeKids] = child2Name; kDates[activeKids] = child2Date; kTimes[activeKids] = child2Time; activeKids++; }
         if(child3Name.length() > 0 && child3Date.length() == 10) { kNames[activeKids] = child3Name; kDates[activeKids] = child3Date; kTimes[activeKids] = child3Time; activeKids++; }
 
-        if (uTime != 0 && activeKids > 0) {
-            int64_t myAgeSec = (int64_t)jetzt - (int64_t)uTime;
-            struct tm uTm; localtime_r(&uTime, &uTm);
-            int myCurYears = (aktuell->tm_year + 1900) - (uTm.tm_year + 1900);
-            if (aktuell->tm_mon < uTm.tm_mon || (aktuell->tm_mon == uTm.tm_mon && aktuell->tm_mday < uTm.tm_mday)) myCurYears--;
+        if (uEpoch != 0 && activeKids > 0) {
+            int64_t myAgeSec = curEpoch - uEpoch;
+            int uY, uM, uD, uH, uMin, uS;
+            epoch64ToCivil(uEpoch, &uY, &uM, &uD, &uH, &uMin, &uS);
+            int myCurYears = curY - uY;
+            if (curM < uM || (curM == uM && curD < uD)) myCurYears--;
 
             if (activeKids == 1) {
-                time_t kTime = stringToTime(kDates[0], kTimes[0]);
-                time_t targetDate = (time_t)((int64_t)kTime + myAgeSec);
-                struct tm tgt; localtime_r(&targetDate, &tgt);
-                int myYearsThen = (tgt.tm_year + 1900) - (uTm.tm_year + 1900);
-                if (tgt.tm_mon < uTm.tm_mon || (tgt.tm_mon == uTm.tm_mon && tgt.tm_mday < uTm.tm_mday)) myYearsThen--;
-                char dBuf[30]; snprintf(dBuf, sizeof(dBuf), "%02d. %s %04d", tgt.tm_mday, monateKurz[tgt.tm_mon], tgt.tm_year + 1900);
+                int64_t kEpoch = stringToEpoch64(kDates[0], kTimes[0]);
+                int64_t targetEpoch = kEpoch + myAgeSec;
+                int tgtY, tgtM, tgtD, tgtH, tgtMin, tgtS;
+                epoch64ToCivil(targetEpoch, &tgtY, &tgtM, &tgtD, &tgtH, &tgtMin, &tgtS);
+                int myYearsThen = tgtY - uY;
+                if (tgtM < uM || (tgtM == uM && tgtD < uD)) myYearsThen--;
+                int mIdx = (tgtM >= 1 && tgtM <= 12) ? tgtM - 1 : 0;
+                char dBuf[30]; snprintf(dBuf, sizeof(dBuf), "%02d. %s %04d", tgtD, monateKurz[mIdx], tgtY);
 
                 drawGlassCard(spr, 12, 26, 216, 160, 12, COLOR_PROD_GREEN, COLOR_SURFACE, COLOR_BG_DARK);
                 spr->setTextDatum(MC_DATUM);
@@ -1441,12 +1539,14 @@ void drawParentsWatchface(TFT_eSprite *spr, struct tm *aktuell) {
                 spr->drawString(String(myYearsThen) + " Jahre alt", 120, 163, 4);
             } else {
                 auto drawChildCard = [&](int yCard, int idx, uint16_t borderCol) {
-                    time_t kTime = stringToTime(kDates[idx], kTimes[idx]);
-                    time_t targetDate = (time_t)((int64_t)kTime + myAgeSec);
-                    struct tm tgt; localtime_r(&targetDate, &tgt);
-                    int myYearsThen = (tgt.tm_year + 1900) - (uTm.tm_year + 1900);
-                    if (tgt.tm_mon < uTm.tm_mon || (tgt.tm_mon == uTm.tm_mon && tgt.tm_mday < uTm.tm_mday)) myYearsThen--;
-                    char dBuf[28]; snprintf(dBuf, sizeof(dBuf), "%02d. %s %04d", tgt.tm_mday, monateKurz[tgt.tm_mon], tgt.tm_year + 1900);
+                    int64_t kEpoch = stringToEpoch64(kDates[idx], kTimes[idx]);
+                    int64_t targetEpoch = kEpoch + myAgeSec;
+                    int tgtY, tgtM, tgtD, tgtH, tgtMin, tgtS;
+                    epoch64ToCivil(targetEpoch, &tgtY, &tgtM, &tgtD, &tgtH, &tgtMin, &tgtS);
+                    int myYearsThen = tgtY - uY;
+                    if (tgtM < uM || (tgtM == uM && tgtD < uD)) myYearsThen--;
+                    int mIdx = (tgtM >= 1 && tgtM <= 12) ? tgtM - 1 : 0;
+                    char dBuf[28]; snprintf(dBuf, sizeof(dBuf), "%02d. %s %04d", tgtD, monateKurz[mIdx], tgtY);
 
                     drawGlassCard(spr, 10, yCard, 220, 78, 10, borderCol, COLOR_SURFACE, COLOR_BG_DARK);
                     spr->setTextDatum(TL_DATUM);
@@ -2631,11 +2731,13 @@ void streamScreenBmp(WiFiClient &client) {
         0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00
     };
+    if (!client.connected()) return;
     client.write(bmpHeader, 54);
 
     uint8_t rowChunk[720 * 4]; // 4 rows = 2880 bytes
     int chunkRows = 4;
     for (int yStart = 239; yStart >= 0; yStart -= chunkRows) {
+        if (!client.connected()) break;
         int rCount = (yStart - chunkRows + 1 >= 0) ? chunkRows : (yStart + 1);
         for (int r = 0; r < rCount; r++) {
             int y = yStart - r;
@@ -2663,5 +2765,6 @@ void streamScreenBmp(WiFiClient &client) {
             }
         }
         client.write(rowChunk, rCount * 720);
+        yield();
     }
 }

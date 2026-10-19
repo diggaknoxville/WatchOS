@@ -12,7 +12,7 @@
 #include <USBHIDKeyboard.h> 
 
 #define MAX_HISTORY 200
-#define WATCHOS_VERSION "1.3.1"
+#define WATCHOS_VERSION "1.3.2"
 
 #if __has_include("BuildInfo.h")
   #include "BuildInfo.h"

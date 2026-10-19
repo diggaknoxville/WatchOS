@@ -1,11 +1,11 @@
 {
-  "version": "1.3.1",
-  "commit": "99b78d1",
-  "commit_full": "99b78d14367eaa58c73aa7085bcf7c102ef866ec",
-  "build_date": "2026-10-18T14:02:32Z",
+  "version": "1.3.2",
+  "commit": "6e854f6",
+  "commit_full": "6e854f64ac5820021ce09ff38d135e1e0b4ac3f8",
+  "build_date": "2026-10-19T07:03:00Z",
   "target": "LilyGO T-Watch S3 (ESP32-S3)",
   "bin_file": "firmware.bin",
-  "bin_size_bytes": 2398576,
-  "sha256": "c1a0c7b3965258bf993926956474b855faa98079b92bbdee687e22586786ae6a",
+  "bin_size_bytes": 2405472,
+  "sha256": "a8afe46ad831633051292beb224e91d69b7696828cb1d6c706b7ca304deb42ff",
   "release_url": "https://github.com/diggaknoxville/WatchOS/releases/tag/latest"
 }

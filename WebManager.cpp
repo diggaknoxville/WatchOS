@@ -1445,19 +1445,20 @@ body.high-contrast button {
 // Berechnet, an welchem Kalenderdatum "andere" Person (Elternteil oder Kind) genau so alt war/sein wird
 // wie man selbst gerade ist - und wie alt man dabei damals/dann ist. Gemeinsame Formel fuer
 // Mama/Papa (Vergangenheit) und Kinder (i.d.R. Zukunft), da beide nach demselben Prinzip funktionieren.
-static String computeAnalogDate(time_t uTime, time_t jetzt, const String &otherDate, const String &otherTime, int sysLang, bool futureContext = false) {
-    time_t oTime = stringToTime(otherDate, otherTime);
-    if (uTime == 0 || oTime == 0) return tr(sysLang, "Daten fehlen", "No Data", "Pas de données");
-    int64_t myAgeSec = (int64_t)jetzt - (int64_t)uTime;
-    time_t targetDate = (time_t)((int64_t)oTime + myAgeSec);
-    struct tm tgt;
-    localtime_r(&targetDate, &tgt);
+static String computeAnalogDate(int64_t uEpoch, int64_t curEpoch, const String &otherDate, const String &otherTime, int sysLang, bool futureContext = false) {
+    if (otherDate.length() != 10) return tr(sysLang, "Daten fehlen", "No Data", "Pas de données");
+    int64_t oEpoch = stringToEpoch64(otherDate, otherTime);
+    if (uEpoch == 0 || oEpoch == 0) return tr(sysLang, "Daten fehlen", "No Data", "Pas de données");
+    int64_t myAgeSec = curEpoch - uEpoch;
+    int64_t targetEpoch = oEpoch + myAgeSec;
+    int tgtY, tgtM, tgtD, tgtH, tgtMin, tgtS;
+    epoch64ToCivil(targetEpoch, &tgtY, &tgtM, &tgtD, &tgtH, &tgtMin, &tgtS);
     char dBuf[30];
-    snprintf(dBuf, sizeof(dBuf), "%02d.%02d.%04d", tgt.tm_mday, tgt.tm_mon + 1, tgt.tm_year + 1900);
-    struct tm uTm;
-    localtime_r(&uTime, &uTm);
-    int yearsThen = (tgt.tm_year + 1900) - (uTm.tm_year + 1900);
-    if (tgt.tm_mon < uTm.tm_mon || (tgt.tm_mon == uTm.tm_mon && tgt.tm_mday < uTm.tm_mday)) {
+    snprintf(dBuf, sizeof(dBuf), "%02d.%02d.%04d", tgtD, tgtM, tgtY);
+    int uY, uM, uD, uH, uMin, uS;
+    epoch64ToCivil(uEpoch, &uY, &uM, &uD, &uH, &uMin, &uS);
+    int yearsThen = tgtY - uY;
+    if (tgtM < uM || (tgtM == uM && tgtD < uD)) {
         yearsThen--;
     }
     if (yearsThen < 0) return String(dBuf) + " (" + tr(sysLang, "Noch nicht geboren", "Not born yet", "Pas encore né") + ")";
@@ -1480,31 +1481,43 @@ static const char* resetReasonText(int sysLang) {
 }
 
 String getHtmlContent() {
-    String s; s.reserve(40000);
+    String s; s.reserve(220000);
     
     char sysD[32]; char sysT[16]; char bdayStr[12]; char btimeStr[6];
     
-    time_t jetzt; time(&jetzt); struct tm *aktuell = localtime(&jetzt);
+    time_t rawJetzt; time(&rawJetzt); struct tm *aktuell = localtime(&rawJetzt);
     snprintf(sysD, sizeof(sysD), "%04d-%02d-%02d", aktuell->tm_year+1900, aktuell->tm_mon+1, aktuell->tm_mday); 
     snprintf(sysT, sizeof(sysT), "%02d:%02d", aktuell->tm_hour, aktuell->tm_min);
     
-    long diffLife = mktime(&zielZeit) - jetzt; if(diffLife < 0) diffLife = 0;
-    int rJ = diffLife / 31536000; int rM = (diffLife % 31536000) / 2592000; int rT = (diffLife % 2592000) / 86400;
+    int curY = (aktuell && aktuell->tm_year > 70) ? (aktuell->tm_year + 1900) : 2026;
+    int curM = aktuell ? (aktuell->tm_mon + 1) : 1;
+    int curD = aktuell ? (aktuell->tm_mday) : 1;
+    int curH = aktuell ? (aktuell->tm_hour) : 0;
+    int curMin = aktuell ? (aktuell->tm_min) : 0;
+    int curS = aktuell ? (aktuell->tm_sec) : 0;
+    int64_t jetzt = toEpoch64(curY, curM, curD, curH, curMin, curS);
+
+    int targetY = gJahr + zielAlter;
+    int targetM = (gMonat >= 1 && gMonat <= 12) ? gMonat : 1;
+    int targetD = (gTag >= 1 && gTag <= 31) ? gTag : 1;
+    int targetH = (gStunde >= 0 && gStunde <= 23) ? gStunde : 0;
+    int targetMin = (gMinute >= 0 && gMinute <= 59) ? gMinute : 0;
+    int64_t targetEpoch = toEpoch64(targetY, targetM, targetD, targetH, targetMin, 0);
+    int64_t uTime = toEpoch64(gJahr, targetM, targetD, targetH, targetMin, 0);
+
+    int64_t diffLife = targetEpoch - jetzt; if(diffLife < 0) diffLife = 0;
+    int rJ = (int)(diffLife / 31536000LL);
+    int rM = (int)((diffLife % 31536000LL) / 2592000LL);
+    int rT = (int)((diffLife % 2592000LL) / 86400LL);
     
     snprintf(bdayStr, sizeof(bdayStr), "%04d-%02d-%02d", gJahr, gMonat, gTag); 
     snprintf(btimeStr, sizeof(btimeStr), "%02d:%02d", gStunde, gMinute);
-    time_t uTime = stringToTime(String(bdayStr), String(btimeStr));
 
     int lifePct = 0;
-    if (uTime != 0) {
-        // Als double statt long rechnen: elapsedLifeSec*100 uebersteigt bei mehrjaehrigem
-        // Alter locker den 32-Bit-long-Bereich (~2,1 Mrd.) und lief bisher als stiller
-        // Ueberlauf, was zu einem falschen/zufaelligen Prozentwert fuehrte.
-        double totalLifeSec = (double)(mktime(&zielZeit) - uTime);
-        double elapsedLifeSec = (double)(jetzt - uTime);
-        if (totalLifeSec > 0) lifePct = (int)(elapsedLifeSec * 100.0 / totalLifeSec);
-        if (lifePct < 0) lifePct = 0; if (lifePct > 100) lifePct = 100;
-    }
+    int64_t totalLifeSec = targetEpoch - uTime;
+    int64_t elapsedLifeSec = jetzt - uTime;
+    if (totalLifeSec > 0) lifePct = (int)((double)elapsedLifeSec * 100.0 / (double)totalLifeSec);
+    if (lifePct < 0) lifePct = 0; if (lifePct > 100) lifePct = 100;
 
     String parentStr = computeAnalogDate(uTime, jetzt, parentDate, parentTime, sysLang);
     String papaStr = computeAnalogDate(uTime, jetzt, papaDate, papaTime, sysLang);
@@ -2371,6 +2384,8 @@ function saveCarouselConfig(){
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: body
     }).then(r => r.json()).then(d => {
+        if(d.order) { carOrder = d.order.split(',').map(Number).filter(n => !isNaN(n) && n>=0 && n<16); }
+        if(d.activeIdx !== undefined) { carStart = d.activeIdx; }
         showToastMsg && showToastMsg('Karussell erfolgreich auf Uhr angewendet!');
         renderCarouselUI();
     }).catch(function(e){ alert('Fehler beim Speichern'); });
@@ -3037,25 +3052,25 @@ function updateLive() {
         });
 
         liveInFlight = false;
-        scheduleLive(document.hidden ? 2500 : 700);
+        scheduleLive(document.hidden ? 6000 : 2500);
     }).catch(function(){
         liveInFlight = false;
-        scheduleLive(2500);
+        scheduleLive(3500);
     });
 }
 window.onload = function() {
     if(localStorage.getItem('lightMode') === 'true') { toggleTheme(); }
     if(localStorage.getItem('highContrast') === 'true') { document.body.classList.add('high-contrast'); }
-    loadHackerRecent();
     if(document.getElementById('battRingBtn')) initDashboardModals();
-    updateLive();
-    loadNotifList();
-    loadTotpList();
-    refreshLoraApi();
-    loadPackagesList();
-    loadCarouselData();
     initLiveWatchTouch();
-    fetch('/api/watchface').then(r=>r.json()).then(d=>{ if(d.mode!==undefined) updateWfUI(d.mode); }).catch(function(){});
+
+    // Gestaffelter Abruf zur Vermeidung von Socket-Ueberlastung auf dem ESP32
+    updateLive();
+    setTimeout(function(){ loadCarouselData(); fetch('/api/watchface').then(r=>r.json()).then(d=>{ if(d.mode!==undefined) updateWfUI(d.mode); }).catch(function(){}); }, 250);
+    setTimeout(function(){ loadNotifList(); loadTotpList(); }, 500);
+    setTimeout(function(){ refreshLoraApi(); loadHackerRecent(); }, 750);
+    setTimeout(function(){ loadPackagesList(); }, 1000);
+    setTimeout(function(){ refreshLiveWatch(); }, 1500);
 };
 function syncTitle(id, val) { document.getElementById(id).innerText = val; }
 function updateVal(id, val) { document.getElementById(id).innerText = val + '%'; }
@@ -3604,7 +3619,7 @@ function resetPackagesApi() {
     s += F("<div style='display:flex;flex-wrap:wrap;gap:24px;align-items:center;justify-content:center;'>");
     s += F("<div style='position:relative;background:#18181b;padding:14px;border-radius:36px;box-shadow:0 10px 25px rgba(0,0,0,0.5), inset 0 0 0 3px #3f3f46;'>");
     s += F("<div style='position:absolute;top:7px;left:50%;transform:translateX(-50%);width:28px;height:4px;background:#27272a;border-radius:2px;'></div>");
-    s += F("<img id='liveWatchImg' src='/api/screen.bmp' alt='Watch Screen' width='240' height='240' style='display:block;border-radius:24px;background:#000;cursor:crosshair;box-shadow:inset 0 0 10px rgba(0,0,0,0.8);' title='");
+    s += F("<img id='liveWatchImg' src='data:image/svg+xml,%3Csvg xmlns=\"http://www.w3.org/2000/svg\" width=\"240\" height=\"240\"%3E%3Crect width=\"240\" height=\"240\" fill=\"%2318181b\" rx=\"24\"/%3E%3Ctext x=\"120\" y=\"120\" fill=\"%2371717a\" font-size=\"13\" font-family=\"sans-serif\" text-anchor=\"middle\" dominant-baseline=\"middle\"%3ELive-Display%3C/text%3E%3C/svg%3E' alt='Watch Screen' width='240' height='240' style='display:block;border-radius:24px;background:#000;cursor:crosshair;box-shadow:inset 0 0 10px rgba(0,0,0,0.8);' title='");
     s += tr(sysLang, "Klicken zum Tippen oder Ziehen zum Wischen", "Click to tap or drag to swipe", "Cliquer pour appuyer ou glisser pour balayer");
     s += F("'>");
     s += F("<div id='liveWatchDot' style='position:absolute;bottom:8px;right:16px;width:8px;height:8px;border-radius:50%;background:var(--accent);opacity:0.3;transition:opacity 0.3s;'></div>");
@@ -4546,14 +4561,28 @@ void handleRoot() {
     String html = getHtmlContent();
     server.setContentLength(html.length());
     server.send(200, "text/html", "");
-    // Chunked senden um Heap-Spike zu vermeiden
-    int pos = 0;
-    while (pos < (int)html.length()) {
-        int chunk = min(2048, (int)html.length() - pos);
-        server.sendContent(html.substring(pos, pos + chunk));
-        pos += chunk;
+    WiFiClient client = server.client();
+    size_t total = html.length();
+    size_t pos = 0;
+    const char* data = html.c_str();
+    while (pos < total && client.connected()) {
+        size_t chunk = min((size_t)1024, total - pos);
+        size_t written = 0;
+        int retries = 0;
+        while (written < chunk && client.connected() && retries < 150) {
+            size_t n = client.write((const uint8_t*)(data + pos + written), chunk - written);
+            if (n > 0) {
+                written += n;
+                retries = 0;
+            } else {
+                retries++;
+                delay(2);
+            }
+        }
+        if (written == 0 && !client.connected()) break;
+        pos += written;
+        yield();
     }
-    server.sendContent("");
 }
 
 void handleSave() {
@@ -5025,6 +5054,8 @@ void setupServerRoutes() {
                     }
                 }
                 currentPage = 0;
+                lastTouchTime = millis();
+                if (powerState >= 2) { powerState = 1; setBrightness(maxBright); }
                 prefs.begin("clock", false);
                 prefs.putString("carOrder", carouselOrderStr);
                 prefs.putInt("carStart", carouselIndex);
@@ -5032,6 +5063,7 @@ void setupServerRoutes() {
                 showToastColor(kNames[fid], 2000, 0x07FF);
                 triggerVibration();
                 lastSecond = -1;
+                yield();
                 server.send(200, "application/json", "{\"status\":\"ok\",\"order\":\"" + carouselOrderStr + "\",\"activeIdx\":" + String(carouselIndex) + "}");
                 return;
             }
@@ -5047,7 +5079,12 @@ void setupServerRoutes() {
                     carouselIndex = 0;
                 }
             }
+            if (carouselIndex < 0 || carouselIndex >= (int)carouselOrder.size()) {
+                carouselIndex = 0;
+            }
             currentPage = 0;
+            lastTouchTime = millis();
+            if (powerState >= 2) { powerState = 1; setBrightness(maxBright); }
             prefs.begin("clock", false);
             prefs.putString("carOrder", carouselOrderStr);
             prefs.putInt("carStart", carouselIndex);
@@ -5055,6 +5092,7 @@ void setupServerRoutes() {
             showToastColor("Karussell gespeichert", 2000, 0x07E0);
             triggerVibration();
             lastSecond = -1;
+            yield();
             server.send(200, "application/json", "{\"status\":\"ok\",\"order\":\"" + carouselOrderStr + "\",\"activeIdx\":" + String(carouselIndex) + "}");
             return;
         }
@@ -5072,6 +5110,8 @@ void setupServerRoutes() {
 
     server.on("/api/touch", HTTP_POST, []() {
         if (!checkAdminAccess()) return;
+        lastTouchTime = millis();
+        if (powerState >= 2) { powerState = 1; setBrightness(maxBright); }
         int x = server.hasArg("x") ? server.arg("x").toInt() : 120;
         int y = server.hasArg("y") ? server.arg("y").toInt() : 120;
         simulateTap(x, y);
@@ -5080,6 +5120,8 @@ void setupServerRoutes() {
 
     server.on("/api/swipe", HTTP_POST, []() {
         if (!checkAdminAccess()) return;
+        lastTouchTime = millis();
+        if (powerState >= 2) { powerState = 1; setBrightness(maxBright); }
         String dir = server.hasArg("dir") ? server.arg("dir") : "left";
         int d = 0;
         if (dir == "left") d = 0;
@@ -5805,7 +5847,9 @@ void startHotspotAP() {
         wlanClientMode = false;
         WiFi.mode(WIFI_AP); 
         esp_wifi_set_ps(WIFI_PS_MIN_MODEM); // Modem-Sleep spart ~70% Ruhestrom im WLAN-Leerlauf
-        WiFi.setTxPower(WIFI_POWER_15dBm);  // 15 dBm spart ~40 mA Peak-Strom ohne Reichweitenverlust im Raum
+        if (apSSID == "WatchOS-Hotspot" || apSSID == "WatchOS-Ultra" || apSSID.indexOf("Hotspot") >= 0 || apSSID.length() == 0) {
+            apSSID = "WatchOS";
+        }
         WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0)); 
         WiFi.softAP(apSSID.c_str(), apPWD.c_str()); 
         delay(50); 

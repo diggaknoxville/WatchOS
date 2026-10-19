@@ -17,6 +17,7 @@
 #include <USB.h>
 #include <USBHIDMouse.h>
 #include <ESPmDNS.h>
+#include <esp_ota_ops.h>
 
 #include "Globals.h"
 #include "HardwareConfig.h"
@@ -230,6 +231,7 @@ void setup() {
     LoraManager::init();
     initPortalFiles();
     AppManager::init();
+    esp_ota_mark_app_valid_cancel_rollback();
     Serial.println("=== Setup fertig ===");
 }
 
@@ -244,7 +246,10 @@ void loop() {
             uxTaskGetStackHighWaterMark(NULL), 16384, ESP.getFreeHeap(), ESP.getFreePsram());
     }
     
-    if (wlanActive || evilActive) { dnsServer.processNextRequest(); server.handleClient(); }
+    if (wlanActive || evilActive) {
+        if (!wlanClientMode) { dnsServer.processNextRequest(); }
+        server.handleClient();
+    }
     handleWlanIdleTimeout(); // ungenutzten Hotspot automatisch abschalten (Akku)
     checkBackgroundTasks(currentMillis);
     handlePowerManagement(currentMillis);
@@ -255,7 +260,7 @@ void loop() {
         AppPackage* curP = AppManager::getAppByPage(currentPage);
         String pid = curP ? (curP->driver.length() > 0 ? curP->driver : curP->id) : "";
         bool isFastPage = (currentPage == Pages::Opportunity || pid == "stopwatch" || pid == "mic" || pid == "level" || (curP && AppManager::hasJsScript(curP)));
-        int loopDelayMs = (powerState == 3) ? 500 : (powerState == 2) ? 80 : (isFastPage ? 20 : 50);
+        int loopDelayMs = (powerState == 3) ? 500 : (powerState == 2) ? 80 : (isFastPage ? 20 : (wlanActive ? 25 : 50));
         delay(loopDelayMs);
     } else {
         delay(2); 

@@ -280,7 +280,16 @@ void writeFileToFS(String path, String content) {
     f.close();
 }
 
-void updateZielZeit() { memset(&zielZeit, 0, sizeof(struct tm)); zielZeit.tm_mday = gTag; zielZeit.tm_mon = gMonat - 1; zielZeit.tm_year = (gJahr + zielAlter) - 1900; }
+void updateZielZeit() { 
+    memset(&zielZeit, 0, sizeof(struct tm)); 
+    zielZeit.tm_sec = 0;
+    zielZeit.tm_min = (gMinute >= 0 && gMinute <= 59) ? gMinute : 0;
+    zielZeit.tm_hour = (gStunde >= 0 && gStunde <= 23) ? gStunde : 0;
+    zielZeit.tm_mday = (gTag >= 1 && gTag <= 31) ? gTag : 1; 
+    zielZeit.tm_mon = (gMonat >= 1 && gMonat <= 12) ? (gMonat - 1) : 0; 
+    zielZeit.tm_year = (gJahr + zielAlter) - 1900; 
+    zielZeit.tm_isdst = -1;
+}
 
 void loadPreferences() {
     Serial.println("[NVS] loadPreferences gestartet...");
@@ -292,9 +301,13 @@ void loadPreferences() {
     userSSID = prefs.getString("ssid", userSSID); userPWD = prefs.getString("pwd", userPWD); ntpZone = prefs.getString("ntpZ", ntpZone);
     if (ntpZone.length() == 0) ntpZone = "CET-1CEST,M3.5.0,M10.5.0/3";
     setenv("TZ", ntpZone.c_str(), 1);
-    tzset();
     apSSID = prefs.getString("apS", apSSID); apPWD = prefs.getString("apP", apPWD);
+    if (apSSID == "WatchOS-Hotspot" || apSSID == "WatchOS-Ultra" || apSSID.indexOf("Hotspot") >= 0 || apSSID.length() == 0) {
+        apSSID = "WatchOS";
+        prefs.putString("apS", apSSID);
+    }
     gTag = prefs.getInt("tag", gTag); gMonat = prefs.getInt("monat", gMonat); gJahr = prefs.getInt("jahr", gJahr); gStunde = prefs.getInt("std", gStunde); gMinute = prefs.getInt("min", gMinute); zielAlter = prefs.getInt("alter", zielAlter);
+    updateZielZeit();
     
     bootMode = prefs.getInt("bootM", bootMode); aodMode = prefs.getInt("aodM", aodMode);
     time_dim_start = prefs.getULong("tDim", time_dim_start); time_aod_start = prefs.getULong("tAod", time_aod_start); time_sleep_start = prefs.getULong("tSlp", time_sleep_start);
@@ -319,7 +332,6 @@ void loadPreferences() {
     battRateNormal = prefs.getFloat("bRateN", battRateNormal); battRateHacking = prefs.getFloat("bRateH", battRateHacking); battRateCharging = prefs.getFloat("bRateC", battRateCharging);
     battSamplesNormal = prefs.getUShort("bSampN", 0); battSamplesHacking = prefs.getUShort("bSampH", 0); battSamplesCharging = prefs.getUShort("bSampC", 0);
     stepGoal = prefs.getInt("stepGoal", stepGoal);
-    otaAutoCheck = prefs.getBool("otaAuto", true);
 
     historyCount = prefs.getInt("hCount", 0);
     if (historyCount > 0 && historyCount <= MAX_HISTORY) {
@@ -356,10 +368,10 @@ void loadPreferences() {
     webUser = prefs.getString("webUsr", webUser);
     webPass = prefs.getString("webPwd", webPass);
     webAuthEnabled = prefs.getBool("webAuth", webAuthEnabled);
-    parentViewMode = prefs.getInt("pViewM", 0);
     
-    // Haptic Waveform
+    // Haptic: 14 = Strong Buzz 100% (spuerbar auf ERM Motor, Wafer 1 war unspuerbar kurz)
     hapticWaveform = prefs.getInt("hapW", 14);
+    if (hapticWaveform == 1) hapticWaveform = 14;
     bool hasUsbModeKey = prefs.isKey("usbHid");
     usbModeSource = hasUsbModeKey ? "NVS" : "Default";
     usbHidActive = prefs.getBool("usbHid", usbHidActive);

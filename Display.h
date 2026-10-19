@@ -34,10 +34,14 @@ inline uint16_t blendColor565(uint16_t c1, uint16_t c2, uint8_t alpha) {
 
 extern TFT_eSPI tft;
 extern TFT_eSprite cdSprite;
+void freeDisplaySprites();
 
 uint16_t hex2rgb565(String hex);
 void applyTheme();
 void setBrightness(int b);
+int64_t toEpoch64(int y, int m, int d, int h = 0, int min = 0, int s = 0);
+int64_t stringToEpoch64(const String &dateStr, const String &timeStr);
+void epoch64ToCivil(int64_t epochSec, int *y, int *m, int *d, int *h = nullptr, int *min = nullptr, int *s = nullptr);
 time_t stringToTime(String dateStr, String timeStr);
 
 void draw7Segment(TFT_eSPI &spr, int x, int y, int num, int h, int w, uint16_t color);

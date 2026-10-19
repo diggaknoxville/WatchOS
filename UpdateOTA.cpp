@@ -154,6 +154,7 @@ bool performCloudOTA(String customUrl) {
     killAllApps();
     if (evilActive) evilActive = false;
     matrixMode = false;
+    freeDisplaySprites();
 
     // Display für Cloud-Update vorbereiten
     tft.writecommand(0x11);
@@ -168,14 +169,16 @@ bool performCloudOTA(String customUrl) {
     tft.drawString("WATCHOS CLOUD UPDATE", 120, 18, 2);
 
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.drawString("Verbinde GitHub...", 120, 65, 2);
+    tft.drawString("Verbinde Server...", 120, 65, 2);
 
     // Fortschrittsbalken-Rahmen
     tft.drawRoundRect(15, 110, 210, 32, 6, 0x4A69);
 
-    WiFiClientSecure client;
-    client.setInsecure();
-    client.setTimeout(20000);
+    WiFiClientSecure secureClient;
+    secureClient.setInsecure();
+    secureClient.setTimeout(20000);
+    WiFiClient plainClient;
+    plainClient.setTimeout(20000);
 
     String targetUrl = (customUrl.length() > 0) ? customUrl : "https://github.com/diggaknoxville/WatchOS/releases/latest/download/firmware.bin";
     const char* headerKeys[] = {"Location", "Content-Length"};
@@ -187,7 +190,11 @@ bool performCloudOTA(String customUrl) {
     // Redirects (max. 4 Hops) sauber auflösen
     while (hops < 4) {
         hops++;
-        http.begin(client, targetUrl);
+        if (targetUrl.startsWith("https://")) {
+            http.begin(secureClient, targetUrl);
+        } else {
+            http.begin(plainClient, targetUrl);
+        }
         http.collectHeaders(headerKeys, 2);
         http.setTimeout(20000);
         httpCode = http.GET();
@@ -196,6 +203,13 @@ bool performCloudOTA(String customUrl) {
             String newLoc = http.header("Location");
             http.end();
             if (newLoc.length() > 0) {
+                if (newLoc.startsWith("/")) {
+                    int idx = targetUrl.indexOf("://");
+                    if (idx > 0) {
+                        int slashIdx = targetUrl.indexOf('/', idx + 3);
+                        newLoc = (slashIdx > 0 ? targetUrl.substring(0, slashIdx) : targetUrl) + newLoc;
+                    }
+                }
                 targetUrl = newLoc;
                 Serial.printf("[OTA] Redirect #%d zu: %s\n", hops, targetUrl.c_str());
                 continue;
@@ -386,9 +400,10 @@ void setupOTARoutes() {
             server.send(401, "text/plain", "Unauthorized");
             return;
         }
+        String customUrl = server.hasArg("url") ? server.arg("url") : "";
         server.send(200, "application/json", "{\"status\":\"started\"}");
         delay(200);
-        performCloudOTA();
+        performCloudOTA(customUrl);
     });
 
     // --- 4. AUTO-CHECK EINSTELLUNG SPEICHERN ---
@@ -447,7 +462,9 @@ void setupOTARoutes() {
             if (Update.isRunning()) {
                 Update.abort();
             }
-            if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+            freeDisplaySprites();
+            size_t updateSize = (otaTotalSize > 0) ? otaTotalSize : UPDATE_SIZE_UNKNOWN;
+            if (!Update.begin(updateSize)) {
                 Update.printError(Serial);
             }
         } 
